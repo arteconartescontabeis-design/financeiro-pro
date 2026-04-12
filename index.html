@@ -440,12 +440,77 @@ tbody td { padding: 11px 16px; font-size: 13px; }
 .divider { border: none; border-top: 1px solid var(--border); margin: 20px 0; }
 
 /* ── RESPONSIVE ──────────────────────────────────────────── */
-@media (max-width: 768px) {
-  .sidebar { transform: translateX(-100%); transition: transform .25s; z-index: 200; }
-  .sidebar.open { transform: translateX(0); box-shadow: var(--shadow-lg); }
+/* ── SIDEBAR OVERLAY (mobile) ─────────────────────────────── */
+.sidebar-overlay {
+  display: none; position: fixed; inset: 0; z-index: 199;
+  background: rgba(0,0,0,.55); backdrop-filter: blur(2px);
+}
+.sidebar-overlay.visible { display: block; }
+
+@media (max-width: 900px) {
+  /* Sidebar: drawer */
+  .sidebar { transform: translateX(-100%); transition: transform .25s cubic-bezier(.4,0,.2,1); z-index: 200; }
+  .sidebar.open { transform: translateX(0); box-shadow: 0 0 60px rgba(0,0,0,.6); }
+
+  /* Main */
   .main { margin-left: 0; }
-  .kpi-grid { grid-template-columns: 1fr 1fr; }
-  .content { padding: 14px; }
+  .content { padding: 14px 14px 80px; }
+
+  /* Topbar */
+  .topbar { padding: 0 14px; }
+  .page-title { font-size: 14px; }
+
+  /* KPI grids */
+  .kpi-grid { grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
+  .kpi-value { font-size: 20px; }
+
+  /* Cards */
+  .card { padding: 14px; }
+
+  /* Modal */
+  .modal { width: calc(100vw - 24px); max-width: 480px; }
+  .form-grid { grid-template-columns: 1fr !important; }
+  .form-grid .full { grid-column: 1; }
+
+  /* Auth */
+  .auth-wrap { width: calc(100vw - 32px); max-width: 400px; }
+  .auth-card { padding: 22px 18px; }
+  .onboard-card { width: calc(100vw - 32px); padding: 28px 20px; }
+
+  /* Table: horizontal scroll */
+  .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  table { min-width: 560px; }
+
+  /* Dashboard grids → single column */
+  #page-content [style*="grid-template-columns:360px"],
+  #page-content [style*="grid-template-columns:200px"],
+  #page-content [style*="grid-template-columns:1fr 1fr 1fr 200px"],
+  #page-content [style*="grid-template-columns:1fr 1fr 1fr;"],
+  #page-content [style*="grid-template-columns:repeat(5,1fr)"],
+  #page-content [style*="grid-template-columns:repeat(4,1fr)"],
+  #page-content [style*="grid-template-columns:1fr 1fr;"] {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* KPI row (5 cols inline) */
+  #page-content [style*="grid-template-columns:repeat(5,1fr)"] > div {
+    border-left: none !important;
+    border-top: 1px solid var(--border);
+    padding: 10px 14px !important;
+  }
+  #page-content [style*="grid-template-columns:repeat(5,1fr)"] > div:first-child {
+    border-top: none;
+  }
+
+  /* Filter bar */
+  [style*="filterBarStyle"] { flex-direction: column; align-items: stretch; }
+
+  /* Toast */
+  .toast-container { bottom: 16px; right: 12px; left: 12px; }
+  .toast { text-align: center; }
+
+  /* Venc row */
+  .venc-row { flex-wrap: wrap; }
 }
 </style>
 </head>
@@ -453,6 +518,9 @@ tbody td { padding: 11px 16px; font-size: 13px; }
 
 <!-- TOAST -->
 <div class="toast-container" id="toasts"></div>
+
+<!-- SIDEBAR OVERLAY -->
+<div class="sidebar-overlay" id="sidebar-overlay" onclick="closeSidebar()"></div>
 
 <!-- AUTH -->
 <div id="auth-screen">
@@ -580,7 +648,7 @@ tbody td { padding: 11px 16px; font-size: 13px; }
   <main class="main">
     <header class="topbar">
       <div style="display:flex;align-items:center;gap:12px">
-        <button id="mob-menu" onclick="document.getElementById('sidebar').classList.toggle('open')"
+        <button id="mob-menu" onclick="openSidebar()"
           style="display:none;background:none;border:none;color:var(--text-2);cursor:pointer;padding:4px">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/></svg>
         </button>
@@ -906,6 +974,15 @@ const PAGES = {
   configuracoes:{ title: 'Configurações',  render: renderConfiguracoes },
 };
 
+function openSidebar() {
+  document.getElementById('sidebar').classList.add('open');
+  document.getElementById('sidebar-overlay').classList.add('visible');
+}
+function closeSidebar() {
+  document.getElementById('sidebar').classList.remove('open');
+  document.getElementById('sidebar-overlay').classList.remove('visible');
+}
+
 function go(page) {
   APP.page = page;
   document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.page === page));
@@ -913,8 +990,7 @@ function go(page) {
   $id('page-title').textContent = cfg.title;
   $id('topbar-actions').innerHTML = '';
   cfg.render();
-  // Close mobile sidebar
-  document.getElementById('sidebar').classList.remove('open');
+  closeSidebar();
 }
 
 // ── HELPERS ───────────────────────────────────────────────────
@@ -1499,7 +1575,13 @@ function renderReceber() {
               <td style="font-family:var(--mono);font-size:12px;color:${vencAtras?'var(--red)':vencHoje?'var(--amber)':'var(--text-2)'};font-weight:${vencAtras||vencHoje?700:400}">${fmtData(r.vencimento)}${vencHoje?' · hoje':''}</td>
               <td style="font-family:var(--mono);font-weight:700;color:var(--green)">${fmtMoeda(r.valor)}</td>
               <td>${badgeStatus(r.status)}</td>
-              <td>${r.status==='pendente'||r.status==='vencido' ? `<button class="btn btn-sm btn-green" onclick="baixarReceita('${r.id}',event)">✓ Recebido</button>` : ''}</td>
+              <td style="white-space:nowrap">
+                <div style="display:flex;gap:5px;align-items:center">
+                  ${r.status==='pendente'||r.status==='vencido' ? `<button class="btn btn-sm btn-green" onclick="baixarReceita('${r.id}',event)" style="padding:4px 10px;font-size:11px">✓</button>` : ''}
+                  <button class="btn btn-sm" onclick="editarReceita('${r.id}',event)" style="padding:4px 10px;font-size:11px;background:var(--surface-2);color:var(--text-2);border:1px solid var(--border-lt)">✏</button>
+                  <button class="btn btn-sm" onclick="excluirReceita('${r.id}',event)" style="padding:4px 10px;font-size:11px;background:var(--red-lt);color:var(--red);border:1px solid rgba(224,92,92,.2)">✕</button>
+                </div>
+              </td>
             </tr>`;
           }).join('')}
       </tbody>
@@ -1562,6 +1644,67 @@ async function baixarReceita(id, e) {
       await supa('POST', 'fin_movimentacoes', { body: { tenant_id: APP.user.tenant_id, conta_id: r.conta_id, tipo: 'entrada', valor: r.valor, data: today(), descricao: r.descricao, receita_id: id } });
     }
     toast('Receita baixada!', 'success');
+    await carregarDados(); renderReceber();
+  } catch(e) { toast('Erro: ' + e.message, 'error'); }
+}
+
+function editarReceita(id, e) {
+  e.stopPropagation();
+  const r = RECEITAS.find(x => x.id === id); if (!r) return;
+  openModal('Editar Receita', `
+    <div class="form-grid">
+      <div class="form-field full"><label class="form-label">Descrição *</label><input class="form-input" id="er-desc" value="${r.descricao||''}"></div>
+      <div class="form-field"><label class="form-label">Valor (R$) *</label><input class="form-input" type="number" id="er-valor" value="${r.valor||''}" step="0.01"></div>
+      <div class="form-field"><label class="form-label">Vencimento *</label><input class="form-input" type="date" id="er-venc" value="${r.vencimento||''}"></div>
+      <div class="form-field"><label class="form-label">Status</label><select class="form-select" id="er-status">
+        <option value="pendente"  ${r.status==='pendente'?'selected':''}>Pendente</option>
+        <option value="recebido"  ${r.status==='recebido'?'selected':''}>Recebido</option>
+        <option value="cancelado" ${r.status==='cancelado'?'selected':''}>Cancelado</option>
+      </select></div>
+      <div class="form-field"><label class="form-label">Cliente</label><select class="form-select" id="er-cli">
+        <option value="">— Nenhum —</option>
+        ${CLIENTES.map(c=>`<option value="${c.id}" ${r.cliente_id===c.id?'selected':''}>${c.nome}</option>`).join('')}
+      </select></div>
+      <div class="form-field"><label class="form-label">Categoria</label><select class="form-select" id="er-cat">
+        <option value="">— Nenhuma —</option>
+        ${CATEGORIAS.filter(c=>c.tipo==='receita'||c.tipo==='ambos').map(c=>`<option value="${c.id}" ${r.categoria_id===c.id?'selected':''}>${c.icone||''} ${c.nome}</option>`).join('')}
+      </select></div>
+      <div class="form-field"><label class="form-label">Conta</label><select class="form-select" id="er-conta">
+        <option value="">— Nenhuma —</option>
+        ${CONTAS.map(c=>`<option value="${c.id}" ${r.conta_id===c.id?'selected':''}>${c.nome}</option>`).join('')}
+      </select></div>
+      <div class="form-field full"><label class="form-label">Observação</label><input class="form-input" id="er-obs" value="${r.observacao||''}"></div>
+    </div>`,
+    `<button class="btn btn-outline" onclick="closeModal()">Cancelar</button>
+     <button class="btn btn-gold" onclick="salvarEdicaoReceita('${id}')">Salvar alterações</button>`
+  );
+}
+
+async function salvarEdicaoReceita(id) {
+  const desc  = $id('er-desc').value.trim();
+  const valor = parseFloat($id('er-valor').value);
+  const venc  = $id('er-venc').value;
+  if (!desc || !valor || !venc) { toast('Preencha os campos obrigatórios.', 'error'); return; }
+  try {
+    await supa('PATCH', 'fin_receitas', { params: { id: `eq.${id}` }, body: {
+      descricao:    desc, valor, vencimento: venc,
+      status:       $id('er-status').value,
+      cliente_id:   $id('er-cli').value   || null,
+      categoria_id: $id('er-cat').value   || null,
+      conta_id:     $id('er-conta').value || null,
+      observacao:   $id('er-obs').value   || null,
+    }});
+    closeModal(); toast('Receita atualizada!', 'success');
+    await carregarDados(); renderReceber();
+  } catch(e) { toast('Erro: ' + e.message, 'error'); }
+}
+
+async function excluirReceita(id, e) {
+  e.stopPropagation();
+  if (!confirm('Excluir esta receita? A ação não pode ser desfeita.')) return;
+  try {
+    await supa('DELETE', 'fin_receitas', { params: { id: `eq.${id}` } });
+    toast('Receita excluída.', 'success');
     await carregarDados(); renderReceber();
   } catch(e) { toast('Erro: ' + e.message, 'error'); }
 }
@@ -1640,7 +1783,13 @@ function renderPagar() {
               <td style="font-family:var(--mono);font-size:12px;color:${vencAtras?'var(--red)':vencHoje?'var(--amber)':'var(--text-2)'};font-weight:${vencAtras||vencHoje?700:400}">${fmtData(d.vencimento)}${vencHoje?' · hoje':''}</td>
               <td style="font-family:var(--mono);font-weight:700;color:var(--red)">${fmtMoeda(d.valor)}</td>
               <td>${badgeStatus(d.status)}</td>
-              <td>${d.status==='pendente'||d.status==='vencido' ? `<button class="btn btn-sm btn-red" onclick="baixarDespesa('${d.id}',event)">✓ Pago</button>` : ''}</td>
+              <td style="white-space:nowrap">
+                <div style="display:flex;gap:5px;align-items:center">
+                  ${d.status==='pendente'||d.status==='vencido' ? `<button class="btn btn-sm btn-red" onclick="baixarDespesa('${d.id}',event)" style="padding:4px 10px;font-size:11px">✓</button>` : ''}
+                  <button class="btn btn-sm" onclick="editarDespesa('${d.id}',event)" style="padding:4px 10px;font-size:11px;background:var(--surface-2);color:var(--text-2);border:1px solid var(--border-lt)">✏</button>
+                  <button class="btn btn-sm" onclick="excluirDespesa('${d.id}',event)" style="padding:4px 10px;font-size:11px;background:var(--red-lt);color:var(--red);border:1px solid rgba(224,92,92,.2)">✕</button>
+                </div>
+              </td>
             </tr>`;
           }).join('')}
       </tbody>
@@ -1703,6 +1852,67 @@ async function baixarDespesa(id, e) {
       await supa('POST', 'fin_movimentacoes', { body: { tenant_id: APP.user.tenant_id, conta_id: d.conta_id, tipo: 'saida', valor: d.valor, data: today(), descricao: d.descricao, despesa_id: id } });
     }
     toast('Despesa baixada!', 'success');
+    await carregarDados(); renderPagar();
+  } catch(e) { toast('Erro: ' + e.message, 'error'); }
+}
+
+function editarDespesa(id, e) {
+  e.stopPropagation();
+  const d = DESPESAS.find(x => x.id === id); if (!d) return;
+  openModal('Editar Despesa', `
+    <div class="form-grid">
+      <div class="form-field full"><label class="form-label">Descrição *</label><input class="form-input" id="ed-desc" value="${d.descricao||''}"></div>
+      <div class="form-field"><label class="form-label">Valor (R$) *</label><input class="form-input" type="number" id="ed-valor" value="${d.valor||''}" step="0.01"></div>
+      <div class="form-field"><label class="form-label">Vencimento *</label><input class="form-input" type="date" id="ed-venc" value="${d.vencimento||''}"></div>
+      <div class="form-field"><label class="form-label">Status</label><select class="form-select" id="ed-status">
+        <option value="pendente"  ${d.status==='pendente'?'selected':''}>Pendente</option>
+        <option value="pago"      ${d.status==='pago'?'selected':''}>Pago</option>
+        <option value="cancelado" ${d.status==='cancelado'?'selected':''}>Cancelado</option>
+      </select></div>
+      <div class="form-field"><label class="form-label">Fornecedor</label><select class="form-select" id="ed-for">
+        <option value="">— Nenhum —</option>
+        ${FORNECEDORES.map(f=>`<option value="${f.id}" ${d.fornecedor_id===f.id?'selected':''}>${f.nome}</option>`).join('')}
+      </select></div>
+      <div class="form-field"><label class="form-label">Categoria</label><select class="form-select" id="ed-cat">
+        <option value="">— Nenhuma —</option>
+        ${CATEGORIAS.filter(c=>c.tipo==='despesa'||c.tipo==='ambos').map(c=>`<option value="${c.id}" ${d.categoria_id===c.id?'selected':''}>${c.icone||''} ${c.nome}</option>`).join('')}
+      </select></div>
+      <div class="form-field"><label class="form-label">Conta</label><select class="form-select" id="ed-conta">
+        <option value="">— Nenhuma —</option>
+        ${CONTAS.map(c=>`<option value="${c.id}" ${d.conta_id===c.id?'selected':''}>${c.nome}</option>`).join('')}
+      </select></div>
+      <div class="form-field full"><label class="form-label">Observação</label><input class="form-input" id="ed-obs" value="${d.observacao||''}"></div>
+    </div>`,
+    `<button class="btn btn-outline" onclick="closeModal()">Cancelar</button>
+     <button class="btn btn-gold" onclick="salvarEdicaoDespesa('${id}')">Salvar alterações</button>`
+  );
+}
+
+async function salvarEdicaoDespesa(id) {
+  const desc  = $id('ed-desc').value.trim();
+  const valor = parseFloat($id('ed-valor').value);
+  const venc  = $id('ed-venc').value;
+  if (!desc || !valor || !venc) { toast('Preencha os campos obrigatórios.', 'error'); return; }
+  try {
+    await supa('PATCH', 'fin_despesas', { params: { id: `eq.${id}` }, body: {
+      descricao:     desc, valor, vencimento: venc,
+      status:        $id('ed-status').value,
+      fornecedor_id: $id('ed-for').value   || null,
+      categoria_id:  $id('ed-cat').value   || null,
+      conta_id:      $id('ed-conta').value || null,
+      observacao:    $id('ed-obs').value   || null,
+    }});
+    closeModal(); toast('Despesa atualizada!', 'success');
+    await carregarDados(); renderPagar();
+  } catch(e) { toast('Erro: ' + e.message, 'error'); }
+}
+
+async function excluirDespesa(id, e) {
+  e.stopPropagation();
+  if (!confirm('Excluir esta despesa? A ação não pode ser desfeita.')) return;
+  try {
+    await supa('DELETE', 'fin_despesas', { params: { id: `eq.${id}` } });
+    toast('Despesa excluída.', 'success');
     await carregarDados(); renderPagar();
   } catch(e) { toast('Erro: ' + e.message, 'error'); }
 }
@@ -2925,12 +3135,13 @@ function renderRelatorios() {
 }
 
 // ── MOBILE MENU ────────────────────────────────────────────────
-if (window.innerWidth <= 768) {
-  document.getElementById('mob-menu').style.display = 'block';
+function updateMobMenu() {
+  const isMob = window.innerWidth <= 900;
+  document.getElementById('mob-menu').style.display = isMob ? 'block' : 'none';
+  if (!isMob) closeSidebar();
 }
-window.addEventListener('resize', () => {
-  document.getElementById('mob-menu').style.display = window.innerWidth <= 768 ? 'block' : 'none';
-});
+updateMobMenu();
+window.addEventListener('resize', updateMobMenu);
 
 // ── INIT ──────────────────────────────────────────────────────
 window.addEventListener('load', () => {

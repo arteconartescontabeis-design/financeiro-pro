@@ -643,6 +643,10 @@ tbody td { padding: 11px 16px; font-size: 13px; }
         Categorias
       </button>
       <div class="nav-section">Sistema</div>
+      <button class="nav-item" onclick="go('usuarios')" data-page="usuarios">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
+        Usuários
+      </button>
       <button class="nav-item" onclick="go('configuracoes')" data-page="configuracoes">
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
         Configurações
@@ -667,6 +671,21 @@ tbody td { padding: 11px 16px; font-size: 13px; }
         <span class="page-title" id="page-title">Dashboard</span>
       </div>
       <div class="topbar-actions" id="topbar-actions"></div>
+      <!-- Sino de notificações -->
+      <div style="position:relative;margin-left:8px">
+        <button id="notif-btn" onclick="toggleNotifPanel()" style="background:none;border:none;cursor:pointer;color:var(--text-2);padding:6px;border-radius:8px;position:relative;transition:var(--tr)" onmouseover="this.style.background='var(--surface-2)'" onmouseout="this.style.background='none'">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>
+          <span id="notif-badge" style="display:none;position:absolute;top:2px;right:2px;width:8px;height:8px;background:var(--red);border-radius:50%;border:1.5px solid var(--bg-2)"></span>
+        </button>
+        <!-- Painel -->
+        <div id="notif-panel" style="display:none;position:absolute;top:calc(100% + 8px);right:0;width:320px;background:var(--surface);border:1px solid var(--border-lt);border-radius:14px;box-shadow:var(--shadow-lg);z-index:300;overflow:hidden">
+          <div style="padding:12px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
+            <span style="font-size:12px;font-weight:700;color:var(--text)">Notificações</span>
+            <button onclick="limparNotificacoes()" style="font-size:10.5px;color:var(--text-3);background:none;border:none;cursor:pointer;font-family:var(--font)">Limpar tudo</button>
+          </div>
+          <div id="notif-list" style="max-height:340px;overflow-y:auto"></div>
+        </div>
+      </div>
     </header>
     <div class="content" id="page-content"></div>
   </main>
@@ -845,6 +864,8 @@ function mostrarApp() {
   $id('sb-avatar').textContent = (APP.user?.nome || 'U')[0].toUpperCase();
   // Gera lançamentos recorrentes pendentes silenciosamente
   gerarRecorrenciasPendentes().catch(()=>{});
+  // Atualiza badge de notificações
+  setTimeout(atualizarBadgeNotif, 500);
   go('dashboard');
 }
 
@@ -993,6 +1014,7 @@ const PAGES = {
   fornecedores: { title: 'Fornecedores',    render: renderFornecedores },
   categorias:   { title: 'Categorias',      render: renderCategorias },
   configuracoes:{ title: 'Configurações',   render: renderConfiguracoes },
+  usuarios:     { title: 'Usuários',         render: renderUsuarios },
 };
 
 function openSidebar() {
@@ -3883,6 +3905,298 @@ function renderRelatorios() {
     </div>
   </div>`;
 }
+
+// ── NOTIFICAÇÕES ──────────────────────────────────────────────
+const NOTIF_KEY = () => `artecon_notif_${APP.user?.tenant_id||'x'}`;
+
+function gerarNotificacoes() {
+  const hoje  = today();
+  const em3   = new Date(); em3.setDate(em3.getDate()+3);
+  const em3s  = em3.toISOString().slice(0,10);
+  const notifs = [];
+
+  // Vencidos
+  RECEITAS.filter(r=>r.status==='pendente'&&r.vencimento<hoje).forEach(r=>
+    notifs.push({ id:`rv_${r.id}`, tipo:'red', ico:'📥', txt:`Receita vencida: ${r.descricao}`, valor:fmtMoeda(r.valor), data:r.vencimento, acao:"go('receber')" }));
+  DESPESAS.filter(d=>d.status==='pendente'&&d.vencimento<hoje).forEach(d=>
+    notifs.push({ id:`dv_${d.id}`, tipo:'red', ico:'📤', txt:`Despesa vencida: ${d.descricao}`, valor:fmtMoeda(d.valor), data:d.vencimento, acao:"go('pagar')" }));
+  IMPOSTOS.filter(i=>i.status==='pendente'&&i.vencimento<hoje).forEach(i=>
+    notifs.push({ id:`iv_${i.id}`, tipo:'red', ico:'📋', txt:`Imposto vencido: ${i.tipo}`, valor:fmtMoeda(i.valor), data:i.vencimento, acao:"go('impostos')" }));
+
+  // Vencem em 3 dias
+  RECEITAS.filter(r=>r.status==='pendente'&&r.vencimento>=hoje&&r.vencimento<=em3s).forEach(r=>
+    notifs.push({ id:`r3_${r.id}`, tipo:'amber', ico:'⏰', txt:`Receita vence em breve: ${r.descricao}`, valor:fmtMoeda(r.valor), data:r.vencimento, acao:"go('receber')" }));
+  DESPESAS.filter(d=>d.status==='pendente'&&d.vencimento>=hoje&&d.vencimento<=em3s).forEach(d=>
+    notifs.push({ id:`d3_${d.id}`, tipo:'amber', ico:'⏰', txt:`Despesa vence em breve: ${d.descricao}`, valor:fmtMoeda(d.valor), data:d.vencimento, acao:"go('pagar')" }));
+  IMPOSTOS.filter(i=>i.status==='pendente'&&i.vencimento>=hoje&&i.vencimento<=em3s).forEach(i=>
+    notifs.push({ id:`i3_${i.id}`, tipo:'amber', ico:'📋', txt:`Imposto vence em breve: ${i.tipo}`, valor:fmtMoeda(i.valor), data:i.vencimento, acao:"go('impostos')" }));
+
+  return notifs.slice(0, 20);
+}
+
+function atualizarBadgeNotif() {
+  const notifs = gerarNotificacoes();
+  const lidas  = JSON.parse(localStorage.getItem(NOTIF_KEY())||'[]');
+  const novas  = notifs.filter(n => !lidas.includes(n.id));
+  const badge  = $id('notif-badge');
+  if (badge) badge.style.display = novas.length ? 'block' : 'none';
+}
+
+function toggleNotifPanel() {
+  const panel = $id('notif-panel');
+  if (!panel) return;
+  const aberto = panel.style.display !== 'none';
+  panel.style.display = aberto ? 'none' : 'block';
+  if (!aberto) renderNotifPanel();
+}
+
+function renderNotifPanel() {
+  const notifs = gerarNotificacoes();
+  const lidas  = JSON.parse(localStorage.getItem(NOTIF_KEY())||'[]');
+  const list   = $id('notif-list');
+  if (!list) return;
+
+  if (!notifs.length) {
+    list.innerHTML = `<div style="padding:24px;text-align:center;color:var(--text-3);font-size:12px">Nenhuma notificação pendente ✓</div>`;
+    return;
+  }
+
+  list.innerHTML = notifs.map(n => {
+    const lida = lidas.includes(n.id);
+    return `<div onclick="marcarLida('${n.id}');${n.acao};toggleNotifPanel()"
+      style="padding:12px 16px;border-bottom:1px solid var(--border);cursor:pointer;background:${lida?'transparent':n.tipo==='red'?'rgba(224,92,92,.05)':'rgba(224,154,58,.05)'};transition:var(--tr)"
+      onmouseover="this.style.background='var(--surface-2)'" onmouseout="this.style.background='${lida?'transparent':n.tipo==='red'?'rgba(224,92,92,.05)':'rgba(224,154,58,.05)'}'">
+      <div style="display:flex;align-items:flex-start;gap:10px">
+        <span style="font-size:16px;flex-shrink:0">${n.ico}</span>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:12px;color:var(--text);line-height:1.4;${lida?'':'font-weight:500'}">${n.txt}</div>
+          <div style="display:flex;justify-content:space-between;margin-top:3px">
+            <span style="font-size:10.5px;font-family:var(--mono);color:${n.tipo==='red'?'var(--red)':'var(--amber)'};font-weight:700">${n.valor}</span>
+            <span style="font-size:10px;color:var(--text-3)">${fmtData(n.data)}</span>
+          </div>
+        </div>
+        ${!lida?`<span style="width:7px;height:7px;border-radius:50%;background:${n.tipo==='red'?'var(--red)':'var(--amber)'};flex-shrink:0;margin-top:3px"></span>`:''}
+      </div>
+    </div>`;
+  }).join('');
+
+  // Marca todas como lidas após visualizar
+  const ids = notifs.map(n=>n.id);
+  localStorage.setItem(NOTIF_KEY(), JSON.stringify(ids));
+  if ($id('notif-badge')) $id('notif-badge').style.display = 'none';
+}
+
+function marcarLida(id) {
+  const lidas = JSON.parse(localStorage.getItem(NOTIF_KEY())||'[]');
+  if (!lidas.includes(id)) lidas.push(id);
+  localStorage.setItem(NOTIF_KEY(), JSON.stringify(lidas));
+}
+
+function limparNotificacoes() {
+  const notifs = gerarNotificacoes();
+  localStorage.setItem(NOTIF_KEY(), JSON.stringify(notifs.map(n=>n.id)));
+  if ($id('notif-badge')) $id('notif-badge').style.display = 'none';
+  renderNotifPanel();
+}
+
+// Fecha painel ao clicar fora
+document.addEventListener('click', e => {
+  const btn   = $id('notif-btn');
+  const panel = $id('notif-panel');
+  if (panel && btn && !btn.contains(e.target) && !panel.contains(e.target)) {
+    panel.style.display = 'none';
+  }
+});
+
+// ── PERFIL: GUARD ─────────────────────────────────────────────
+function isAdmin() { return APP.user?.perfil === 'admin'; }
+
+function guardAdmin(fn) {
+  return function(...args) {
+    if (!isAdmin()) { toast('Acesso restrito a administradores.', 'error'); return; }
+    return fn(...args);
+  };
+}
+
+// ── USUÁRIOS ──────────────────────────────────────────────────
+let _usuarios = [];
+
+async function carregarUsuarios() {
+  try {
+    _usuarios = await supa('GET', 'fin_usuarios', {
+      params: { tenant_id: `eq.${APP.user.tenant_id}`, select: '*', order: 'criado_em.asc' }
+    });
+  } catch(_) { _usuarios = [APP.user]; }
+}
+
+async function renderUsuarios() {
+  if (!isAdmin()) {
+    $id('page-content').innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon">🔒</div>
+        <h3>Acesso restrito</h3>
+        <p style="font-size:13px;color:var(--text-3);margin-top:6px">Somente administradores podem gerenciar usuários.</p>
+      </div>`;
+    return;
+  }
+
+  $id('topbar-actions').innerHTML = `<button class="btn btn-gold btn-sm" onclick="modalConvidarUsuario()">+ Convidar usuário</button>`;
+  await carregarUsuarios();
+
+  const admins  = _usuarios.filter(u=>u.perfil==='admin');
+  const viewers = _usuarios.filter(u=>u.perfil==='viewer'||u.perfil==='visualizador');
+
+  $id('page-content').innerHTML = `
+  <div style="display:flex;flex-direction:column;gap:16px;max-width:720px">
+
+  <!-- KPIs -->
+  <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr)">
+    <div class="kpi-card k-gold"><div class="kpi-label">Total de Usuários</div><div class="kpi-value" style="color:var(--gold)">${_usuarios.length}</div></div>
+    <div class="kpi-card k-green"><div class="kpi-label">Administradores</div><div class="kpi-value" style="color:var(--green)">${admins.length}</div></div>
+    <div class="kpi-card"><div class="kpi-label">Visualizadores</div><div class="kpi-value">${viewers.length}</div></div>
+  </div>
+
+  <!-- Como funciona -->
+  <div style="background:rgba(201,168,76,.06);border:1px solid rgba(201,168,76,.2);border-radius:10px;padding:13px 16px;font-size:12px;color:var(--text-2);line-height:1.7">
+    <strong style="color:var(--gold)">Como funciona:</strong>
+    Novos usuários precisam criar uma conta em <strong style="color:var(--text)">"Criar conta"</strong> na tela de login usando o e-mail convidado.
+    Após o cadastro, um admin deve alterar o perfil deles aqui.
+    <br><strong style="color:var(--text-2)">Admin:</strong> acesso total. <strong style="color:var(--text-2)">Viewer:</strong> somente leitura — não pode criar, editar ou excluir.
+  </div>
+
+  <!-- Tabela de usuários -->
+  <div class="card" style="padding:0;overflow:hidden">
+    <table>
+      <thead><tr>
+        <th>Usuário</th><th>E-mail</th><th>Perfil</th><th>Desde</th><th></th>
+      </tr></thead>
+      <tbody>
+        ${_usuarios.map(u => {
+          const isMe = u.id === APP.user.id;
+          return `<tr>
+            <td>
+              <div style="display:flex;align-items:center;gap:10px">
+                <div style="width:32px;height:32px;border-radius:50%;background:${u.perfil==='admin'?'linear-gradient(135deg,var(--gold-dim),var(--gold))':'var(--surface-2)'};display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:${u.perfil==='admin'?'#0f0e0c':'var(--text-2)'}">
+                  ${(u.nome||'U')[0].toUpperCase()}
+                </div>
+                <div>
+                  <div style="font-size:13px;font-weight:600;color:var(--text)">${u.nome||'—'}${isMe?' <span style="font-size:10px;color:var(--text-3)">(você)</span>':''}</div>
+                </div>
+              </div>
+            </td>
+            <td style="color:var(--text-2);font-size:12.5px">${u.email||'—'}</td>
+            <td>
+              ${isMe
+                ? `<span class="badge badge-gold">${u.perfil||'admin'}</span>`
+                : `<select onchange="alterarPerfil('${u.id}',this.value)"
+                    style="padding:5px 10px;border:1.5px solid var(--border-lt);border-radius:7px;font-family:var(--font);font-size:12px;background:var(--bg-2);color:var(--text);outline:none;cursor:pointer">
+                    <option value="admin"      ${u.perfil==='admin'?'selected':''}>Admin</option>
+                    <option value="viewer"     ${u.perfil==='viewer'||u.perfil==='visualizador'?'selected':''}>Viewer</option>
+                  </select>`}
+            </td>
+            <td style="font-family:var(--mono);font-size:11px;color:var(--text-3)">${u.criado_em?new Date(u.criado_em).toLocaleDateString('pt-BR'):'—'}</td>
+            <td>
+              ${!isMe ? `<button onclick="removerUsuario('${u.id}')" class="btn btn-sm" style="padding:4px 10px;font-size:11px;background:var(--red-lt);color:var(--red);border:1px solid rgba(224,92,92,.2)">Remover</button>` : ''}
+            </td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Diferença de permissões -->
+  <div class="card">
+    <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:14px">Permissões por perfil</div>
+    <table>
+      <thead><tr><th>Funcionalidade</th><th style="text-align:center">Admin</th><th style="text-align:center">Viewer</th></tr></thead>
+      <tbody>
+        ${[
+          ['Visualizar dados e relatórios', true, true],
+          ['Criar receitas e despesas', true, false],
+          ['Editar lançamentos', true, false],
+          ['Excluir lançamentos', true, false],
+          ['Gerenciar metas e recorrências', true, false],
+          ['Gerenciar impostos', true, false],
+          ['Cadastrar clientes e fornecedores', true, false],
+          ['Gerenciar usuários', true, false],
+        ].map(([f, adm, view]) => `
+          <tr>
+            <td style="color:var(--text-2)">${f}</td>
+            <td style="text-align:center"><span style="color:var(--green);font-size:14px">${adm?'✓':'—'}</span></td>
+            <td style="text-align:center"><span style="color:${view?'var(--green)':'var(--text-3)'};font-size:14px">${view?'✓':'✗'}</span></td>
+          </tr>`).join('')}
+      </tbody>
+    </table>
+  </div>
+
+  </div>`;
+}
+
+function modalConvidarUsuario() {
+  openModal('Convidar Usuário', `
+    <div style="font-size:12.5px;color:var(--text-2);margin-bottom:16px;line-height:1.6;background:var(--bg-2);padding:12px;border-radius:9px;border:1px solid var(--border)">
+      Compartilhe o link do sistema com o usuário. Após criar a conta, altere o perfil dele nesta página.
+      <br><strong style="color:var(--gold)">URL:</strong>
+      <span style="font-family:var(--mono);font-size:11px;color:var(--text-3)">${window.location.origin+window.location.pathname}</span>
+    </div>
+    <div class="form-grid">
+      <div class="form-field full"><label class="form-label">Nome do usuário</label><input class="form-input" id="inv-nome" placeholder="Nome completo"></div>
+      <div class="form-field full"><label class="form-label">E-mail</label><input class="form-input" type="email" id="inv-email" placeholder="email@exemplo.com"></div>
+      <div class="form-field full"><label class="form-label">Perfil inicial</label>
+        <select class="form-select" id="inv-perfil">
+          <option value="viewer">Viewer (somente leitura)</option>
+          <option value="admin">Admin (acesso total)</option>
+        </select>
+      </div>
+    </div>
+    <div style="margin-top:12px;font-size:11.5px;color:var(--text-3);line-height:1.6">
+      Copie e envie o link acima para o novo usuário. Após criarem a conta, eles aparecerão aqui e você pode ajustar o perfil.
+    </div>`,
+    `<button class="btn btn-outline" onclick="closeModal()">Fechar</button>
+     <button class="btn btn-gold" onclick="copiarLinkConvite()">Copiar link</button>`
+  );
+}
+
+function copiarLinkConvite() {
+  const url = window.location.origin + window.location.pathname;
+  navigator.clipboard.writeText(url).then(() => {
+    toast('Link copiado!', 'success');
+    closeModal();
+  }).catch(() => toast('Copie manualmente: ' + url, 'warn'));
+}
+
+async function alterarPerfil(id, perfil) {
+  try {
+    await supa('PATCH', 'fin_usuarios', { params: { id: `eq.${id}` }, body: { perfil } });
+    toast(`Perfil alterado para ${perfil}!`, 'success');
+    await carregarUsuarios();
+    renderUsuarios();
+  } catch(e) { toast('Erro: ' + e.message, 'error'); }
+}
+
+async function removerUsuario(id) {
+  if (!confirm('Remover este usuário do sistema? O acesso será revogado.')) return;
+  try {
+    await supa('DELETE', 'fin_usuarios', { params: { id: `eq.${id}` } });
+    toast('Usuário removido.', 'success');
+    await carregarUsuarios();
+    renderUsuarios();
+  } catch(e) { toast('Erro: ' + e.message, 'error'); }
+}
+
+// Aplica guard de perfil às funções destrutivas
+const _guardedFns = ['salvarReceita','baixarReceita','editarReceita','salvarEdicaoReceita','excluirReceita',
+  'salvarDespesa','baixarDespesa','editarDespesa','salvarEdicaoDespesa','excluirDespesa',
+  'salvarConta','salvarCliente','salvarFornecedor','salvarCategoria',
+  'salvarMeta','excluirMeta','salvarRecorrencia','toggleRecorrencia','excluirRecorrencia',
+  'salvarImposto','pagarImposto','excluirImposto'];
+
+// Aplica após carregamento do script
+window.addEventListener('load', () => {
+  _guardedFns.forEach(fn => {
+    if (typeof window[fn] === 'function') window[fn] = guardAdmin(window[fn]);
+  });
+});
 
 // ── MOBILE MENU ────────────────────────────────────────────────
 function updateMobMenu() {

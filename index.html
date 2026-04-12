@@ -1054,7 +1054,7 @@ const PAGES = {
   fornecedores: { title: 'Fornecedores',    render: renderFornecedores },
   categorias:   { title: 'Categorias',      render: renderCategorias },
   configuracoes:{ title: 'Configurações',   render: renderConfiguracoes },
-  usuarios:     { title: 'Usuários',         render: renderUsuarios },
+  usuarios:     { title: 'Usuários',         render: () => renderUsuarios() },
 };
 
 function openSidebar() {
@@ -1141,8 +1141,9 @@ function renderDashboard() {
   }
 
   // ── Projeção do mês ───────────────────────────────────────
-  const recProjetado  = diaAtual > 0 ? Math.round((recMes  / diaAtual) * diasNoMes) : 0;
-  const despProjetado = diaAtual > 0 ? Math.round((despMes / diaAtual) * diasNoMes) : 0;
+  const temMovimento = recMes > 0 || despMes > 0;
+  const recProjetado  = (temMovimento && diaAtual > 0) ? Math.round((recMes  / diaAtual) * diasNoMes) : 0;
+  const despProjetado = (temMovimento && diaAtual > 0) ? Math.round((despMes / diaAtual) * diasNoMes) : 0;
   const resultProjetado = recProjetado - despProjetado;
   const percMes = Math.round((diaAtual / diasNoMes) * 100);
 
@@ -1151,7 +1152,8 @@ function renderDashboard() {
   const pontos = [];
   // 1. Saldo positivo (+20)
   if (saldoTotal > 0) { score += 20; pontos.push({ok:true, txt:'Saldo total positivo'}); }
-  else { score -= 15; pontos.push({ok:false, txt:'Saldo total negativo'}); }
+  else if (saldoTotal < 0) { score -= 15; pontos.push({ok:false, txt:'Saldo total negativo'}); }
+  else { pontos.push({ok:false, txt:'Saldo zerado — sem reservas'}); }
   // 2. Margem do mês (max +20)
   const margemMes = recMes > 0 ? (recMes - despMes) / recMes : -1;
   if (margemMes >= 0.3)  { score += 20; pontos.push({ok:true,  txt:'Margem do mês acima de 30%'}); }
@@ -2806,7 +2808,9 @@ const FREQ_LABEL = { mensal:'Mensal', quinzenal:'Quinzenal', semanal:'Semanal', 
 // Calcula as datas de vencimento que deveriam existir até hoje
 function datasRecorrencia(rec) {
   const datas = [];
+  if (!rec.data_inicio) return datas;
   const inicio = new Date(rec.data_inicio + 'T12:00:00');
+  if (isNaN(inicio.getTime())) return datas;
   const fim    = rec.data_fim ? new Date(rec.data_fim + 'T12:00:00') : null;
   const hoje   = new Date(today() + 'T12:00:00');
   let cur      = new Date(inicio);
@@ -3947,34 +3951,36 @@ function renderRelatorios() {
 }
 
 // ── NOTIFICAÇÕES ──────────────────────────────────────────────
-const NOTIF_KEY = () => `artecon_notif_${APP.user?.tenant_id||'x'}`;
+const NOTIF_KEY = () => `artecon_notif_${APP.user?.tenant_id||'guest'}`;
 
 function gerarNotificacoes() {
+  if (!APP.user) return [];
   const hoje  = today();
   const em3   = new Date(); em3.setDate(em3.getDate()+3);
   const em3s  = em3.toISOString().slice(0,10);
   const notifs = [];
 
   // Vencidos
-  RECEITAS.filter(r=>r.status==='pendente'&&r.vencimento<hoje).forEach(r=>
+  (RECEITAS||[]).filter(r=>r.status==='pendente'&&r.vencimento<hoje).forEach(r=>
     notifs.push({ id:`rv_${r.id}`, tipo:'red', ico:'📥', txt:`Receita vencida: ${r.descricao}`, valor:fmtMoeda(r.valor), data:r.vencimento, acao:"go('receber')" }));
-  DESPESAS.filter(d=>d.status==='pendente'&&d.vencimento<hoje).forEach(d=>
+  (DESPESAS||[]).filter(d=>d.status==='pendente'&&d.vencimento<hoje).forEach(d=>
     notifs.push({ id:`dv_${d.id}`, tipo:'red', ico:'📤', txt:`Despesa vencida: ${d.descricao}`, valor:fmtMoeda(d.valor), data:d.vencimento, acao:"go('pagar')" }));
-  IMPOSTOS.filter(i=>i.status==='pendente'&&i.vencimento<hoje).forEach(i=>
+  (IMPOSTOS||[]).filter(i=>i.status==='pendente'&&i.vencimento<hoje).forEach(i=>
     notifs.push({ id:`iv_${i.id}`, tipo:'red', ico:'📋', txt:`Imposto vencido: ${i.tipo}`, valor:fmtMoeda(i.valor), data:i.vencimento, acao:"go('impostos')" }));
 
   // Vencem em 3 dias
-  RECEITAS.filter(r=>r.status==='pendente'&&r.vencimento>=hoje&&r.vencimento<=em3s).forEach(r=>
+  (RECEITAS||[]).filter(r=>r.status==='pendente'&&r.vencimento>=hoje&&r.vencimento<=em3s).forEach(r=>
     notifs.push({ id:`r3_${r.id}`, tipo:'amber', ico:'⏰', txt:`Receita vence em breve: ${r.descricao}`, valor:fmtMoeda(r.valor), data:r.vencimento, acao:"go('receber')" }));
-  DESPESAS.filter(d=>d.status==='pendente'&&d.vencimento>=hoje&&d.vencimento<=em3s).forEach(d=>
+  (DESPESAS||[]).filter(d=>d.status==='pendente'&&d.vencimento>=hoje&&d.vencimento<=em3s).forEach(d=>
     notifs.push({ id:`d3_${d.id}`, tipo:'amber', ico:'⏰', txt:`Despesa vence em breve: ${d.descricao}`, valor:fmtMoeda(d.valor), data:d.vencimento, acao:"go('pagar')" }));
-  IMPOSTOS.filter(i=>i.status==='pendente'&&i.vencimento>=hoje&&i.vencimento<=em3s).forEach(i=>
+  (IMPOSTOS||[]).filter(i=>i.status==='pendente'&&i.vencimento>=hoje&&i.vencimento<=em3s).forEach(i=>
     notifs.push({ id:`i3_${i.id}`, tipo:'amber', ico:'📋', txt:`Imposto vence em breve: ${i.tipo}`, valor:fmtMoeda(i.valor), data:i.vencimento, acao:"go('impostos')" }));
 
   return notifs.slice(0, 20);
 }
 
 function atualizarBadgeNotif() {
+  if (!APP.user) return;
   const notifs = gerarNotificacoes();
   const lidas  = JSON.parse(localStorage.getItem(NOTIF_KEY())||'[]');
   const novas  = notifs.filter(n => !lidas.includes(n.id));
@@ -3983,6 +3989,7 @@ function atualizarBadgeNotif() {
 }
 
 function toggleNotifPanel() {
+  if (!APP.user) return;
   const panel = $id('notif-panel');
   if (!panel) return;
   const aberto = panel.style.display !== 'none';
@@ -4229,14 +4236,9 @@ const _guardedFns = ['salvarReceita','baixarReceita','editarReceita','salvarEdic
   'salvarDespesa','baixarDespesa','editarDespesa','salvarEdicaoDespesa','excluirDespesa',
   'salvarConta','salvarCliente','salvarFornecedor','salvarCategoria',
   'salvarMeta','excluirMeta','salvarRecorrencia','toggleRecorrencia','excluirRecorrencia',
-  'salvarImposto','pagarImposto','excluirImposto'];
-
-// Aplica após carregamento do script
-window.addEventListener('load', () => {
-  _guardedFns.forEach(fn => {
-    if (typeof window[fn] === 'function') window[fn] = guardAdmin(window[fn]);
-  });
-});
+  'salvarImposto','pagarImposto','excluirImposto',
+  'modalNovaReceita','modalNovaDespesa','modalNovaConta','modalNovoCliente',
+  'modalNovoFornecedor','modalNovaCategoria','modalNovaMeta','modalNovaRecorrencia','modalNovoImposto'];
 
 // ── MOBILE MENU ────────────────────────────────────────────────
 function updateMobMenu() {
@@ -4249,6 +4251,10 @@ window.addEventListener('resize', updateMobMenu);
 
 // ── INIT ──────────────────────────────────────────────────────
 window.addEventListener('load', () => {
+  // Aplica guard de perfil nas funções destrutivas (viewer = só leitura)
+  _guardedFns.forEach(fn => {
+    if (typeof window[fn] === 'function') window[fn] = guardAdmin(window[fn]);
+  });
   $id('auth-screen').classList.add('visible');
 });
 </script>

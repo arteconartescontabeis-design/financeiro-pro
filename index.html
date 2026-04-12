@@ -1386,27 +1386,122 @@ function renderDashboard() {
 }
 
 // ── A RECEBER ─────────────────────────────────────────────────
+// Estado de filtros persistente por página
+const _F = {
+  receber:      { busca:'', status:'', periodo:'', ordem:'vencimento', dir:'asc' },
+  pagar:        { busca:'', status:'', periodo:'', ordem:'vencimento', dir:'asc' },
+  clientes:     { busca:'', ordem:'nome', dir:'asc' },
+  fornecedores: { busca:'', ordem:'nome', dir:'asc' },
+};
+
+function filterBarStyle() {
+  return `background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:10px 14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px`;
+}
+function inputFiltroStyle() {
+  return `padding:7px 12px;border:1.5px solid var(--border-lt);border-radius:8px;font-family:var(--font);font-size:12.5px;background:var(--bg-2);color:var(--text);outline:none;transition:var(--tr)`;
+}
+function selectFiltroStyle() {
+  return `padding:7px 10px;border:1.5px solid var(--border-lt);border-radius:8px;font-family:var(--font);font-size:12px;background:var(--bg-2);color:var(--text);outline:none;cursor:pointer`;
+}
+function thSort(label, campo, pag) {
+  const f   = _F[pag];
+  const ativo = f.ordem === campo;
+  const seta  = ativo ? (f.dir==='asc' ? ' ▲' : ' ▼') : '';
+  return `<th style="cursor:pointer;user-select:none;white-space:nowrap" onclick="sortTabela('${pag}','${campo}')">${label}${seta}</th>`;
+}
+function sortTabela(pag, campo) {
+  const f = _F[pag];
+  if (f.ordem === campo) f.dir = f.dir==='asc' ? 'desc' : 'asc';
+  else { f.ordem = campo; f.dir = 'asc'; }
+  if (pag==='receber')      renderReceber();
+  if (pag==='pagar')        renderPagar();
+  if (pag==='clientes')     renderClientes();
+  if (pag==='fornecedores') renderFornecedores();
+}
+function limparFiltros(pag) {
+  Object.assign(_F[pag], { busca:'', status:'', periodo:'' });
+  if (pag==='receber')      renderReceber();
+  if (pag==='pagar')        renderPagar();
+  if (pag==='clientes')     renderClientes();
+  if (pag==='fornecedores') renderFornecedores();
+}
+
 function renderReceber() {
+  const f    = _F.receber;
+  const hoje = today();
+  const mes  = hoje.slice(0,7);
+
   $id('topbar-actions').innerHTML = `<button class="btn btn-gold btn-sm" onclick="modalNovaReceita()">+ Nova Receita</button>`;
-  const list = [...RECEITAS].sort((a,b) => a.vencimento.localeCompare(b.vencimento));
+
+  // Filtrar
+  let list = [...RECEITAS];
+  if (f.busca)   list = list.filter(r => r.descricao?.toLowerCase().includes(f.busca.toLowerCase()) || getNome(CLIENTES,r.cliente_id).toLowerCase().includes(f.busca.toLowerCase()));
+  if (f.status)  list = list.filter(r => r.status === f.status);
+  if (f.periodo === 'mes')     list = list.filter(r => r.vencimento?.startsWith(mes));
+  if (f.periodo === 'vencido') list = list.filter(r => r.status==='pendente' && r.vencimento < hoje);
+  if (f.periodo === '7d')      { const lim=new Date(); lim.setDate(lim.getDate()+7); list = list.filter(r => r.vencimento>=hoje && r.vencimento<=lim.toISOString().slice(0,10)); }
+
+  // Ordenar
+  list.sort((a,b) => {
+    let va = a[f.ordem]||'', vb = b[f.ordem]||'';
+    if (f.ordem==='valor') { va=parseFloat(a.valor)||0; vb=parseFloat(b.valor)||0; }
+    if (va < vb) return f.dir==='asc' ? -1 : 1;
+    if (va > vb) return f.dir==='asc' ? 1 : -1;
+    return 0;
+  });
+
+  const totalFiltrado = list.reduce((s,r)=>s+(parseFloat(r.valor)||0),0);
+  const temFiltro = f.busca||f.status||f.periodo;
+
   $id('page-content').innerHTML = `
+  <!-- Barra de filtros -->
+  <div style="${filterBarStyle()}">
+    <input style="${inputFiltroStyle()};flex:1;min-width:180px" placeholder="🔍  Buscar por descrição ou cliente…"
+      value="${f.busca}" oninput="_F.receber.busca=this.value;renderReceber()">
+    <select style="${selectFiltroStyle()}" onchange="_F.receber.status=this.value;renderReceber()">
+      <option value="" ${!f.status?'selected':''}>Todos os status</option>
+      <option value="pendente"  ${f.status==='pendente'?'selected':''}>Pendente</option>
+      <option value="recebido"  ${f.status==='recebido'?'selected':''}>Recebido</option>
+      <option value="vencido"   ${f.status==='vencido'?'selected':''}>Vencido</option>
+      <option value="cancelado" ${f.status==='cancelado'?'selected':''}>Cancelado</option>
+    </select>
+    <select style="${selectFiltroStyle()}" onchange="_F.receber.periodo=this.value;renderReceber()">
+      <option value="" ${!f.periodo?'selected':''}>Todo período</option>
+      <option value="mes"     ${f.periodo==='mes'?'selected':''}>Este mês</option>
+      <option value="7d"      ${f.periodo==='7d'?'selected':''}>Próximos 7 dias</option>
+      <option value="vencido" ${f.periodo==='vencido'?'selected':''}>Vencidos</option>
+    </select>
+    ${temFiltro ? `<button onclick="limparFiltros('receber')" style="padding:6px 12px;border-radius:7px;border:1px solid var(--border-lt);background:none;color:var(--text-3);font-size:11.5px;cursor:pointer;font-family:var(--font)">✕ Limpar</button>` : ''}
+    <span style="font-size:11px;color:var(--text-3);margin-left:auto;white-space:nowrap">${list.length} registro${list.length!==1?'s':''} · ${fmtMoeda(totalFiltrado)}</span>
+  </div>
+
   <div class="card">
     <div class="table-wrap">
     <table>
-      <thead><tr><th>Descrição</th><th>Cliente</th><th>Categoria</th><th>Vencimento</th><th>Valor</th><th>Status</th><th></th></tr></thead>
+      <thead><tr>
+        ${thSort('Descrição','descricao','receber')}
+        ${thSort('Cliente','cliente_id','receber')}
+        ${thSort('Categoria','categoria_id','receber')}
+        ${thSort('Vencimento','vencimento','receber')}
+        ${thSort('Valor','valor','receber')}
+        <th>Status</th><th></th>
+      </tr></thead>
       <tbody>
-      ${list.length === 0 ? `<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">📥</div><h3>Nenhuma receita cadastrada</h3></div></td></tr>` :
-        list.map(r => `<tr>
-          <td style="font-weight:500;color:var(--text)">${r.descricao}</td>
-          <td style="color:var(--text-2)">${getNome(CLIENTES, r.cliente_id)}</td>
-          <td style="color:var(--text-3)">${getNome(CATEGORIAS, r.categoria_id)}</td>
-          <td style="font-family:var(--mono);font-size:12px;color:var(--text-2)">${fmtData(r.vencimento)}</td>
-          <td style="font-family:var(--mono);font-weight:700;color:var(--green)">${fmtMoeda(r.valor)}</td>
-          <td>${badgeStatus(r.status)}</td>
-          <td>
-            ${r.status === 'pendente' || r.status === 'vencido' ? `<button class="btn btn-sm btn-green" onclick="baixarReceita('${r.id}',event)">✓ Recebido</button>` : ''}
-          </td>
-        </tr>`).join('')}
+      ${list.length === 0
+        ? `<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">📥</div><h3>${temFiltro?'Nenhum resultado para os filtros aplicados':'Nenhuma receita cadastrada'}</h3></div></td></tr>`
+        : list.map(r => {
+            const vencHoje = r.vencimento === hoje;
+            const vencAtras = r.status==='pendente' && r.vencimento < hoje;
+            return `<tr style="${vencAtras?'background:rgba(224,92,92,.04)':''}">
+              <td style="font-weight:500;color:var(--text);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.descricao}</td>
+              <td style="color:var(--text-2)">${getNome(CLIENTES, r.cliente_id)}</td>
+              <td style="color:var(--text-3)">${getNome(CATEGORIAS, r.categoria_id)}</td>
+              <td style="font-family:var(--mono);font-size:12px;color:${vencAtras?'var(--red)':vencHoje?'var(--amber)':'var(--text-2)'};font-weight:${vencAtras||vencHoje?700:400}">${fmtData(r.vencimento)}${vencHoje?' · hoje':''}</td>
+              <td style="font-family:var(--mono);font-weight:700;color:var(--green)">${fmtMoeda(r.valor)}</td>
+              <td>${badgeStatus(r.status)}</td>
+              <td>${r.status==='pendente'||r.status==='vencido' ? `<button class="btn btn-sm btn-green" onclick="baixarReceita('${r.id}',event)">✓ Recebido</button>` : ''}</td>
+            </tr>`;
+          }).join('')}
       </tbody>
     </table>
     </div>
@@ -1473,26 +1568,81 @@ async function baixarReceita(id, e) {
 
 // ── A PAGAR ───────────────────────────────────────────────────
 function renderPagar() {
+  const f    = _F.pagar;
+  const hoje = today();
+  const mes  = hoje.slice(0,7);
+
   $id('topbar-actions').innerHTML = `<button class="btn btn-gold btn-sm" onclick="modalNovaDespesa()">+ Nova Despesa</button>`;
-  const list = [...DESPESAS].sort((a,b) => a.vencimento.localeCompare(b.vencimento));
+
+  // Filtrar
+  let list = [...DESPESAS];
+  if (f.busca)   list = list.filter(d => d.descricao?.toLowerCase().includes(f.busca.toLowerCase()) || getNome(FORNECEDORES,d.fornecedor_id).toLowerCase().includes(f.busca.toLowerCase()));
+  if (f.status)  list = list.filter(d => d.status === f.status);
+  if (f.periodo === 'mes')     list = list.filter(d => d.vencimento?.startsWith(mes));
+  if (f.periodo === 'vencido') list = list.filter(d => d.status==='pendente' && d.vencimento < hoje);
+  if (f.periodo === '7d')      { const lim=new Date(); lim.setDate(lim.getDate()+7); list = list.filter(d => d.vencimento>=hoje && d.vencimento<=lim.toISOString().slice(0,10)); }
+
+  // Ordenar
+  list.sort((a,b) => {
+    let va = a[f.ordem]||'', vb = b[f.ordem]||'';
+    if (f.ordem==='valor') { va=parseFloat(a.valor)||0; vb=parseFloat(b.valor)||0; }
+    if (va < vb) return f.dir==='asc' ? -1 : 1;
+    if (va > vb) return f.dir==='asc' ? 1 : -1;
+    return 0;
+  });
+
+  const totalFiltrado = list.reduce((s,d)=>s+(parseFloat(d.valor)||0),0);
+  const temFiltro = f.busca||f.status||f.periodo;
+
   $id('page-content').innerHTML = `
+  <!-- Barra de filtros -->
+  <div style="${filterBarStyle()}">
+    <input style="${inputFiltroStyle()};flex:1;min-width:180px" placeholder="🔍  Buscar por descrição ou fornecedor…"
+      value="${f.busca}" oninput="_F.pagar.busca=this.value;renderPagar()">
+    <select style="${selectFiltroStyle()}" onchange="_F.pagar.status=this.value;renderPagar()">
+      <option value="" ${!f.status?'selected':''}>Todos os status</option>
+      <option value="pendente"  ${f.status==='pendente'?'selected':''}>Pendente</option>
+      <option value="pago"      ${f.status==='pago'?'selected':''}>Pago</option>
+      <option value="vencido"   ${f.status==='vencido'?'selected':''}>Vencido</option>
+      <option value="cancelado" ${f.status==='cancelado'?'selected':''}>Cancelado</option>
+    </select>
+    <select style="${selectFiltroStyle()}" onchange="_F.pagar.periodo=this.value;renderPagar()">
+      <option value="" ${!f.periodo?'selected':''}>Todo período</option>
+      <option value="mes"     ${f.periodo==='mes'?'selected':''}>Este mês</option>
+      <option value="7d"      ${f.periodo==='7d'?'selected':''}>Próximos 7 dias</option>
+      <option value="vencido" ${f.periodo==='vencido'?'selected':''}>Vencidos</option>
+    </select>
+    ${temFiltro ? `<button onclick="limparFiltros('pagar')" style="padding:6px 12px;border-radius:7px;border:1px solid var(--border-lt);background:none;color:var(--text-3);font-size:11.5px;cursor:pointer;font-family:var(--font)">✕ Limpar</button>` : ''}
+    <span style="font-size:11px;color:var(--text-3);margin-left:auto;white-space:nowrap">${list.length} registro${list.length!==1?'s':''} · ${fmtMoeda(totalFiltrado)}</span>
+  </div>
+
   <div class="card">
     <div class="table-wrap">
     <table>
-      <thead><tr><th>Descrição</th><th>Fornecedor</th><th>Categoria</th><th>Vencimento</th><th>Valor</th><th>Status</th><th></th></tr></thead>
+      <thead><tr>
+        ${thSort('Descrição','descricao','pagar')}
+        ${thSort('Fornecedor','fornecedor_id','pagar')}
+        ${thSort('Categoria','categoria_id','pagar')}
+        ${thSort('Vencimento','vencimento','pagar')}
+        ${thSort('Valor','valor','pagar')}
+        <th>Status</th><th></th>
+      </tr></thead>
       <tbody>
-      ${list.length === 0 ? `<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">📤</div><h3>Nenhuma despesa cadastrada</h3></div></td></tr>` :
-        list.map(d => `<tr>
-          <td style="font-weight:500;color:var(--text)">${d.descricao}</td>
-          <td style="color:var(--text-2)">${getNome(FORNECEDORES, d.fornecedor_id)}</td>
-          <td style="color:var(--text-3)">${getNome(CATEGORIAS, d.categoria_id)}</td>
-          <td style="font-family:var(--mono);font-size:12px;color:var(--text-2)">${fmtData(d.vencimento)}</td>
-          <td style="font-family:var(--mono);font-weight:700;color:var(--red)">${fmtMoeda(d.valor)}</td>
-          <td>${badgeStatus(d.status)}</td>
-          <td>
-            ${d.status === 'pendente' || d.status === 'vencido' ? `<button class="btn btn-sm btn-red" onclick="baixarDespesa('${d.id}',event)">✓ Pago</button>` : ''}
-          </td>
-        </tr>`).join('')}
+      ${list.length === 0
+        ? `<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">📤</div><h3>${temFiltro?'Nenhum resultado para os filtros aplicados':'Nenhuma despesa cadastrada'}</h3></div></td></tr>`
+        : list.map(d => {
+            const vencHoje  = d.vencimento === hoje;
+            const vencAtras = d.status==='pendente' && d.vencimento < hoje;
+            return `<tr style="${vencAtras?'background:rgba(224,92,92,.04)':''}">
+              <td style="font-weight:500;color:var(--text);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d.descricao}</td>
+              <td style="color:var(--text-2)">${getNome(FORNECEDORES, d.fornecedor_id)}</td>
+              <td style="color:var(--text-3)">${getNome(CATEGORIAS, d.categoria_id)}</td>
+              <td style="font-family:var(--mono);font-size:12px;color:${vencAtras?'var(--red)':vencHoje?'var(--amber)':'var(--text-2)'};font-weight:${vencAtras||vencHoje?700:400}">${fmtData(d.vencimento)}${vencHoje?' · hoje':''}</td>
+              <td style="font-family:var(--mono);font-weight:700;color:var(--red)">${fmtMoeda(d.valor)}</td>
+              <td>${badgeStatus(d.status)}</td>
+              <td>${d.status==='pendente'||d.status==='vencido' ? `<button class="btn btn-sm btn-red" onclick="baixarDespesa('${d.id}',event)">✓ Pago</button>` : ''}</td>
+            </tr>`;
+          }).join('')}
       </tbody>
     </table>
     </div>
@@ -1842,13 +1992,43 @@ function renderDRE() {
 
 // ── CLIENTES ──────────────────────────────────────────────────
 function renderClientes() {
+  const f = _F.clientes;
   $id('topbar-actions').innerHTML = `<button class="btn btn-gold btn-sm" onclick="modalNovoCliente()">+ Novo Cliente</button>`;
+
+  let list = [...CLIENTES];
+  if (f.busca) list = list.filter(c =>
+    c.nome?.toLowerCase().includes(f.busca.toLowerCase()) ||
+    c.cpf_cnpj?.includes(f.busca) ||
+    c.email?.toLowerCase().includes(f.busca.toLowerCase())
+  );
+  list.sort((a,b) => {
+    const va=a[f.ordem]||'', vb=b[f.ordem]||'';
+    return f.dir==='asc' ? va.localeCompare(vb) : vb.localeCompare(va);
+  });
+
   $id('page-content').innerHTML = `
+  <div style="${filterBarStyle()}">
+    <input style="${inputFiltroStyle()};flex:1;min-width:200px" placeholder="🔍  Buscar por nome, CPF/CNPJ ou e-mail…"
+      value="${f.busca}" oninput="_F.clientes.busca=this.value;renderClientes()">
+    ${f.busca ? `<button onclick="limparFiltros('clientes')" style="padding:6px 12px;border-radius:7px;border:1px solid var(--border-lt);background:none;color:var(--text-3);font-size:11.5px;cursor:pointer;font-family:var(--font)">✕ Limpar</button>` : ''}
+    <span style="font-size:11px;color:var(--text-3);margin-left:auto">${list.length} cliente${list.length!==1?'s':''}</span>
+  </div>
   <div class="card"><div class="table-wrap"><table>
-    <thead><tr><th>Nome</th><th>CPF/CNPJ</th><th>E-mail</th><th>Telefone</th></tr></thead>
+    <thead><tr>
+      ${thSort('Nome','nome','clientes')}
+      ${thSort('CPF/CNPJ','cpf_cnpj','clientes')}
+      ${thSort('E-mail','email','clientes')}
+      <th>Telefone</th>
+    </tr></thead>
     <tbody>
-    ${CLIENTES.length === 0 ? `<tr><td colspan="4"><div class="empty-state"><div class="empty-icon">👥</div><h3>Nenhum cliente cadastrado</h3></div></td></tr>` :
-      CLIENTES.map(c => `<tr><td style="font-weight:500;color:var(--text)">${c.nome}</td><td style="font-family:var(--mono);font-size:12px;color:var(--text-2)">${c.cpf_cnpj||'—'}</td><td style="color:var(--text-2)">${c.email||'—'}</td><td style="color:var(--text-2)">${c.telefone||'—'}</td></tr>`).join('')}
+    ${list.length === 0
+      ? `<tr><td colspan="4"><div class="empty-state"><div class="empty-icon">👥</div><h3>${f.busca?'Nenhum resultado':'Nenhum cliente cadastrado'}</h3></div></td></tr>`
+      : list.map(c => `<tr>
+          <td style="font-weight:500;color:var(--text)">${c.nome}</td>
+          <td style="font-family:var(--mono);font-size:12px;color:var(--text-2)">${c.cpf_cnpj||'—'}</td>
+          <td style="color:var(--text-2)">${c.email||'—'}</td>
+          <td style="color:var(--text-2)">${c.telefone||'—'}</td>
+        </tr>`).join('')}
     </tbody>
   </table></div></div>`;
 }
@@ -1883,13 +2063,43 @@ async function salvarCliente() {
 
 // ── FORNECEDORES ──────────────────────────────────────────────
 function renderFornecedores() {
+  const f = _F.fornecedores;
   $id('topbar-actions').innerHTML = `<button class="btn btn-gold btn-sm" onclick="modalNovoFornecedor()">+ Novo Fornecedor</button>`;
+
+  let list = [...FORNECEDORES];
+  if (f.busca) list = list.filter(x =>
+    x.nome?.toLowerCase().includes(f.busca.toLowerCase()) ||
+    x.cpf_cnpj?.includes(f.busca) ||
+    x.email?.toLowerCase().includes(f.busca.toLowerCase())
+  );
+  list.sort((a,b) => {
+    const va=a[f.ordem]||'', vb=b[f.ordem]||'';
+    return f.dir==='asc' ? va.localeCompare(vb) : vb.localeCompare(va);
+  });
+
   $id('page-content').innerHTML = `
+  <div style="${filterBarStyle()}">
+    <input style="${inputFiltroStyle()};flex:1;min-width:200px" placeholder="🔍  Buscar por nome, CPF/CNPJ ou e-mail…"
+      value="${f.busca}" oninput="_F.fornecedores.busca=this.value;renderFornecedores()">
+    ${f.busca ? `<button onclick="limparFiltros('fornecedores')" style="padding:6px 12px;border-radius:7px;border:1px solid var(--border-lt);background:none;color:var(--text-3);font-size:11.5px;cursor:pointer;font-family:var(--font)">✕ Limpar</button>` : ''}
+    <span style="font-size:11px;color:var(--text-3);margin-left:auto">${list.length} fornecedor${list.length!==1?'es':''}</span>
+  </div>
   <div class="card"><div class="table-wrap"><table>
-    <thead><tr><th>Nome</th><th>CPF/CNPJ</th><th>E-mail</th><th>Telefone</th></tr></thead>
+    <thead><tr>
+      ${thSort('Nome','nome','fornecedores')}
+      ${thSort('CPF/CNPJ','cpf_cnpj','fornecedores')}
+      ${thSort('E-mail','email','fornecedores')}
+      <th>Telefone</th>
+    </tr></thead>
     <tbody>
-    ${FORNECEDORES.length === 0 ? `<tr><td colspan="4"><div class="empty-state"><div class="empty-icon">🏭</div><h3>Nenhum fornecedor cadastrado</h3></div></td></tr>` :
-      FORNECEDORES.map(f => `<tr><td style="font-weight:500;color:var(--text)">${f.nome}</td><td style="font-family:var(--mono);font-size:12px;color:var(--text-2)">${f.cpf_cnpj||'—'}</td><td style="color:var(--text-2)">${f.email||'—'}</td><td style="color:var(--text-2)">${f.telefone||'—'}</td></tr>`).join('')}
+    ${list.length === 0
+      ? `<tr><td colspan="4"><div class="empty-state"><div class="empty-icon">🏭</div><h3>${f.busca?'Nenhum resultado':'Nenhum fornecedor cadastrado'}</h3></div></td></tr>`
+      : list.map(x => `<tr>
+          <td style="font-weight:500;color:var(--text)">${x.nome}</td>
+          <td style="font-family:var(--mono);font-size:12px;color:var(--text-2)">${x.cpf_cnpj||'—'}</td>
+          <td style="color:var(--text-2)">${x.email||'—'}</td>
+          <td style="color:var(--text-2)">${x.telefone||'—'}</td>
+        </tr>`).join('')}
     </tbody>
   </table></div></div>`;
 }

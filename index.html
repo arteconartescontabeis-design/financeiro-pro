@@ -600,6 +600,14 @@ tbody td { padding: 11px 16px; font-size: 13px; }
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46A7.93 7.93 0 0 0 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74A7.93 7.93 0 0 0 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z"/></svg>
         Recorrências
       </button>
+      <button class="nav-item" onclick="go('impostos')" data-page="impostos">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zm-1 7V3.5L18.5 9H13zm-2 8v-1h-1v1H8v-5h1v1h1v-1h1v5h-1zm4 0h-2v-5h2c.55 0 1 .45 1 1v3c0 .55-.45 1-1 1zm-1-4v3h1v-3h-1z"/></svg>
+        Impostos
+      </button>
+      <button class="nav-item" onclick="go('conciliacao')" data-page="conciliacao">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/></svg>
+        Conciliação
+      </button>
       <button class="nav-item" onclick="go('contas')" data-page="contas">
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 10v7h3v-7H4zm6.5 0v7h3v-7h-3zM2 22h19v-3H2v3zm15-12v7h3v-7h-3zM11.5 1L2 6v2h19V6l-9.5-5z"/></svg>
         Caixa / Bancos
@@ -683,7 +691,7 @@ const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsI
 
 // ── ESTADO ────────────────────────────────────────────────────
 const APP = { token: null, user: null, tenant: null, page: 'dashboard' };
-let CONTAS = [], CATEGORIAS = [], CLIENTES = [], FORNECEDORES = [], RECEITAS = [], DESPESAS = [], METAS = [], RECORRENCIAS = [];
+let CONTAS = [], CATEGORIAS = [], CLIENTES = [], FORNECEDORES = [], RECEITAS = [], DESPESAS = [], METAS = [], RECORRENCIAS = [], IMPOSTOS = [];
 
 // ── SUPABASE ──────────────────────────────────────────────────
 const $id = id => document.getElementById(id);
@@ -823,6 +831,8 @@ async function carregarDados() {
   CONTAS = contas; CATEGORIAS = cats; CLIENTES = clis;
   FORNECEDORES = fors; RECEITAS = recs; DESPESAS = desps;
   METAS = metas || []; RECORRENCIAS = recorr || [];
+  // Impostos carregado separado (tabela pode não existir)
+  try { IMPOSTOS = await supa('GET', 'fin_impostos', { params: { tenant_id: `eq.${tid}`, select: '*', order: 'vencimento.desc', limit: 200 } }); } catch(_) { IMPOSTOS = []; }
 }
 
 function mostrarApp() {
@@ -972,6 +982,8 @@ const PAGES = {
   receber:      { title: 'A Receber',       render: renderReceber },
   pagar:        { title: 'A Pagar',         render: renderPagar },
   recorrencias: { title: 'Recorrências',    render: renderRecorrencias },
+  impostos:     { title: 'Impostos',        render: renderImpostos },
+  conciliacao:  { title: 'Conciliação',     render: renderConciliacao },
   contas:       { title: 'Caixa / Bancos',  render: renderContas },
   fluxo:        { title: 'Fluxo de Caixa',  render: renderFluxo },
   dre:          { title: 'DRE',             render: renderDRE },
@@ -1117,6 +1129,11 @@ function renderDashboard() {
     sugestoes.push({tipo:'amber',ico:'🏦', txt:`Saldo disponível menor que as despesas do mês. Atenção ao caixa.`, acao:"go('contas')", label:'Ver contas'});
   if (sugestoes.length === 0)
     sugestoes.push({tipo:'green',ico:'✓',  txt:`Finanças sob controle. Continue monitorando seus indicadores regularmente.`, acao:null, label:null});
+
+  // Impostos vencidos
+  const impostosVenc = IMPOSTOS.filter(i => i.status==='pendente' && i.vencimento < hoje);
+  if (impostosVenc.length)
+    sugestoes.unshift({tipo:'red', ico:'📋', txt:`${impostosVenc.length} guia(s) de imposto vencida(s). Regularize para evitar multas e juros.`, acao:"go('impostos')", label:'Ver impostos'});
 
   // ── Top categorias ────────────────────────────────────────
   const catR={}, catD={};
@@ -3015,6 +3032,408 @@ async function excluirRecorrencia(id) {
     toast('Recorrência excluída.', 'success');
     await carregarDados(); renderRecorrencias();
   } catch(e) { toast('Erro: ' + e.message, 'error'); }
+}
+
+// ── IMPOSTOS ──────────────────────────────────────────────────
+/*
+  SQL (rodar no Supabase SQL Editor):
+
+  CREATE TABLE IF NOT EXISTS fin_impostos (
+    id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id   uuid NOT NULL,
+    tipo        text NOT NULL,
+    competencia text NOT NULL,
+    vencimento  date NOT NULL,
+    valor       numeric(14,2) NOT NULL,
+    status      text DEFAULT 'pendente' CHECK (status IN ('pendente','pago','cancelado')),
+    codigo_barras text,
+    observacao  text,
+    pago_em     date,
+    criado_em   timestamptz DEFAULT now()
+  );
+  ALTER TABLE fin_impostos ENABLE ROW LEVEL SECURITY;
+  CREATE POLICY "tenant_iso" ON fin_impostos USING (true);
+*/
+
+const TIPOS_IMPOSTO = [
+  'DAS - Simples Nacional',
+  'DARF - IRPJ',
+  'DARF - CSLL',
+  'DARF - PIS',
+  'DARF - COFINS',
+  'DARF - IRRF',
+  'GPS - INSS',
+  'ISS',
+  'IPTU',
+  'IPVA',
+  'Outro',
+];
+
+// Tabelas DAS Simples Nacional 2024 (Anexo III - Serviços contábeis)
+const FAIXAS_DAS = [
+  { ate: 180000,   aliq: 0.06,  ded: 0 },
+  { ate: 360000,   aliq: 0.112, ded: 9360 },
+  { ate: 720000,   aliq: 0.135, ded: 17640 },
+  { ate: 1800000,  aliq: 0.16,  ded: 35640 },
+  { ate: 3600000,  aliq: 0.21,  ded: 125640 },
+  { ate: 4800000,  aliq: 0.33,  ded: 648000 },
+];
+
+function calcularDAS(receitaAnual) {
+  const faixa = FAIXAS_DAS.find(f => receitaAnual <= f.ate);
+  if (!faixa) return 0;
+  return Math.max(0, (receitaAnual * faixa.aliq - faixa.ded) / 12);
+}
+
+function renderImpostos() {
+  const hoje     = today();
+  const mesAtual = hoje.slice(0,7);
+  const periodoSel = window._impostosPeriodo || '12m';
+
+  // Filtrar por período
+  let lista = [...IMPOSTOS];
+  if (periodoSel === '3m') {
+    const lim = new Date(); lim.setMonth(lim.getMonth()-3);
+    lista = lista.filter(i => i.vencimento >= lim.toISOString().slice(0,10));
+  }
+  if (periodoSel === '12m') {
+    const lim = new Date(); lim.setMonth(lim.getMonth()-12);
+    lista = lista.filter(i => i.vencimento >= lim.toISOString().slice(0,10));
+  }
+  lista.sort((a,b) => b.vencimento.localeCompare(a.vencimento));
+
+  const pendentes  = IMPOSTOS.filter(i => i.status==='pendente');
+  const vencidos   = pendentes.filter(i => i.vencimento < hoje);
+  const totalPend  = pendentes.reduce((s,i)=>s+(parseFloat(i.valor)||0),0);
+  const totalPago  = IMPOSTOS.filter(i=>i.status==='pago').reduce((s,i)=>s+(parseFloat(i.valor)||0),0);
+
+  // Simulador DAS: receita dos últimos 12 meses
+  const rec12 = RECEITAS
+    .filter(r => r.status==='recebido' && r.vencimento >= (() => { const d=new Date(); d.setFullYear(d.getFullYear()-1); return d.toISOString().slice(0,10); })())
+    .reduce((s,r)=>s+(parseFloat(r.valor)||0),0);
+  const dasSimulado = calcularDAS(rec12);
+
+  function btnP(p, label) {
+    const a = periodoSel===p;
+    return `<button onclick="window._impostosPeriodo='${p}';renderImpostos()" style="padding:6px 13px;border-radius:8px;border:1.5px solid ${a?'var(--gold)':'var(--border-lt)'};background:${a?'var(--gold-lt)':'transparent'};color:${a?'var(--gold)':'var(--text-2)'};font-family:var(--font);font-size:12px;font-weight:600;cursor:pointer">${label}</button>`;
+  }
+
+  $id('topbar-actions').innerHTML = `<button class="btn btn-gold btn-sm" onclick="modalNovoImposto()">+ Novo Imposto</button>`;
+
+  $id('page-content').innerHTML = `
+  <div style="display:flex;flex-direction:column;gap:16px">
+
+  <!-- SQL helper -->
+  <div style="background:rgba(201,168,76,.06);border:1px solid rgba(201,168,76,.2);border-radius:10px;padding:12px 16px;font-size:12px;color:var(--text-2);line-height:1.6">
+    <strong style="color:var(--gold)">Configuração:</strong> Crie a tabela <code style="background:var(--surface-2);padding:1px 6px;border-radius:4px;font-family:var(--mono);font-size:11px">fin_impostos</code> no Supabase SQL Editor antes de usar. Script no código-fonte.
+  </div>
+
+  <!-- KPIs -->
+  <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr)">
+    <div class="kpi-card k-red"><div class="kpi-label">A Pagar</div><div class="kpi-value" style="color:var(--red)">${fmtMoeda(totalPend)}</div><div class="kpi-sub">${pendentes.length} guia(s) pendente(s)</div></div>
+    <div class="kpi-card ${vencidos.length?'k-red':''}"><div class="kpi-label">Vencidos</div><div class="kpi-value" style="color:${vencidos.length?'var(--red)':'var(--text-3)'}">${vencidos.length}</div><div class="kpi-sub">${vencidos.length?'em atraso!':'tudo em dia'}</div></div>
+    <div class="kpi-card k-green"><div class="kpi-label">Total Pago</div><div class="kpi-value" style="color:var(--green)">${fmtMoeda(totalPago)}</div><div class="kpi-sub">no período</div></div>
+    <div class="kpi-card k-gold"><div class="kpi-label">DAS Estimado/mês</div><div class="kpi-value" style="color:var(--gold)">${fmtMoeda(dasSimulado)}</div><div class="kpi-sub">base: receita 12m · Anexo III</div></div>
+  </div>
+
+  <!-- Simulador DAS -->
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:16px 20px;box-shadow:var(--shadow)">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+      <div>
+        <div style="font-size:13px;font-weight:700;color:var(--text)">Simulador DAS — Simples Nacional</div>
+        <div style="font-size:11px;color:var(--text-3);margin-top:2px">Anexo III · Serviços contábeis · Cálculo estimado com base na receita cadastrada</div>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
+      <div style="background:var(--bg-2);border-radius:10px;padding:12px;border:1px solid var(--border)">
+        <div style="font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Receita últimos 12m</div>
+        <div style="font-size:16px;font-weight:700;font-family:var(--mono);color:var(--green)">${fmtMoeda(rec12)}</div>
+      </div>
+      <div style="background:var(--bg-2);border-radius:10px;padding:12px;border:1px solid var(--border)">
+        <div style="font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Faixa do Simples</div>
+        <div style="font-size:14px;font-weight:700;color:var(--text)">
+          ${(() => { const f=FAIXAS_DAS.findIndex(f=>rec12<=f.ate); return f===-1?'Acima do limite':`Faixa ${f+1} · ${((FAIXAS_DAS[Math.max(0,f)].aliq)*100).toFixed(1)}%`; })()}
+        </div>
+      </div>
+      <div style="background:var(--gold-lt);border-radius:10px;padding:12px;border:1px solid rgba(201,168,76,.25)">
+        <div style="font-size:10px;font-weight:700;color:var(--gold-dim);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">DAS estimado/mês</div>
+        <div style="font-size:18px;font-weight:700;font-family:var(--mono);color:var(--gold)">${fmtMoeda(dasSimulado)}</div>
+      </div>
+    </div>
+    <div style="margin-top:10px;font-size:11px;color:var(--text-3)">⚠ Estimativa para referência. Valor oficial deve ser apurado pelo PGDAS-D junto à Receita Federal.</div>
+  </div>
+
+  <!-- Filtros + Tabela -->
+  <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+    <div style="display:flex;gap:6px">${btnP('3m','3 meses')}${btnP('12m','12 meses')}${btnP('tudo','Tudo')}</div>
+    <span style="font-size:11px;color:var(--text-3)">${lista.length} registro(s)</span>
+  </div>
+
+  ${lista.length===0
+    ? `<div class="empty-state"><div class="empty-icon">📋</div><h3>Nenhum imposto cadastrado</h3><p style="font-size:13px;color:var(--text-3);margin-top:6px">Registre guias de DAS, DARF, GPS e outros tributos.</p></div>`
+    : `<div class="card" style="padding:0;overflow:hidden">
+        <table>
+          <thead><tr>
+            <th>Tipo</th><th>Competência</th><th>Vencimento</th>
+            <th style="text-align:right">Valor</th><th>Status</th><th></th>
+          </tr></thead>
+          <tbody>
+            ${lista.map(i => {
+              const venc = i.vencimento < hoje && i.status==='pendente';
+              return `<tr style="${venc?'background:rgba(224,92,92,.04)':''}">
+                <td style="font-weight:500;color:var(--text)">${i.tipo}</td>
+                <td style="font-family:var(--mono);font-size:12px;color:var(--text-2)">${i.competencia}</td>
+                <td style="font-family:var(--mono);font-size:12px;color:${venc?'var(--red)':'var(--text-2)'};font-weight:${venc?700:400}">${fmtData(i.vencimento)}${venc?' ⚠':''}</td>
+                <td style="text-align:right;font-family:var(--mono);font-weight:700;color:${i.status==='pago'?'var(--green)':'var(--red)'}">${fmtMoeda(i.valor)}</td>
+                <td>${badgeStatus(i.status)}</td>
+                <td style="white-space:nowrap">
+                  <div style="display:flex;gap:5px">
+                    ${i.status==='pendente'?`<button class="btn btn-sm btn-green" onclick="pagarImposto('${i.id}',event)" style="padding:4px 10px;font-size:11px">✓ Pago</button>`:''}
+                    <button onclick="excluirImposto('${i.id}',event)" class="btn btn-sm" style="padding:4px 10px;font-size:11px;background:var(--red-lt);color:var(--red);border:1px solid rgba(224,92,92,.2)">✕</button>
+                  </div>
+                </td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>`}
+  </div>`;
+}
+
+function modalNovoImposto() {
+  const mes = today().slice(0,7);
+  openModal('Novo Imposto / Guia', `
+    <div class="form-grid">
+      <div class="form-field full">
+        <label class="form-label">Tipo *</label>
+        <select class="form-select" id="ni-tipo">
+          ${TIPOS_IMPOSTO.map(t=>`<option value="${t}">${t}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-field"><label class="form-label">Competência *</label><input class="form-input" id="ni-comp" placeholder="Ex: 2025-03" value="${mes}"></div>
+      <div class="form-field"><label class="form-label">Vencimento *</label><input class="form-input" type="date" id="ni-venc" value="${today()}"></div>
+      <div class="form-field"><label class="form-label">Valor (R$) *</label><input class="form-input" type="number" id="ni-valor" placeholder="0,00" step="0.01" min="0"></div>
+      <div class="form-field"><label class="form-label">Status</label>
+        <select class="form-select" id="ni-status">
+          <option value="pendente">Pendente</option>
+          <option value="pago">Pago</option>
+        </select>
+      </div>
+      <div class="form-field"><label class="form-label">Data do pagamento</label><input class="form-input" type="date" id="ni-pago-em"></div>
+      <div class="form-field full"><label class="form-label">Código de barras</label><input class="form-input" id="ni-cod" placeholder="Opcional"></div>
+      <div class="form-field full"><label class="form-label">Observação</label><input class="form-input" id="ni-obs" placeholder="Opcional"></div>
+    </div>`,
+    `<button class="btn btn-outline" onclick="closeModal()">Cancelar</button>
+     <button class="btn btn-gold" onclick="salvarImposto()">Salvar</button>`
+  );
+}
+
+async function salvarImposto() {
+  const tipo  = $id('ni-tipo').value;
+  const comp  = $id('ni-comp').value.trim();
+  const venc  = $id('ni-venc').value;
+  const valor = parseFloat($id('ni-valor').value);
+  if (!comp || !venc || !valor) { toast('Preencha os campos obrigatórios.', 'error'); return; }
+  try {
+    await supa('POST', 'fin_impostos', { body: {
+      tenant_id:    APP.user.tenant_id,
+      tipo, competencia: comp, vencimento: venc, valor,
+      status:       $id('ni-status').value,
+      pago_em:      $id('ni-pago-em').value || null,
+      codigo_barras:$id('ni-cod').value     || null,
+      observacao:   $id('ni-obs').value     || null,
+    }});
+    closeModal(); toast('Imposto registrado!', 'success');
+    await carregarDados(); renderImpostos();
+  } catch(e) { toast('Erro: ' + e.message + ' (verifique se a tabela fin_impostos foi criada)', 'error'); }
+}
+
+async function pagarImposto(id, e) {
+  e.stopPropagation();
+  try {
+    await supa('PATCH', 'fin_impostos', { params: { id: `eq.${id}` }, body: { status: 'pago', pago_em: today() } });
+    toast('Imposto marcado como pago!', 'success');
+    await carregarDados(); renderImpostos();
+  } catch(e) { toast('Erro: ' + e.message, 'error'); }
+}
+
+async function excluirImposto(id, e) {
+  e.stopPropagation();
+  if (!confirm('Excluir este registro?')) return;
+  try {
+    await supa('DELETE', 'fin_impostos', { params: { id: `eq.${id}` } });
+    toast('Registro excluído.', 'success');
+    await carregarDados(); renderImpostos();
+  } catch(e) { toast('Erro: ' + e.message, 'error'); }
+}
+
+// ── CONCILIAÇÃO BANCÁRIA ───────────────────────────────────────
+// Conciliação 100% client-side — importa CSV, cruza com lançamentos em memória
+// Não requer tabela adicional no Supabase
+
+let _concItems = []; // itens do extrato importado
+let _concMes   = today().slice(0,7);
+
+function renderConciliacao() {
+  $id('topbar-actions').innerHTML = '';
+  const mes = _concMes;
+
+  // Lançamentos do mês selecionado
+  const recsM = RECEITAS.filter(r => r.vencimento?.startsWith(mes));
+  const despM = DESPESAS.filter(d => d.vencimento?.startsWith(mes));
+  const todos  = [
+    ...recsM.map(r => ({ ...r, _t:'rec', _valor: parseFloat(r.valor)||0 })),
+    ...despM.map(d => ({ ...d, _t:'dep', _valor: -(parseFloat(d.valor)||0) })),
+  ].sort((a,b) => a.vencimento.localeCompare(b.vencimento));
+
+  // Matching com extrato importado
+  function matchItem(ext) {
+    const delta = 2; // tolerância R$2
+    const match = todos.find(l =>
+      Math.abs(Math.abs(l._valor) - Math.abs(ext.valor)) <= delta &&
+      Math.abs(new Date(l.vencimento+' 12:00:00') - new Date(ext.data+' 12:00:00')) <= 3*86400000
+    );
+    return match || null;
+  }
+
+  const conciliados  = _concItems.filter(i => matchItem(i));
+  const semMatch     = _concItems.filter(i => !matchItem(i));
+  const naoExtrato   = todos.filter(l => !_concItems.some(i => {
+    const delta=2;
+    return Math.abs(Math.abs(l._valor)-Math.abs(i.valor))<=delta &&
+           Math.abs(new Date(l.vencimento+' 12:00:00')-new Date(i.data+' 12:00:00'))<=3*86400000;
+  }));
+
+  const saldoExtrato = _concItems.reduce((s,i)=>s+i.valor,0);
+  const saldoSist    = todos.reduce((s,l)=>s+l._valor,0);
+
+  $id('page-content').innerHTML = `
+  <div style="display:flex;flex-direction:column;gap:16px">
+
+  <!-- Seletor de mês + importar -->
+  <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+    <div style="display:flex;align-items:center;gap:8px">
+      <label style="font-size:12px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.06em">Competência</label>
+      <input type="month" value="${mes}" onchange="_concMes=this.value;_concItems=[];renderConciliacao()"
+        style="padding:7px 12px;border:1.5px solid var(--border-lt);border-radius:8px;font-family:var(--font);font-size:13px;background:var(--bg-2);color:var(--text);outline:none">
+    </div>
+    <label class="btn btn-sm" style="cursor:pointer;background:var(--surface-2);color:var(--text-2);border:1px solid var(--border-lt)">
+      📂 Importar CSV
+      <input type="file" accept=".csv,.txt,.ofx" style="display:none" onchange="importarExtrato(this)">
+    </label>
+    ${_concItems.length ? `<button onclick="_concItems=[];renderConciliacao()" class="btn btn-sm" style="background:var(--red-lt);color:var(--red);border:1px solid rgba(224,92,92,.2)">✕ Limpar extrato</button>` : ''}
+    <span style="font-size:11px;color:var(--text-3)">${_concItems.length} item(ns) no extrato</span>
+  </div>
+
+  <!-- KPIs -->
+  <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr)">
+    <div class="kpi-card k-green"><div class="kpi-label">Conciliados</div><div class="kpi-value" style="color:var(--green)">${conciliados.length}</div><div class="kpi-sub">de ${_concItems.length} no extrato</div></div>
+    <div class="kpi-card k-red"><div class="kpi-label">Sem correspondência</div><div class="kpi-value" style="color:var(--red)">${semMatch.length}</div><div class="kpi-sub">só no extrato</div></div>
+    <div class="kpi-card k-amber"><div class="kpi-label">Não conciliados</div><div class="kpi-value" style="color:var(--amber)">${naoExtrato.length}</div><div class="kpi-sub">só no sistema</div></div>
+    <div class="kpi-card ${Math.abs(saldoExtrato-saldoSist)<1?'k-green':'k-red'}"><div class="kpi-label">Diferença</div><div class="kpi-value" style="color:${Math.abs(saldoExtrato-saldoSist)<1?'var(--green)':'var(--red)'}">${fmtMoeda(saldoExtrato-saldoSist)}</div><div class="kpi-sub">extrato vs sistema</div></div>
+  </div>
+
+  ${_concItems.length===0 ? `
+  <!-- Instrução importar -->
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:32px;text-align:center;box-shadow:var(--shadow)">
+    <div style="font-size:36px;margin-bottom:12px;opacity:.4">🏦</div>
+    <div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:8px">Importe o extrato bancário</div>
+    <div style="font-size:12.5px;color:var(--text-3);line-height:1.7;max-width:420px;margin:0 auto">
+      Exporte o extrato do seu banco em <strong style="color:var(--text-2)">CSV</strong> e importe aqui.
+      O sistema cruza automaticamente com os lançamentos cadastrados pelo valor e data (tolerância ±2 dias, ±R$2).
+      <br><br>
+      <strong style="color:var(--text-2)">Formato esperado do CSV:</strong><br>
+      <code style="background:var(--surface-2);padding:4px 10px;border-radius:6px;font-family:var(--mono);font-size:11px">data;descricao;valor</code><br>
+      <span style="font-size:11px">Ex: <code style="background:var(--surface-2);padding:2px 8px;border-radius:4px;font-family:var(--mono)">2025-04-10;Honorário cliente A;5000.00</code></span>
+    </div>
+  </div>` : `
+
+  <!-- Tabela de conciliação -->
+  <div class="card" style="padding:0;overflow:hidden">
+    <div style="padding:12px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px">
+      <span style="font-size:11px;font-weight:700;color:var(--text)">Resultado da Conciliação · ${mes}</span>
+    </div>
+    <table>
+      <thead><tr>
+        <th>Data Extrato</th><th>Descrição Extrato</th>
+        <th style="text-align:right">Valor Extrato</th>
+        <th>Lançamento Sistema</th>
+        <th style="text-align:right">Valor Sistema</th>
+        <th>Status</th>
+      </tr></thead>
+      <tbody>
+        ${_concItems.map(ext => {
+          const match = matchItem(ext);
+          const status = match ? 'conciliado' : 'sem_match';
+          return `<tr style="${status==='sem_match'?'background:rgba(224,92,92,.04)':''}">
+            <td style="font-family:var(--mono);font-size:11px;color:var(--text-2)">${ext.data}</td>
+            <td style="color:var(--text);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${ext.descricao}</td>
+            <td style="text-align:right;font-family:var(--mono);font-weight:700;color:${ext.valor>=0?'var(--green)':'var(--red)'}">${fmtMoeda(ext.valor)}</td>
+            <td style="color:${match?'var(--text-2)':'var(--text-3)'};max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${match?match.descricao:'—'}</td>
+            <td style="text-align:right;font-family:var(--mono);font-weight:700;color:${match?(match._valor>=0?'var(--green)':'var(--red)'):'var(--text-3)'}">${match?fmtMoeda(Math.abs(match._valor)):'—'}</td>
+            <td><span class="badge ${status==='conciliado'?'badge-green':'badge-red'}">${status==='conciliado'?'Conciliado':'Sem match'}</span></td>
+          </tr>`;
+        }).join('')}
+        ${naoExtrato.map(l => `
+          <tr style="background:rgba(224,154,58,.04)">
+            <td style="font-family:var(--mono);font-size:11px;color:var(--text-3)">—</td>
+            <td style="color:var(--text-3)">Só no sistema</td>
+            <td style="text-align:right;color:var(--text-3)">—</td>
+            <td style="color:var(--text);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${l.descricao}</td>
+            <td style="text-align:right;font-family:var(--mono);font-weight:700;color:${l._valor>=0?'var(--green)':'var(--red)'}">${fmtMoeda(Math.abs(l._valor))}</td>
+            <td><span class="badge badge-amber">Só sistema</span></td>
+          </tr>`).join('')}
+      </tbody>
+    </table>
+  </div>`}
+
+  <!-- Resumo saldos -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+    <div class="card">
+      <div style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">Saldo do Extrato</div>
+      <div style="font-size:20px;font-weight:700;font-family:var(--mono);color:${saldoExtrato>=0?'var(--green)':'var(--red)'}">${fmtMoeda(saldoExtrato)}</div>
+      <div style="font-size:11px;color:var(--text-3);margin-top:4px">${_concItems.length} movimentações importadas</div>
+    </div>
+    <div class="card">
+      <div style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">Saldo do Sistema</div>
+      <div style="font-size:20px;font-weight:700;font-family:var(--mono);color:${saldoSist>=0?'var(--green)':'var(--red)'}">${fmtMoeda(saldoSist)}</div>
+      <div style="font-size:11px;color:var(--text-3);margin-top:4px">${todos.length} lançamentos no mês</div>
+    </div>
+  </div>
+
+  </div>`;
+}
+
+function importarExtrato(input) {
+  const file = input.files[0]; if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    const text = e.target.result;
+    const linhas = text.split('\n').map(l => l.trim()).filter(Boolean);
+    const items = [];
+    for (const linha of linhas) {
+      // Suporta ; e , como separador
+      const sep = linha.includes(';') ? ';' : ',';
+      const cols = linha.split(sep).map(c => c.replace(/"/g,'').trim());
+      if (cols.length < 3) continue;
+      const [col0, col1, col2] = cols;
+      // Ignora cabeçalho
+      if (isNaN(parseFloat(col2.replace(',','.'))) ) continue;
+      const data = col0.length===10 ? col0 : null;
+      if (!data) continue;
+      items.push({
+        data,
+        descricao: col1 || '—',
+        valor: parseFloat(col2.replace(',','.')) || 0,
+      });
+    }
+    if (!items.length) { toast('Nenhum item encontrado no CSV. Verifique o formato.', 'error'); return; }
+    _concItems = items;
+    toast(`${items.length} itens importados!`, 'success');
+    renderConciliacao();
+  };
+  reader.readAsText(file, 'UTF-8');
+  input.value = '';
 }
 
 // ── PDF ENGINE (print window) ─────────────────────────────────

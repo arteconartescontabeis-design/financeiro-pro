@@ -678,130 +678,280 @@ function badgeStatus(s) {
 // ── DASHBOARD ─────────────────────────────────────────────────
 function renderDashboard() {
   const hoje = today();
-  const recPendentes  = RECEITAS.filter(r => r.status === 'pendente');
-  const despPendentes = DESPESAS.filter(d => d.status === 'pendente');
-  const recVencidas   = RECEITAS.filter(r => r.status === 'vencido');
-  const despVencidas  = DESPESAS.filter(d => d.status === 'vencido');
+  const mesAtual = hoje.slice(0,7);
+  const anoAtual = hoje.slice(0,4);
 
-  const totalReceber  = recPendentes.reduce((s,r) => s + parseFloat(r.valor), 0);
-  const totalPagar    = despPendentes.reduce((s,d) => s + parseFloat(d.valor), 0);
-  const totalVencidoR = recVencidas.reduce((s,r) => s + parseFloat(r.valor), 0);
-  const totalVencidoD = despVencidas.reduce((s,d) => s + parseFloat(d.valor), 0);
-  const saldoTotal    = CONTAS.reduce((s,c) => s + parseFloat(c.saldo_atual), 0);
+  // Status agrupamentos
+  const recPend  = RECEITAS.filter(r => r.status === 'pendente');
+  const despPend = DESPESAS.filter(d => d.status === 'pendente');
+  const recVenc  = RECEITAS.filter(r => r.status === 'pendente' && r.vencimento < hoje);
+  const despVenc = DESPESAS.filter(d => d.status === 'pendente' && d.vencimento < hoje);
+  const recHoje  = RECEITAS.filter(r => r.status === 'pendente' && r.vencimento === hoje);
+  const despHoje = DESPESAS.filter(d => d.status === 'pendente' && d.vencimento === hoje);
 
-  // Tutorial se não tiver lançamentos
-  const semLancamentos = RECEITAS.length === 0 && DESPESAS.length === 0;
-  const tutorialHtml = semLancamentos ? `
-    <div class="tutorial-card">
-      <div class="tutorial-icon">🎯</div>
-      <div style="flex:1">
-        <div class="tutorial-title">Primeiros passos</div>
-        <div style="font-size:13px;color:var(--text-2)">Faça seu primeiro lançamento para começar a acompanhar suas finanças.</div>
-        <div class="tutorial-steps">
-          <div class="tutorial-step done"><div class="tutorial-step-num">✓</div><span>Empresa criada</span></div>
-          <div class="tutorial-step done"><div class="tutorial-step-num">✓</div><span>Conta cadastrada</span></div>
-          <div class="tutorial-step"><div class="tutorial-step-num">3</div><span>Primeiro lançamento</span></div>
-        </div>
-      </div>
-      <div style="display:flex;flex-direction:column;gap:8px">
-        <button class="btn btn-green btn-sm" onclick="go('receber')">+ A Receber</button>
-        <button class="btn btn-sm" style="background:var(--red-lt);color:var(--red)" onclick="go('pagar')">+ A Pagar</button>
-      </div>
-    </div>` : '';
+  const saldoTotal   = CONTAS.reduce((s,c) => s + (parseFloat(c.saldo_atual)||0), 0);
+  const totalReceber = recPend.reduce((s,r) => s + (parseFloat(r.valor)||0), 0);
+  const totalPagar   = despPend.reduce((s,d) => s + (parseFloat(d.valor)||0), 0);
+  const resultado    = totalReceber - totalPagar;
 
-  // Alertas de vencimento
-  const alertasHtml = (recVencidas.length > 0 || despVencidas.length > 0) ? `
-    <div style="background:var(--red-lt);border:1px solid var(--red);border-radius:10px;padding:14px 18px;margin-bottom:20px;display:flex;align-items:center;justify-content:space-between">
-      <div>
-        <div style="font-weight:700;color:var(--red);font-size:14px">⚠️ Itens Vencidos</div>
-        <div style="font-size:12px;color:var(--text-2);margin-top:2px">
-          ${recVencidas.length > 0 ? `${recVencidas.length} a receber (${fmtMoeda(totalVencidoR)})` : ''}
-          ${recVencidas.length > 0 && despVencidas.length > 0 ? ' · ' : ''}
-          ${despVencidas.length > 0 ? `${despVencidas.length} a pagar (${fmtMoeda(totalVencidoD)})` : ''}
-        </div>
-      </div>
-      <div style="display:flex;gap:8px">
-        ${recVencidas.length > 0 ? `<button class="btn btn-sm btn-red" onclick="go('receber')">Ver →</button>` : ''}
-        ${despVencidas.length > 0 ? `<button class="btn btn-sm btn-red" onclick="go('pagar')">Ver →</button>` : ''}
-      </div>
-    </div>` : '';
+  // Receitas e despesas realizadas no mês
+  const recMes  = RECEITAS.filter(r => r.status === 'recebido' && r.vencimento?.startsWith(mesAtual));
+  const despMes = DESPESAS.filter(d => d.status === 'pago'     && d.vencimento?.startsWith(mesAtual));
+  const recMesVal  = recMes.reduce((s,r)  => s + (parseFloat(r.valor)||0), 0);
+  const despMesVal = despMes.reduce((s,d) => s + (parseFloat(d.valor)||0), 0);
 
-  // Últimos lançamentos
-  const ultimos = [
-    ...RECEITAS.slice(0,5).map(r => ({...r, _tipo:'receita'})),
-    ...DESPESAS.slice(0,5).map(d => ({...d, _tipo:'despesa'})),
-  ].sort((a,b) => b.criado_em?.localeCompare(a.criado_em||'')).slice(0,8);
+  // Últimos 6 meses para gráfico
+  function ultimos6Meses() {
+    const meses = [];
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(); d.setMonth(d.getMonth() - i);
+      const k = d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+      const lb = d.toLocaleDateString('pt-BR',{month:'short'}).replace('.','');
+      const r = RECEITAS.filter(x => x.vencimento?.startsWith(k)).reduce((s,x)=>s+(parseFloat(x.valor)||0),0);
+      const dp = DESPESAS.filter(x => x.vencimento?.startsWith(k)).reduce((s,x)=>s+(parseFloat(x.valor)||0),0);
+      meses.push({ k, lb, r, dp });
+    }
+    return meses;
+  }
+  const grafMeses = ultimos6Meses();
+  const grafMax = Math.max(...grafMeses.flatMap(m => [m.r, m.dp]), 1);
+
+  // Gráfico SVG barras duplas
+  function svgGrafico() {
+    const W=480, H=140, PAD=8, BOT=28, barW=28, gap=W/6;
+    const scale = v => H - BOT - (v/grafMax)*(H-BOT-10);
+    let svg = `<svg width="100%" viewBox="0 0 ${W} ${H}" style="overflow:visible;display:block">`;
+    // Grid lines
+    for(let i=1;i<=3;i++){
+      const y = H - BOT - (i/4)*(H-BOT-10);
+      svg += `<line x1="0" y1="${y.toFixed(1)}" x2="${W}" y2="${y.toFixed(1)}" stroke="var(--border)" stroke-width="1" stroke-dasharray="4,4"/>`;
+    }
+    grafMeses.forEach((m,i) => {
+      const cx = PAD + i*gap + gap/2;
+      const yr = scale(m.r), ydp = scale(m.dp);
+      const hr = H-BOT-yr, hdp = H-BOT-ydp;
+      const isCurrent = m.k === mesAtual;
+      svg += `
+        <rect x="${cx-barW-2}" y="${yr.toFixed(1)}" width="${barW}" height="${Math.max(hr,2).toFixed(1)}" fill="var(--green)" opacity="${isCurrent?1:.6}" rx="4"/>
+        <rect x="${cx+2}" y="${ydp.toFixed(1)}" width="${barW}" height="${Math.max(hdp,2).toFixed(1)}" fill="var(--red)" opacity="${isCurrent?1:.6}" rx="4"/>
+        <text x="${cx}" y="${H-8}" text-anchor="middle" font-size="11" fill="${isCurrent?'var(--text)':'var(--text-3)'}" font-weight="${isCurrent?700:400}">${m.lb}</text>
+        ${isCurrent?`<rect x="${cx-barW-4}" y="2" width="${barW*2+12}" height="${H-BOT-4}" fill="var(--accent)" opacity="0.04" rx="6"/>`:``}`;
+    });
+    svg += `</svg>`;
+    return svg;
+  }
+
+  // Próximos vencimentos (próximos 7 dias)
+  const em7dias = new Date(); em7dias.setDate(em7dias.getDate()+7);
+  const em7str  = em7dias.toISOString().slice(0,10);
+  const proxVenc = [
+    ...RECEITAS.filter(r => r.status==='pendente' && r.vencimento >= hoje && r.vencimento <= em7str).map(r=>({...r,_t:'rec'})),
+    ...DESPESAS.filter(d => d.status==='pendente' && d.vencimento >= hoje && d.vencimento <= em7str).map(d=>({...d,_t:'dep'})),
+  ].sort((a,b)=>a.vencimento.localeCompare(b.vencimento)).slice(0,6);
+
+  // Top categorias despesas do mês
+  const catDesp = {};
+  DESPESAS.filter(d=>d.vencimento?.startsWith(mesAtual)).forEach(d=>{
+    const c=(CATEGORIAS.find(x=>x.id===d.categoria_id)||{}).nome||'Outros';
+    catDesp[c]=(catDesp[c]||0)+(parseFloat(d.valor)||0);
+  });
+  const topCat = Object.entries(catDesp).sort((a,b)=>b[1]-a[1]).slice(0,4);
+  const totalCat = topCat.reduce((s,[,v])=>s+v,0)||1;
+
+  // Tutorial
+  const isNew = RECEITAS.length===0 && DESPESAS.length===0;
+
+  $id('topbar-actions').innerHTML = `
+    <button class="btn btn-sm btn-green" onclick="go('receber')">+ Receita</button>
+    <button class="btn btn-sm btn-red" onclick="go('pagar')">+ Despesa</button>`;
 
   $id('page-content').innerHTML = `
-  ${tutorialHtml}
-  ${alertasHtml}
-  <div class="kpi-grid">
-    <div class="kpi-card k-blue">
-      <div class="kpi-label">Saldo Total</div>
-      <div class="kpi-value" style="color:var(--accent)">${fmtMoeda(saldoTotal)}</div>
-      <div class="kpi-sub">${CONTAS.length} conta(s)</div>
+  ${isNew ? `<div class="tutorial-card" style="margin-bottom:20px">
+    <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+      <div style="font-size:32px">🎯</div>
+      <div style="flex:1">
+        <div style="font-size:15px;font-weight:600;margin-bottom:4px">Bem-vindo ao Financeiro Pro!</div>
+        <div style="font-size:13px;color:var(--text-2)">Tudo configurado. Adicione seu primeiro lançamento para começar.</div>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-sm btn-green" onclick="go('receber')">+ Primeira Receita</button>
+        <button class="btn btn-sm btn-red" onclick="go('pagar')">+ Primeira Despesa</button>
+      </div>
     </div>
-    <div class="kpi-card k-green">
-      <div class="kpi-label">A Receber</div>
+  </div>` : ''}
+
+  ${recVenc.length||despVenc.length ? `<div style="background:var(--red-lt);border:1px solid var(--red);border-radius:10px;padding:13px 18px;margin-bottom:20px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+    <div style="display:flex;align-items:center;gap:10px">
+      <span style="font-size:20px">⚠️</span>
+      <div>
+        <div style="font-weight:700;color:var(--red);font-size:13px">Lançamentos vencidos</div>
+        <div style="font-size:12px;color:var(--text-2)">
+          ${recVenc.length?`${recVenc.length} receita${recVenc.length>1?'s':''} · ${fmtMoeda(recVenc.reduce((s,r)=>s+(parseFloat(r.valor)||0),0))}`:''}
+          ${recVenc.length&&despVenc.length?' · ':''}
+          ${despVenc.length?`${despVenc.length} despesa${despVenc.length>1?'s':''} · ${fmtMoeda(despVenc.reduce((s,d)=>s+(parseFloat(d.valor)||0),0))}`:''}
+        </div>
+      </div>
+    </div>
+    <div style="display:flex;gap:6px">
+      ${recVenc.length?`<button class="btn btn-sm btn-red" onclick="go('receber')">Ver receitas →</button>`:''}
+      ${despVenc.length?`<button class="btn btn-sm btn-red" onclick="go('pagar')">Ver despesas →</button>`:''}
+    </div>
+  </div>` : ''}
+
+  ${recHoje.length||despHoje.length ? `<div style="background:var(--amber-lt);border:1px solid var(--amber);border-radius:10px;padding:13px 18px;margin-bottom:20px;display:flex;align-items:center;gap:10px">
+    <span style="font-size:18px">📅</span>
+    <div style="font-size:13px;color:var(--amber);font-weight:600">Vence hoje:
+      ${recHoje.length?`${recHoje.length} receita (${fmtMoeda(recHoje.reduce((s,r)=>s+(parseFloat(r.valor)||0),0))})`:''}
+      ${recHoje.length&&despHoje.length?' · ':''}
+      ${despHoje.length?`${despHoje.length} despesa (${fmtMoeda(despHoje.reduce((s,d)=>s+(parseFloat(d.valor)||0),0))})`:''}
+    </div>
+  </div>` : ''}
+
+  <!-- KPIs -->
+  <div class="kpi-grid" style="margin-bottom:20px">
+    <div class="kpi-card k-blue" style="cursor:pointer" onclick="go('contas')">
+      <div class="kpi-label">💳 Saldo Total</div>
+      <div class="kpi-value" style="color:${saldoTotal>=0?'var(--accent)':'var(--red)'}">${fmtMoeda(saldoTotal)}</div>
+      <div class="kpi-sub">${CONTAS.length} conta${CONTAS.length!==1?'s':''}</div>
+    </div>
+    <div class="kpi-card k-green" style="cursor:pointer" onclick="go('receber')">
+      <div class="kpi-label">📥 A Receber</div>
       <div class="kpi-value" style="color:var(--green)">${fmtMoeda(totalReceber)}</div>
-      <div class="kpi-sub">${recPendentes.length} pendente(s)</div>
+      <div class="kpi-sub">${recPend.length} pendente${recPend.length!==1?'s':''}</div>
     </div>
-    <div class="kpi-card k-red">
-      <div class="kpi-label">A Pagar</div>
+    <div class="kpi-card k-red" style="cursor:pointer" onclick="go('pagar')">
+      <div class="kpi-label">📤 A Pagar</div>
       <div class="kpi-value" style="color:var(--red)">${fmtMoeda(totalPagar)}</div>
-      <div class="kpi-sub">${despPendentes.length} pendente(s)</div>
+      <div class="kpi-sub">${despPend.length} pendente${despPend.length!==1?'s':''}</div>
     </div>
     <div class="kpi-card k-amber">
-      <div class="kpi-label">Resultado Previsto</div>
-      <div class="kpi-value" style="color:${totalReceber-totalPagar>=0?'var(--green)':'var(--red)'}">${fmtMoeda(totalReceber - totalPagar)}</div>
-      <div class="kpi-sub">receber − pagar</div>
+      <div class="kpi-label">📊 Resultado Previsto</div>
+      <div class="kpi-value" style="color:${resultado>=0?'var(--green)':'var(--red)'}">${fmtMoeda(resultado)}</div>
+      <div class="kpi-sub">${resultado>=0?'positivo':'negativo'}</div>
     </div>
   </div>
 
-  <div style="display:grid;grid-template-columns:1fr 340px;gap:20px">
+  <!-- Gráfico + Mês atual -->
+  <div style="display:grid;grid-template-columns:1fr 280px;gap:16px;margin-bottom:20px">
     <div class="card">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
-        <strong style="font-size:14px">Últimos Lançamentos</strong>
-        <div style="display:flex;gap:8px">
+        <strong style="font-size:14px">Entradas × Saídas — Últimos 6 meses</strong>
+        <div style="display:flex;gap:12px;font-size:12px;color:var(--text-3)">
+          <span style="display:flex;align-items:center;gap:5px"><span style="width:8px;height:8px;background:var(--green);border-radius:2px;display:inline-block"></span>Receitas</span>
+          <span style="display:flex;align-items:center;gap:5px"><span style="width:8px;height:8px;background:var(--red);border-radius:2px;display:inline-block"></span>Despesas</span>
+        </div>
+      </div>
+      ${svgGrafico()}
+    </div>
+    <div class="card">
+      <div style="font-size:13px;font-weight:600;margin-bottom:14px;color:var(--text-2)">MÊS ATUAL</div>
+      <div style="margin-bottom:14px">
+        <div style="font-size:11px;color:var(--text-3);margin-bottom:4px">Receitas realizadas</div>
+        <div style="font-size:20px;font-weight:700;color:var(--green)">${fmtMoeda(recMesVal)}</div>
+        <div class="saldo-bar" style="margin-top:6px"><div class="saldo-fill" style="width:${grafMax>0?Math.min(100,Math.round(recMesVal/grafMax*100)):0}%;background:var(--green)"></div></div>
+      </div>
+      <div style="margin-bottom:14px">
+        <div style="font-size:11px;color:var(--text-3);margin-bottom:4px">Despesas pagas</div>
+        <div style="font-size:20px;font-weight:700;color:var(--red)">${fmtMoeda(despMesVal)}</div>
+        <div class="saldo-bar" style="margin-top:6px"><div class="saldo-fill" style="width:${grafMax>0?Math.min(100,Math.round(despMesVal/grafMax*100)):0}%;background:var(--red)"></div></div>
+      </div>
+      <div style="border-top:1px solid var(--border);padding-top:12px">
+        <div style="font-size:11px;color:var(--text-3);margin-bottom:4px">Resultado do mês</div>
+        <div style="font-size:20px;font-weight:700;color:${recMesVal-despMesVal>=0?'var(--green)':'var(--red)'}">${fmtMoeda(recMesVal-despMesVal)}</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Próximos vencimentos + Top categorias -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px">
+    <div class="card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+        <strong style="font-size:14px">📅 Próximos 7 dias</strong>
+        <span style="font-size:11px;color:var(--text-3)">${proxVenc.length} vencimento${proxVenc.length!==1?'s':''}</span>
+      </div>
+      ${proxVenc.length===0 ? `<div style="text-align:center;color:var(--text-3);font-size:13px;padding:20px 0">✅ Nenhum vencimento nos próximos 7 dias</div>` :
+      proxVenc.map(l => `
+        <div onclick="go('${l._t==='rec'?'receber':'pagar'}')" style="display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--border);cursor:pointer">
+          <div style="display:flex;align-items:center;gap:10px">
+            <div style="width:28px;height:28px;border-radius:8px;background:${l._t==='rec'?'var(--green-lt)':'var(--red-lt)'};display:flex;align-items:center;justify-content:center;font-size:13px">${l._t==='rec'?'↑':'↓'}</div>
+            <div>
+              <div style="font-size:13px;font-weight:500">${l.descricao}</div>
+              <div style="font-size:11px;color:${l.vencimento===hoje?'var(--amber)':'var(--text-3)'}">${l.vencimento===hoje?'Hoje':fmtData(l.vencimento)}</div>
+            </div>
+          </div>
+          <div style="font-size:13px;font-weight:700;color:${l._t==='rec'?'var(--green)':'var(--red)'}">${fmtMoeda(l.valor)}</div>
+        </div>`).join('')}
+    </div>
+    <div class="card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+        <strong style="font-size:14px">📂 Top Despesas do Mês</strong>
+        <button class="btn btn-sm btn-outline" onclick="go('dre')" style="font-size:11px">Ver DRE</button>
+      </div>
+      ${topCat.length===0 ? `<div style="text-align:center;color:var(--text-3);font-size:13px;padding:20px 0">Sem despesas no mês</div>` :
+      topCat.map(([c,v]) => `
+        <div style="margin-bottom:12px">
+          <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+            <span style="font-size:13px;font-weight:500">${c}</span>
+            <span style="font-size:12px;font-family:var(--mono);color:var(--red);font-weight:600">${fmtMoeda(v)}</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <div class="saldo-bar" style="flex:1"><div class="saldo-fill" style="width:${Math.round(v/totalCat*100)}%;background:var(--red)"></div></div>
+            <span style="font-size:11px;color:var(--text-3);min-width:28px">${Math.round(v/totalCat*100)}%</span>
+          </div>
+        </div>`).join('')}
+    </div>
+  </div>
+
+  <!-- Contas + Últimos lançamentos -->
+  <div style="display:grid;grid-template-columns:1fr 280px;gap:16px">
+    <div class="card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+        <strong style="font-size:14px">🕐 Últimos Lançamentos</strong>
+        <div style="display:flex;gap:6px">
           <button class="btn btn-sm btn-green" onclick="go('receber')">+ Receita</button>
           <button class="btn btn-sm btn-red" onclick="go('pagar')">+ Despesa</button>
         </div>
       </div>
-      ${ultimos.length === 0 ? `<div class="empty-state"><div class="empty-icon">📋</div><h3>Nenhum lançamento ainda</h3></div>` :
-      `<div class="table-wrap"><table>
-        <thead><tr><th>Descrição</th><th>Tipo</th><th>Vencimento</th><th>Valor</th><th>Status</th></tr></thead>
-        <tbody>
-        ${ultimos.map(l => `<tr onclick="go('${l._tipo==='receita'?'receber':'pagar'}')">
-          <td style="font-weight:500">${l.descricao}</td>
-          <td><span style="font-size:11px;color:${l._tipo==='receita'?'var(--green)':'var(--red)'};font-weight:600">${l._tipo==='receita'?'↑ Receita':'↓ Despesa'}</span></td>
-          <td style="font-family:var(--mono);font-size:12px">${fmtData(l.vencimento)}</td>
-          <td style="font-family:var(--mono);font-weight:600;color:${l._tipo==='receita'?'var(--green)':'var(--red)'}">${fmtMoeda(l.valor)}</td>
-          <td>${badgeStatus(l.status)}</td>
-        </tr>`).join('')}
-        </tbody>
-      </table></div>`}
+      ${(()=>{
+        const ults = [
+          ...RECEITAS.slice(-10).map(r=>({...r,_t:'rec'})),
+          ...DESPESAS.slice(-10).map(d=>({...d,_t:'dep'})),
+        ].sort((a,b)=>(b.criado_em||b.vencimento||'').localeCompare(a.criado_em||a.vencimento||'')).slice(0,7);
+        return ults.length===0 ? `<div style="text-align:center;color:var(--text-3);padding:30px;font-size:13px">Nenhum lançamento ainda</div>` :
+        `<div class="table-wrap"><table>
+          <thead><tr><th>Descrição</th><th>Tipo</th><th>Vencimento</th><th style="text-align:right">Valor</th><th>Status</th></tr></thead>
+          <tbody>${ults.map(l=>`<tr style="cursor:pointer" onclick="go('${l._t==='rec'?'receber':'pagar'}')">
+            <td style="font-weight:500;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${l.descricao}</td>
+            <td><span style="font-size:11px;font-weight:600;color:${l._t==='rec'?'var(--green)':'var(--red)'}">${l._t==='rec'?'↑ Receita':'↓ Despesa'}</span></td>
+            <td style="font-family:var(--mono);font-size:12px">${fmtData(l.vencimento)}</td>
+            <td style="text-align:right;font-family:var(--mono);font-weight:600;color:${l._t==='rec'?'var(--green)':'var(--red)'}">${fmtMoeda(l.valor)}</td>
+            <td>${badgeStatus(l.status)}</td>
+          </tr>`).join('')}</tbody>
+        </table></div>`;
+      })()}
     </div>
-    <div style="display:flex;flex-direction:column;gap:16px">
-      <div class="card">
-        <strong style="font-size:14px;display:block;margin-bottom:14px">💳 Contas</strong>
-        ${CONTAS.length === 0 ? `<div style="color:var(--text-3);font-size:13px;text-align:center;padding:20px">Nenhuma conta</div>` :
-        CONTAS.map(c => `
-          <div style="margin-bottom:12px">
-            <div style="display:flex;justify-content:space-between;align-items:center">
-              <div style="display:flex;align-items:center;gap:8px">
-                <div style="width:10px;height:10px;border-radius:50%;background:${c.cor}"></div>
-                <span style="font-size:13px;font-weight:500">${c.nome}</span>
-              </div>
-              <span style="font-family:var(--mono);font-weight:700;font-size:13px;color:${parseFloat(c.saldo_atual)>=0?'var(--green)':'var(--red)'}">${fmtMoeda(c.saldo_atual)}</span>
-            </div>
-          </div>`).join('')}
-        <button class="btn btn-sm btn-outline" onclick="go('contas')" style="width:100%;margin-top:4px;justify-content:center">Gerenciar contas</button>
+    <div class="card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+        <strong style="font-size:14px">💳 Contas</strong>
+        <button class="btn btn-sm btn-outline" onclick="go('contas')" style="font-size:11px">Gerenciar</button>
+      </div>
+      ${CONTAS.length===0 ? `<div style="text-align:center;color:var(--text-3);font-size:13px;padding:20px">Nenhuma conta</div>` :
+      CONTAS.map(c=>`
+        <div style="padding:10px 0;border-bottom:1px solid var(--border)">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px">
+            <span style="font-size:13px;font-weight:500">${c.nome}</span>
+            <span style="font-family:var(--mono);font-weight:700;font-size:13px;color:${parseFloat(c.saldo_atual)>=0?'var(--green)':'var(--red)'}">${fmtMoeda(c.saldo_atual)}</span>
+          </div>
+          <div class="saldo-bar"><div class="saldo-fill" style="width:${Math.min(100,Math.abs(parseFloat(c.saldo_atual))/(saldoTotal||1)*100)}%;background:${parseFloat(c.saldo_atual)>=0?'var(--accent)':'var(--red)'}"></div></div>
+        </div>`).join('')}
+      <div style="margin-top:12px;display:flex;justify-content:space-between;font-size:12px;color:var(--text-3)">
+        <span>Total</span>
+        <span style="font-family:var(--mono);font-weight:700;color:${saldoTotal>=0?'var(--green)':'var(--red)'}">${fmtMoeda(saldoTotal)}</span>
       </div>
     </div>
   </div>`;
 }
 
-// ── A RECEBER ─────────────────────────────────────────────────
 function renderReceber() {
   $id('topbar-actions').innerHTML = `<button class="btn btn-accent btn-sm" onclick="modalNovaReceita()">+ Nova Receita</button>`;
   const list = [...RECEITAS].sort((a,b) => a.vencimento.localeCompare(b.vencimento));
@@ -1045,79 +1195,216 @@ async function salvarConta() {
 
 // ── PÁGINAS PLACEHOLDER ───────────────────────────────────────
 function renderFluxo() {
-  const meses = {};
-  [...RECEITAS, ...DESPESAS].forEach(l => {
-    const m = l.vencimento?.slice(0,7); if (!m) return;
-    if (!meses[m]) meses[m] = { rec:0, desp:0 };
-    if (RECEITAS.includes(l)) meses[m].rec  += parseFloat(l.valor);
-    else                      meses[m].desp += parseFloat(l.valor);
-  });
+  // Filtro de período
+  const hoje = new Date();
+  const anoAtual = hoje.getFullYear();
+  const mesAtual = String(hoje.getMonth()+1).padStart(2,'0');
+  const periodoSel = window._fluxoPeriodo || 'ano';
+
+  function getMeses() {
+    const meses = {};
+    const filtrar = (l, tipo) => {
+      const m = l.vencimento?.slice(0,7); if (!m) return;
+      if (periodoSel === 'ano' && !m.startsWith(String(anoAtual))) return;
+      if (periodoSel === '6m') {
+        const limite = new Date(); limite.setMonth(limite.getMonth()-5);
+        const limStr = limite.getFullYear()+'-'+String(limite.getMonth()+1).padStart(2,'0');
+        if (m < limStr) return;
+      }
+      if (!meses[m]) meses[m] = { rec:0, desp:0, recReal:0, despReal:0 };
+      if (tipo === 'rec') { meses[m].rec += parseFloat(l.valor)||0; if (l.status==='recebido') meses[m].recReal += parseFloat(l.valor)||0; }
+      else { meses[m].desp += parseFloat(l.valor)||0; if (l.status==='pago') meses[m].despReal += parseFloat(l.valor)||0; }
+    };
+    RECEITAS.forEach(r => filtrar(r,'rec'));
+    DESPESAS.forEach(d => filtrar(d,'desp'));
+    return meses;
+  }
+
+  const meses = getMeses();
   const lista = Object.keys(meses).sort();
+  const maxVal = Math.max(...lista.map(m => Math.max(meses[m].rec, meses[m].desp)), 1);
+  const totalRec  = lista.reduce((s,m)=>s+meses[m].rec,0);
+  const totalDesp = lista.reduce((s,m)=>s+meses[m].desp,0);
+  const totalRes  = totalRec - totalDesp;
+  const saldoAcum = [];
+  let acum = CONTAS.reduce((s,c)=>s+(parseFloat(c.saldo_inicial)||0),0);
+  lista.forEach(m => { acum += meses[m].recReal - meses[m].despReal; saldoAcum.push(acum); });
+
+  // Gráfico SVG de barras
+  function barChart() {
+    if (!lista.length) return '<div style="color:var(--text-3);font-size:13px;padding:20px 0;text-align:center">Sem dados no período</div>';
+    const W=560, H=180, PAD=40, barW=Math.max(10, Math.min(40, (W-PAD*2)/lista.length/2.5));
+    const gap = (W-PAD*2)/lista.length;
+    const scale = v => H - PAD - (v/maxVal)*(H-PAD-10);
+    let bars = '';
+    lista.forEach((m,i) => {
+      const x = PAD + i*gap;
+      const r = meses[m].rec, d = meses[m].desp;
+      const yr = scale(r), yd = scale(d);
+      const [yr2,mo2] = m.split('-');
+      bars += `
+        <rect x="${x-barW-2}" y="${yr}" width="${barW}" height="${H-PAD-yr}" fill="var(--green)" opacity="0.7" rx="3"/>
+        <rect x="${x+2}" y="${yd}" width="${barW}" height="${H-PAD-yd}" fill="var(--red)" opacity="0.7" rx="3"/>
+        <text x="${x}" y="${H-8}" text-anchor="middle" font-size="10" fill="var(--text-3)">${mo2}/${yr2.slice(2)}</text>`;
+    });
+    return `<svg width="100%" viewBox="0 0 ${W} ${H}" style="overflow:visible">
+      <line x1="${PAD}" y1="10" x2="${PAD}" y2="${H-PAD}" stroke="var(--border)" stroke-width="1"/>
+      <line x1="${PAD}" y1="${H-PAD}" x2="${W}" y2="${H-PAD}" stroke="var(--border)" stroke-width="1"/>
+      ${bars}
+    </svg>`;
+  }
+
   $id('page-content').innerHTML = `
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:10px">
+    <div style="display:flex;gap:6px">
+      ${['6m','ano','tudo'].map(p=>`<button onclick="window._fluxoPeriodo='${p}';renderFluxo()" style="padding:7px 14px;border-radius:8px;border:1.5px solid ${periodoSel===p?'var(--accent)':'var(--border)'};background:${periodoSel===p?'var(--accent-lt)':'transparent'};color:${periodoSel===p?'var(--accent)':'var(--text-2)'};font-family:var(--font);font-size:12px;font-weight:600;cursor:pointer">${p==='6m'?'6 meses':p==='ano'?'Este ano':'Tudo'}</button>`).join('')}
+    </div>
+  </div>
+
+  <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:20px">
+    <div class="kpi-card k-green"><div class="kpi-label">Total Entradas</div><div class="kpi-value" style="color:var(--green)">${fmtMoeda(totalRec)}</div><div class="kpi-sub">previsto no período</div></div>
+    <div class="kpi-card k-red"><div class="kpi-label">Total Saídas</div><div class="kpi-value" style="color:var(--red)">${fmtMoeda(totalDesp)}</div><div class="kpi-sub">previsto no período</div></div>
+    <div class="kpi-card ${totalRes>=0?'k-green':'k-red'}"><div class="kpi-label">Resultado</div><div class="kpi-value" style="color:${totalRes>=0?'var(--green)':'var(--red)'}">${fmtMoeda(totalRes)}</div><div class="kpi-sub">${totalRes>=0?'positivo':'negativo'}</div></div>
+  </div>
+
+  <div class="card" style="margin-bottom:20px">
+    <div style="display:flex;align-items:center;gap:16px;margin-bottom:16px">
+      <strong style="font-size:14px">Entradas × Saídas por Mês</strong>
+      <div style="display:flex;gap:12px;font-size:12px">
+        <span style="display:flex;align-items:center;gap:5px"><span style="width:10px;height:10px;border-radius:2px;background:var(--green);display:inline-block"></span>Entradas</span>
+        <span style="display:flex;align-items:center;gap:5px"><span style="width:10px;height:10px;border-radius:2px;background:var(--red);display:inline-block"></span>Saídas</span>
+      </div>
+    </div>
+    ${barChart()}
+  </div>
+
   <div class="card">
-    <strong style="font-size:14px;display:block;margin-bottom:16px">Fluxo de Caixa por Mês</strong>
-    ${lista.length === 0 ? `<div class="empty-state"><div class="empty-icon">💰</div><h3>Sem dados ainda</h3><p>Adicione receitas e despesas para ver o fluxo.</p></div>` :
+    <strong style="font-size:14px;display:block;margin-bottom:14px">Detalhamento Mensal</strong>
+    ${lista.length === 0 ? '<div style="color:var(--text-3);font-size:13px;text-align:center;padding:20px">Sem dados no período selecionado</div>' :
     `<div class="table-wrap"><table>
-      <thead><tr><th>Mês</th><th>Entradas</th><th>Saídas</th><th>Resultado</th></tr></thead>
-      <tbody>${lista.map(m => {
+      <thead><tr><th>Mês</th><th>Entradas (Prev.)</th><th>Saídas (Prev.)</th><th>Resultado</th><th>Realizado</th></tr></thead>
+      <tbody>${lista.map((m,i) => {
         const res = meses[m].rec - meses[m].desp;
+        const real = meses[m].recReal - meses[m].despReal;
         const [y,mo] = m.split('-');
-        return `<tr>
-          <td style="font-weight:600">${mo}/${y}</td>
+        const isFut = m > String(anoAtual)+'-'+mesAtual;
+        return `<tr style="${isFut?'opacity:.6':''}">
+          <td style="font-weight:600">${mo}/${y}${isFut?' <span style=\"font-size:10px;color:var(--text-3)\">(projeção)</span>':''}</td>
           <td style="color:var(--green);font-family:var(--mono)">${fmtMoeda(meses[m].rec)}</td>
           <td style="color:var(--red);font-family:var(--mono)">${fmtMoeda(meses[m].desp)}</td>
           <td style="font-weight:700;font-family:var(--mono);color:${res>=0?'var(--green)':'var(--red)'}">${fmtMoeda(res)}</td>
+          <td style="font-family:var(--mono);color:${real>=0?'var(--green)':'var(--red)'};">${fmtMoeda(real)}</td>
         </tr>`;
-      }).join('')}</tbody>
+      }).join('')}
+      <tr style="border-top:2px solid var(--border);font-weight:700">
+        <td>Total</td>
+        <td style="color:var(--green);font-family:var(--mono)">${fmtMoeda(totalRec)}</td>
+        <td style="color:var(--red);font-family:var(--mono)">${fmtMoeda(totalDesp)}</td>
+        <td style="font-family:var(--mono);color:${totalRes>=0?'var(--green)':'var(--red)'}">${fmtMoeda(totalRes)}</td>
+        <td></td>
+      </tr>
+      </tbody>
     </table></div>`}
   </div>`;
 }
 
 function renderDRE() {
-  const catRec  = {};
-  const catDesp = {};
-  RECEITAS.filter(r=>r.status==='recebido').forEach(r => {
-    const c = getNome(CATEGORIAS, r.categoria_id);
-    catRec[c] = (catRec[c]||0) + parseFloat(r.valor);
-  });
-  DESPESAS.filter(d=>d.status==='pago').forEach(d => {
-    const c = getNome(CATEGORIAS, d.categoria_id);
-    catDesp[c] = (catDesp[c]||0) + parseFloat(d.valor);
-  });
-  const totalRec  = Object.values(catRec).reduce((s,v)=>s+v,0);
-  const totalDesp = Object.values(catDesp).reduce((s,v)=>s+v,0);
-  const resultado = totalRec - totalDesp;
+  const periodoSel = window._drePeriodo || 'mes';
+  const hoje = new Date();
+  const anoAtual = hoje.getFullYear();
+  const mesAtual = String(hoje.getMonth()+1).padStart(2,'0');
+  const mesStr = String(anoAtual)+'-'+mesAtual;
+
+  function filtrar(arr) {
+    return arr.filter(l => {
+      const m = l.vencimento?.slice(0,7);
+      if (periodoSel === 'mes')  return m === mesStr;
+      if (periodoSel === 'ano')  return m?.startsWith(String(anoAtual));
+      return true;
+    });
+  }
+
+  const recFilt  = filtrar(RECEITAS).filter(r => r.status === 'recebido');
+  const despFilt = filtrar(DESPESAS).filter(d => d.status === 'pago');
+  const recPrev  = filtrar(RECEITAS).filter(r => r.status === 'pendente');
+  const despPrev = filtrar(DESPESAS).filter(d => d.status === 'pendente');
+
+  const catRec  = {}, catDesp = {};
+  recFilt.forEach(r  => { const c=getNome(CATEGORIAS,r.categoria_id);  catRec[c]  = (catRec[c]||0)  + (parseFloat(r.valor)||0); });
+  despFilt.forEach(d => { const c=getNome(CATEGORIAS,d.categoria_id);  catDesp[c] = (catDesp[c]||0) + (parseFloat(d.valor)||0); });
+
+  const totalRec   = Object.values(catRec).reduce((s,v)=>s+v,0);
+  const totalDesp  = Object.values(catDesp).reduce((s,v)=>s+v,0);
+  const resultado  = totalRec - totalDesp;
+  const totalPrevR = recPrev.reduce((s,r)=>s+(parseFloat(r.valor)||0),0);
+  const totalPrevD = despPrev.reduce((s,d)=>s+(parseFloat(d.valor)||0),0);
+  const margem     = totalRec > 0 ? Math.round((resultado/totalRec)*100) : 0;
+
   $id('page-content').innerHTML = `
-  <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:20px">
-    <div class="kpi-card k-green"><div class="kpi-label">Receitas Realizadas</div><div class="kpi-value" style="color:var(--green)">${fmtMoeda(totalRec)}</div></div>
-    <div class="kpi-card k-red"><div class="kpi-label">Despesas Realizadas</div><div class="kpi-value" style="color:var(--red)">${fmtMoeda(totalDesp)}</div></div>
-    <div class="kpi-card ${resultado>=0?'k-green':'k-red'}"><div class="kpi-label">Resultado</div><div class="kpi-value" style="color:${resultado>=0?'var(--green)':'var(--red)'}">${fmtMoeda(resultado)}</div></div>
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:10px">
+    <div style="display:flex;gap:6px">
+      ${['mes','ano','tudo'].map(p=>`<button onclick="window._drePeriodo='${p}';renderDRE()" style="padding:7px 14px;border-radius:8px;border:1.5px solid ${periodoSel===p?'var(--accent)':'var(--border)'};background:${periodoSel===p?'var(--accent-lt)':'transparent'};color:${periodoSel===p?'var(--accent)':'var(--text-2)'};font-family:var(--font);font-size:12px;font-weight:600;cursor:pointer">${p==='mes'?'Este mês':p==='ano'?'Este ano':'Tudo'}</button>`).join('')}
+    </div>
   </div>
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
+
+  <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:20px">
+    <div class="kpi-card k-green"><div class="kpi-label">Receitas Realizadas</div><div class="kpi-value" style="color:var(--green)">${fmtMoeda(totalRec)}</div><div class="kpi-sub">${fmtMoeda(totalPrevR)} a receber</div></div>
+    <div class="kpi-card k-red"><div class="kpi-label">Despesas Realizadas</div><div class="kpi-value" style="color:var(--red)">${fmtMoeda(totalDesp)}</div><div class="kpi-sub">${fmtMoeda(totalPrevD)} a pagar</div></div>
+    <div class="kpi-card ${resultado>=0?'k-green':'k-red'}"><div class="kpi-label">Resultado</div><div class="kpi-value" style="color:${resultado>=0?'var(--green)':'var(--red)'}">${fmtMoeda(resultado)}</div><div class="kpi-sub">${resultado>=0?'lucro':'prejuízo'}</div></div>
+    <div class="kpi-card"><div class="kpi-label">Margem</div><div class="kpi-value" style="color:${margem>=0?'var(--green)':'var(--red)'}">${margem}%</div><div class="kpi-sub">sobre receitas</div></div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px">
     <div class="card">
-      <strong style="font-size:14px;display:block;margin-bottom:14px;color:var(--green)">↑ Receitas por Categoria</strong>
-      ${Object.keys(catRec).length === 0 ? '<div style="color:var(--text-3);font-size:13px">Nenhuma receita realizada</div>' :
+      <strong style="font-size:14px;display:block;margin-bottom:14px;color:var(--green)">↑ Receitas Realizadas por Categoria</strong>
+      ${Object.keys(catRec).length === 0 ? '<div style="color:var(--text-3);font-size:13px">Nenhuma receita realizada no período</div>' :
       Object.entries(catRec).sort((a,b)=>b[1]-a[1]).map(([c,v]) => `
-        <div style="margin-bottom:10px">
-          <div style="display:flex;justify-content:space-between;margin-bottom:3px">
-            <span style="font-size:13px">${c}</span>
-            <span style="font-family:var(--mono);font-weight:600;font-size:12px;color:var(--green)">${fmtMoeda(v)}</span>
+        <div style="margin-bottom:12px">
+          <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+            <span style="font-size:13px;font-weight:500">${c}</span>
+            <span style="font-family:var(--mono);font-size:12px;color:var(--green);font-weight:600">${fmtMoeda(v)}</span>
           </div>
-          <div class="saldo-bar"><div class="saldo-fill" style="width:${Math.round(v/totalRec*100)}%;background:var(--green)"></div></div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <div class="saldo-bar" style="flex:1"><div class="saldo-fill" style="width:${Math.round(v/totalRec*100)}%;background:var(--green)"></div></div>
+            <span style="font-size:11px;color:var(--text-3);min-width:32px">${Math.round(v/totalRec*100)}%</span>
+          </div>
         </div>`).join('')}
+      ${Object.keys(catRec).length > 0 ? `<div style="border-top:1px solid var(--border);padding-top:10px;margin-top:4px;display:flex;justify-content:space-between;font-weight:700;font-size:13px"><span>Total</span><span style="color:var(--green);font-family:var(--mono)">${fmtMoeda(totalRec)}</span></div>` : ''}
     </div>
     <div class="card">
-      <strong style="font-size:14px;display:block;margin-bottom:14px;color:var(--red)">↓ Despesas por Categoria</strong>
-      ${Object.keys(catDesp).length === 0 ? '<div style="color:var(--text-3);font-size:13px">Nenhuma despesa realizada</div>' :
+      <strong style="font-size:14px;display:block;margin-bottom:14px;color:var(--red)">↓ Despesas Realizadas por Categoria</strong>
+      ${Object.keys(catDesp).length === 0 ? '<div style="color:var(--text-3);font-size:13px">Nenhuma despesa realizada no período</div>' :
       Object.entries(catDesp).sort((a,b)=>b[1]-a[1]).map(([c,v]) => `
-        <div style="margin-bottom:10px">
-          <div style="display:flex;justify-content:space-between;margin-bottom:3px">
-            <span style="font-size:13px">${c}</span>
-            <span style="font-family:var(--mono);font-weight:600;font-size:12px;color:var(--red)">${fmtMoeda(v)}</span>
+        <div style="margin-bottom:12px">
+          <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+            <span style="font-size:13px;font-weight:500">${c}</span>
+            <span style="font-family:var(--mono);font-size:12px;color:var(--red);font-weight:600">${fmtMoeda(v)}</span>
           </div>
-          <div class="saldo-bar"><div class="saldo-fill" style="width:${Math.round(v/totalDesp*100)}%;background:var(--red)"></div></div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <div class="saldo-bar" style="flex:1"><div class="saldo-fill" style="width:${Math.round(v/totalDesp*100)}%;background:var(--red)"></div></div>
+            <span style="font-size:11px;color:var(--text-3);min-width:32px">${Math.round(v/totalDesp*100)}%</span>
+          </div>
         </div>`).join('')}
+      ${Object.keys(catDesp).length > 0 ? `<div style="border-top:1px solid var(--border);padding-top:10px;margin-top:4px;display:flex;justify-content:space-between;font-weight:700;font-size:13px"><span>Total</span><span style="color:var(--red);font-family:var(--mono)">${fmtMoeda(totalDesp)}</span></div>` : ''}
     </div>
+  </div>
+
+  <div class="card">
+    <strong style="font-size:14px;display:block;margin-bottom:14px">📊 Resumo DRE</strong>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Item</th><th style="text-align:right">Valor</th><th style="text-align:right">%</th></tr></thead>
+      <tbody>
+        <tr style="background:var(--green-lt)"><td style="font-weight:700;color:var(--green)">Receitas Brutas</td><td style="text-align:right;font-family:var(--mono);font-weight:700;color:var(--green)">${fmtMoeda(totalRec)}</td><td style="text-align:right;color:var(--green)">100%</td></tr>
+        ${Object.entries(catRec).sort((a,b)=>b[1]-a[1]).map(([c,v])=>`<tr><td style="padding-left:24px;color:var(--text-2)">${c}</td><td style="text-align:right;font-family:var(--mono);color:var(--green)">${fmtMoeda(v)}</td><td style="text-align:right;color:var(--text-3)">${Math.round(v/totalRec*100)||0}%</td></tr>`).join('')}
+        <tr style="background:var(--red-lt)"><td style="font-weight:700;color:var(--red)">(-) Despesas</td><td style="text-align:right;font-family:var(--mono);font-weight:700;color:var(--red)">${fmtMoeda(totalDesp)}</td><td style="text-align:right;color:var(--red)">${totalRec>0?Math.round(totalDesp/totalRec*100):0}%</td></tr>
+        ${Object.entries(catDesp).sort((a,b)=>b[1]-a[1]).map(([c,v])=>`<tr><td style="padding-left:24px;color:var(--text-2)">${c}</td><td style="text-align:right;font-family:var(--mono);color:var(--red)">${fmtMoeda(v)}</td><td style="text-align:right;color:var(--text-3)">${totalRec>0?Math.round(v/totalRec*100):0}%</td></tr>`).join('')}
+        <tr style="border-top:2px solid var(--border);background:${resultado>=0?'var(--green-lt)':'var(--red-lt)'}">
+          <td style="font-weight:700;color:${resultado>=0?'var(--green)':'var(--red)'}">${resultado>=0?'✅ Lucro Líquido':'❌ Prejuízo'}</td>
+          <td style="text-align:right;font-family:var(--mono);font-weight:700;color:${resultado>=0?'var(--green)':'var(--red)'}">${fmtMoeda(resultado)}</td>
+          <td style="text-align:right;font-weight:700;color:${resultado>=0?'var(--green)':'var(--red)'}">${margem}%</td>
+        </tr>
+      </tbody>
+    </table></div>
   </div>`;
 }
 

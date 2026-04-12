@@ -541,6 +541,10 @@ tbody td { padding: 11px 16px; font-size: 13px; }
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 14H7v-2h5v2zm5-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg>
         DRE
       </button>
+      <button class="nav-item" onclick="go('metas')" data-page="metas">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm3.88-11.71L10 14.17l-1.88-1.88a.996.996 0 1 0-1.41 1.41l2.59 2.59c.39.39 1.02.39 1.41 0L17.3 9.7a.996.996 0 0 0 0-1.41c-.39-.39-1.03-.39-1.42 0z"/></svg>
+        Metas
+      </button>
       <div class="nav-section">Cadastros</div>
       <button class="nav-item" onclick="go('clientes')" data-page="clientes">
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
@@ -603,7 +607,7 @@ const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsI
 
 // ── ESTADO ────────────────────────────────────────────────────
 const APP = { token: null, user: null, tenant: null, page: 'dashboard' };
-let CONTAS = [], CATEGORIAS = [], CLIENTES = [], FORNECEDORES = [], RECEITAS = [], DESPESAS = [];
+let CONTAS = [], CATEGORIAS = [], CLIENTES = [], FORNECEDORES = [], RECEITAS = [], DESPESAS = [], METAS = [];
 
 // ── SUPABASE ──────────────────────────────────────────────────
 const $id = id => document.getElementById(id);
@@ -730,16 +734,17 @@ async function inicializar() {
 
 async function carregarDados() {
   const tid = APP.user.tenant_id;
-  const [contas, cats, clis, fors, recs, desps] = await Promise.all([
+  const [contas, cats, clis, fors, recs, desps, metas] = await Promise.all([
     supa('GET', 'fin_contas',       { params: { tenant_id: `eq.${tid}`, ativo: 'eq.true', select: '*' } }),
     supa('GET', 'fin_categorias',   { params: { tenant_id: `eq.${tid}`, ativo: 'eq.true', select: '*', order: 'nome.asc' } }),
     supa('GET', 'fin_clientes',     { params: { tenant_id: `eq.${tid}`, ativo: 'eq.true', select: '*', order: 'nome.asc' } }),
     supa('GET', 'fin_fornecedores', { params: { tenant_id: `eq.${tid}`, ativo: 'eq.true', select: '*', order: 'nome.asc' } }),
     supa('GET', 'fin_receitas',     { params: { tenant_id: `eq.${tid}`, select: '*', order: 'vencimento.desc', limit: 200 } }),
     supa('GET', 'fin_despesas',     { params: { tenant_id: `eq.${tid}`, select: '*', order: 'vencimento.desc', limit: 200 } }),
+    supa('GET', 'fin_metas',        { params: { tenant_id: `eq.${tid}`, select: '*', order: 'prazo.asc' } }).catch(()=>[]),
   ]);
   CONTAS = contas; CATEGORIAS = cats; CLIENTES = clis;
-  FORNECEDORES = fors; RECEITAS = recs; DESPESAS = desps;
+  FORNECEDORES = fors; RECEITAS = recs; DESPESAS = desps; METAS = metas || [];
 }
 
 function mostrarApp() {
@@ -889,6 +894,7 @@ const PAGES = {
   contas:       { title: 'Caixa / Bancos', render: renderContas },
   fluxo:        { title: 'Fluxo de Caixa', render: renderFluxo },
   dre:          { title: 'DRE',            render: renderDRE },
+  metas:        { title: 'Metas',          render: renderMetas },
   clientes:     { title: 'Clientes',       render: renderClientes },
   fornecedores: { title: 'Fornecedores',   render: renderFornecedores },
   categorias:   { title: 'Categorias',     render: renderCategorias },
@@ -924,8 +930,11 @@ function renderDashboard() {
   const hoje = today();
   const mesAtual    = hoje.slice(0,7);
   const anoAtual    = hoje.slice(0,4);
+  const diaAtual    = parseInt(hoje.slice(8,10));
+  const diasNoMes   = new Date(parseInt(anoAtual), new Date().getMonth()+1, 0).getDate();
   const mesAnterior = (() => { const d=new Date(); d.setMonth(d.getMonth()-1); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); })();
 
+  // ── Dados base ────────────────────────────────────────────
   const saldoTotal   = CONTAS.reduce((s,c) => s+(parseFloat(c.saldo_atual)||0), 0);
   const recPend      = RECEITAS.filter(r => r.status==='pendente');
   const despPend     = DESPESAS.filter(d => d.status==='pendente');
@@ -942,7 +951,7 @@ function renderDashboard() {
   const varRec  = recAnt>0  ? ((recMes-recAnt)/recAnt*100).toFixed(1)  : null;
   const varDesp = despAnt>0 ? ((despMes-despAnt)/despAnt*100).toFixed(1) : null;
 
-  // Últimos 6 meses
+  // ── Últimos 6 meses ───────────────────────────────────────
   const meses6 = [];
   for (let i=5; i>=0; i--) {
     const d=new Date(); d.setMonth(d.getMonth()-i);
@@ -955,7 +964,71 @@ function renderDashboard() {
   }
   const grafMax = Math.max(...meses6.flatMap(m=>[m.rp,m.dp]), 1);
 
-  // Top categorias
+  // ── Tendência (média 3 meses) ─────────────────────────────
+  const meses3Rec  = meses6.slice(-4,-1).map(m=>m.r);
+  const meses3Desp = meses6.slice(-4,-1).map(m=>m.dp);
+  const mediaRec3  = meses3Rec.length  ? meses3Rec.reduce((s,v)=>s+v,0)/meses3Rec.length   : 0;
+  const mediaDesp3 = meses3Desp.length ? meses3Desp.reduce((s,v)=>s+v,0)/meses3Desp.length : 0;
+  function tendencia(atual, media) {
+    if (!media || !atual) return '';
+    const diff = ((atual - media) / media * 100).toFixed(0);
+    const up = atual >= media;
+    return `<span style="font-size:10px;font-weight:700;color:${up?'var(--green)':'var(--red)'}">${up?'▲':'▼'} ${Math.abs(diff)}% vs média 3m</span>`;
+  }
+
+  // ── Projeção do mês ───────────────────────────────────────
+  const recProjetado  = diaAtual > 0 ? Math.round((recMes  / diaAtual) * diasNoMes) : 0;
+  const despProjetado = diaAtual > 0 ? Math.round((despMes / diaAtual) * diasNoMes) : 0;
+  const resultProjetado = recProjetado - despProjetado;
+  const percMes = Math.round((diaAtual / diasNoMes) * 100);
+
+  // ── Índice de Saúde Financeira (0–100) ────────────────────
+  let score = 50;
+  const pontos = [];
+  // 1. Saldo positivo (+20)
+  if (saldoTotal > 0) { score += 20; pontos.push({ok:true, txt:'Saldo total positivo'}); }
+  else { score -= 15; pontos.push({ok:false, txt:'Saldo total negativo'}); }
+  // 2. Margem do mês (max +20)
+  const margemMes = recMes > 0 ? (recMes - despMes) / recMes : -1;
+  if (margemMes >= 0.3)  { score += 20; pontos.push({ok:true,  txt:'Margem do mês acima de 30%'}); }
+  else if (margemMes >= 0) { score += 10; pontos.push({ok:true,  txt:'Margem do mês positiva'}); }
+  else { score -= 10; pontos.push({ok:false, txt:'Despesas superam receitas no mês'}); }
+  // 3. Inadimplência (-5 por vencido, máx -20)
+  const penalVenc = Math.min(20, (recVenc.length + despVenc.length) * 5);
+  if (penalVenc === 0) { score += 10; pontos.push({ok:true,  txt:'Sem títulos vencidos'}); }
+  else { score -= penalVenc; pontos.push({ok:false, txt:`${recVenc.length+despVenc.length} título(s) vencido(s)`}); }
+  // 4. Receitas crescendo vs ant (+10)
+  if (recAnt > 0 && recMes > recAnt) { score += 10; pontos.push({ok:true,  txt:'Receitas maiores que mês anterior'}); }
+  else if (recAnt > 0 && recMes < recAnt) { score -= 5; pontos.push({ok:false, txt:'Receitas menores que mês anterior'}); }
+  // 5. Reserva (saldo cobre pelo menos 1 mês de despesas)
+  if (despMes > 0 && saldoTotal >= despMes) { score += 10; pontos.push({ok:true,  txt:'Reserva cobre ao menos 1 mês'}); }
+  else if (despMes > 0) { score -= 5; pontos.push({ok:false, txt:'Reserva abaixo de 1 mês de despesas'}); }
+
+  score = Math.max(0, Math.min(100, score));
+  const scoreLabel = score >= 80 ? 'Excelente' : score >= 60 ? 'Bom' : score >= 40 ? 'Moderado' : 'Crítico';
+  const scoreColor = score >= 80 ? 'var(--green)' : score >= 60 ? 'var(--gold)' : score >= 40 ? 'var(--amber)' : 'var(--red)';
+  const scoreDash  = Math.round((score / 100) * 220);
+
+  // ── Sugestões inteligentes ────────────────────────────────
+  const sugestoes = [];
+  if (recVenc.length > 0)
+    sugestoes.push({tipo:'red',  ico:'⚠', txt:`${recVenc.length} receita(s) vencida(s) sem baixa. Regularize para manter o fluxo.`, acao:"go('receber')", label:'Ver recebíveis'});
+  if (despVenc.length > 0)
+    sugestoes.push({tipo:'red',  ico:'⚠', txt:`${despVenc.length} despesa(s) vencida(s) em aberto. Risco de multa/juros.`, acao:"go('pagar')", label:'Ver a pagar'});
+  if (margemMes > 0 && margemMes < 0.15 && recMes > 0)
+    sugestoes.push({tipo:'amber',ico:'📉', txt:`Margem do mês em ${(margemMes*100).toFixed(0)}%. Revise despesas para ampliar resultado.`, acao:"go('dre')", label:'Ver DRE'});
+  if (recAnt > 0 && recMes < recAnt * 0.8)
+    sugestoes.push({tipo:'amber',ico:'📊', txt:`Receita do mês ${Math.round((1-recMes/recAnt)*100)}% abaixo do mês anterior. Monitore a carteira.`, acao:"go('receber')", label:'Ver receitas'});
+  if (despAnt > 0 && despMes > despAnt * 1.2)
+    sugestoes.push({tipo:'amber',ico:'💸', txt:`Despesas cresceram ${Math.round((despMes/despAnt-1)*100)}% vs mês anterior. Verifique a origem.`, acao:"go('pagar')", label:'Ver despesas'});
+  if (resultProjetado < 0 && recProjetado > 0)
+    sugestoes.push({tipo:'red',  ico:'🔮', txt:`Projeção aponta resultado negativo de ${fmtMoeda(Math.abs(resultProjetado))} no fechamento do mês.`, acao:"go('fluxo')", label:'Ver fluxo'});
+  if (saldoTotal > 0 && despMes > 0 && saldoTotal < despMes)
+    sugestoes.push({tipo:'amber',ico:'🏦', txt:`Saldo disponível menor que as despesas do mês. Atenção ao caixa.`, acao:"go('contas')", label:'Ver contas'});
+  if (sugestoes.length === 0)
+    sugestoes.push({tipo:'green',ico:'✓',  txt:`Finanças sob controle. Continue monitorando seus indicadores regularmente.`, acao:null, label:null});
+
+  // ── Top categorias ────────────────────────────────────────
   const catR={}, catD={};
   RECEITAS.forEach(r=>{const c=(CATEGORIAS.find(x=>x.id===r.categoria_id)||{}).nome||'Outros'; catR[c]=(catR[c]||0)+(parseFloat(r.valor)||0);});
   DESPESAS.forEach(d=>{const c=(CATEGORIAS.find(x=>x.id===d.categoria_id)||{}).nome||'Outros'; catD[c]=(catD[c]||0)+(parseFloat(d.valor)||0);});
@@ -964,13 +1037,13 @@ function renderDashboard() {
   const maxR=Math.max(...topR.map(([,v])=>v),1);
   const maxD=Math.max(...topD.map(([,v])=>v),1);
 
-  // Últimos lançamentos
+  // ── Últimos lançamentos ───────────────────────────────────
   const ults=[
     ...RECEITAS.slice(-8).map(r=>({...r,_t:'rec'})),
     ...DESPESAS.slice(-8).map(d=>({...d,_t:'dep'})),
   ].sort((a,b)=>(b.criado_em||b.vencimento||'').localeCompare(a.criado_em||a.vencimento||'')).slice(0,7);
 
-  // Próximos vencimentos (7 dias)
+  // ── Próximos vencimentos (7 dias) ─────────────────────────
   const em7=new Date(); em7.setDate(em7.getDate()+7);
   const em7s=em7.toISOString().slice(0,10);
   const proxVenc=[
@@ -978,19 +1051,31 @@ function renderDashboard() {
     ...DESPESAS.filter(d=>d.status==='pendente'&&d.vencimento>=hoje&&d.vencimento<=em7s).map(d=>({...d,_t:'dep'})),
   ].sort((a,b)=>a.vencimento.localeCompare(b.vencimento)).slice(0,5);
 
-  // Chip variação
+  // ── Helpers de render ─────────────────────────────────────
   function chip(v) {
     if (v===null) return `<span style="font-size:10px;color:var(--text-3)">sem ref. ant.</span>`;
     const up = parseFloat(v) >= 0;
     return `<span style="font-size:10px;font-weight:700;color:${up?'var(--green)':'var(--red)'}">${up?'▲':'▼'} ${Math.abs(v)}%</span>`;
   }
 
-  // SVG Chart
+  // ── SVG Gauge Saúde ───────────────────────────────────────
+  function svgGauge() {
+    const r=52, cx=70, cy=72, stroke=10;
+    const circ=Math.PI*r; // semicírculo
+    return `<svg width="140" height="90" viewBox="0 0 140 90" style="display:block;margin:0 auto">
+      <path d="M ${cx-r} ${cy} A ${r} ${r} 0 0 1 ${cx+r} ${cy}" fill="none" stroke="#2e3036" stroke-width="${stroke}" stroke-linecap="round"/>
+      <path d="M ${cx-r} ${cy} A ${r} ${r} 0 0 1 ${cx+r} ${cy}" fill="none" stroke="${scoreColor}" stroke-width="${stroke}" stroke-linecap="round"
+        stroke-dasharray="${scoreDash} ${220-scoreDash}" style="transition:stroke-dasharray .8s ease"/>
+      <text x="${cx}" y="${cy-8}" text-anchor="middle" font-size="26" font-weight="700" fill="${scoreColor}" font-family="DM Mono">${score}</text>
+      <text x="${cx}" y="${cy+10}" text-anchor="middle" font-size="11" fill="#9b9894" font-family="DM Sans">${scoreLabel}</text>
+    </svg>`;
+  }
+
+  // ── SVG Chart ─────────────────────────────────────────────
   function svgChart() {
     const W=380, H=130, BOT=24, PAD=8, bW=16, gap=(W-PAD*2)/meses6.length;
     const sc = v => H-BOT-Math.max((v/grafMax)*(H-BOT-8),0);
     let out='';
-    // grid lines
     for (let i=1; i<=3; i++) {
       const y = H-BOT-((i/4)*(H-BOT-8));
       out += `<line x1="${PAD}" y1="${y.toFixed(0)}" x2="${W-PAD}" y2="${y.toFixed(0)}" stroke="#2e3036" stroke-width="1" stroke-dasharray="3,3"/>`;
@@ -1020,7 +1105,7 @@ function renderDashboard() {
 
   // Alerta vencidos
   const alertaVenc = (recVenc.length || despVenc.length) ? `
-    <div style="background:rgba(224,92,92,.1);border:1px solid rgba(224,92,92,.25);border-radius:10px;padding:12px 18px;display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px">
+    <div style="background:rgba(224,92,92,.1);border:1px solid rgba(224,92,92,.25);border-radius:10px;padding:12px 18px;display:flex;align-items:center;justify-content:space-between;gap:12px">
       <div style="display:flex;align-items:center;gap:10px">
         <span style="color:var(--red);font-size:16px">⚠</span>
         <span style="font-size:12.5px;font-weight:600;color:var(--red)">
@@ -1043,20 +1128,113 @@ function renderDashboard() {
   <!-- KPI ROW -->
   <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:14px 20px;display:grid;grid-template-columns:repeat(5,1fr);gap:0;box-shadow:var(--shadow)">
     ${[
-      {l:'Saldo Total',     v:fmtMoeda(saldoTotal),   ch:null,   c:'var(--gold)',  click:"go('contas')"},
-      {l:'A Receber',       v:fmtMoeda(totalReceber), ch:null,   c:'var(--green)', click:"go('receber')"},
-      {l:'A Pagar',         v:fmtMoeda(totalPagar),   ch:null,   c:'var(--red)',   click:"go('pagar')"},
-      {l:'Recebido no Mês', v:fmtMoeda(recMes),       ch:varRec, c:'var(--green)', click:"go('receber')"},
-      {l:'Pago no Mês',     v:fmtMoeda(despMes),      ch:varDesp,c:'var(--red)',   click:"go('pagar')"},
+      {l:'Saldo Total',     v:fmtMoeda(saldoTotal),   td:tendencia(saldoTotal,0), c:'var(--gold)',  click:"go('contas')"},
+      {l:'A Receber',       v:fmtMoeda(totalReceber), td:'',                      c:'var(--green)', click:"go('receber')"},
+      {l:'A Pagar',         v:fmtMoeda(totalPagar),   td:'',                      c:'var(--red)',   click:"go('pagar')"},
+      {l:'Recebido no Mês', v:fmtMoeda(recMes),       td:tendencia(recMes,mediaRec3),  c:'var(--green)', click:"go('receber')"},
+      {l:'Pago no Mês',     v:fmtMoeda(despMes),      td:tendencia(despMes,mediaDesp3),c:'var(--red)',   click:"go('pagar')"},
     ].map((k,i)=>`
       <div onclick="${k.click}" style="padding:6px 18px;${i>0?'border-left:1px solid var(--border)':''}cursor:pointer;transition:opacity .15s" onmouseover="this.style.opacity='.8'" onmouseout="this.style.opacity='1'">
         <div style="font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">${k.l}</div>
         <div style="font-size:17px;font-weight:700;font-family:var(--mono);color:${k.c};letter-spacing:-.5px">${k.v}</div>
-        <div style="margin-top:4px">${chip(k.ch)}</div>
+        <div style="margin-top:4px">${k.td || chip(null).replace('sem ref. ant.','')}</div>
       </div>`).join('')}
   </div>
 
-  <!-- ROW 2: Chart + Lançamentos recentes -->
+  <!-- ROW 2: Saúde + Projeção + Sugestões -->
+  <div style="display:grid;grid-template-columns:200px 1fr 1fr;gap:16px">
+
+    <!-- Índice de Saúde -->
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:16px;box-shadow:var(--shadow);display:flex;flex-direction:column;align-items:center">
+      <div style="font-size:10.5px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px;align-self:flex-start">Saúde Financeira</div>
+      ${svgGauge()}
+      <div style="width:100%;margin-top:10px;display:flex;flex-direction:column;gap:5px">
+        ${pontos.slice(0,3).map(p=>`
+          <div style="display:flex;align-items:center;gap:6px;font-size:10.5px;color:${p.ok?'var(--green)':'var(--red)'}">
+            <span style="flex-shrink:0">${p.ok?'✓':'✗'}</span>
+            <span style="color:var(--text-3);line-height:1.3">${p.txt}</span>
+          </div>`).join('')}
+      </div>
+    </div>
+
+    <!-- Projeção do Mês -->
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:16px;box-shadow:var(--shadow)">
+      <div style="font-size:10.5px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:14px">
+        Projeção do Mês · ${percMes}% concluído
+      </div>
+      <!-- Barra de progresso do mês -->
+      <div style="height:4px;background:var(--surface-2);border-radius:3px;margin-bottom:18px;overflow:hidden">
+        <div style="height:100%;width:${percMes}%;background:linear-gradient(90deg,var(--gold-dim),var(--gold));border-radius:3px;transition:width .6s ease"></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+        ${[
+          {l:'Receita projetada',  v:fmtMoeda(recProjetado),    c:'var(--green)'},
+          {l:'Despesa projetada',  v:fmtMoeda(despProjetado),   c:'var(--red)'},
+          {l:'Resultado projetado',v:fmtMoeda(resultProjetado), c:resultProjetado>=0?'var(--green)':'var(--red)'},
+        ].map(k=>`
+          <div style="background:var(--bg-2);border-radius:10px;padding:12px;border:1px solid var(--border)">
+            <div style="font-size:9.5px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">${k.l}</div>
+            <div style="font-size:15px;font-weight:700;font-family:var(--mono);color:${k.c}">${k.v}</div>
+          </div>`).join('')}
+      </div>
+      <div style="margin-top:14px;font-size:11px;color:var(--text-3)">
+        Baseado no ritmo de ${diaAtual} dias realizados de ${diasNoMes} dias no mês.
+        ${recMes===0&&despMes===0?'<span style="color:var(--amber)"> Sem movimentações no mês.</span>':''}
+      </div>
+    </div>
+
+    <!-- Sugestões Inteligentes -->
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:16px;box-shadow:var(--shadow)">
+      <div style="font-size:10.5px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:14px">
+        Alertas Inteligentes
+      </div>
+      <div style="display:flex;flex-direction:column;gap:9px">
+        ${sugestoes.map(s=>`
+          <div style="background:${s.tipo==='red'?'rgba(224,92,92,.08)':s.tipo==='amber'?'rgba(224,154,58,.08)':'rgba(82,184,130,.08)'};border:1px solid ${s.tipo==='red'?'rgba(224,92,92,.2)':s.tipo==='amber'?'rgba(224,154,58,.2)':'rgba(82,184,130,.2)'};border-radius:9px;padding:10px 12px">
+            <div style="display:flex;align-items:flex-start;gap:8px">
+              <span style="font-size:14px;flex-shrink:0;margin-top:1px">${s.ico}</span>
+              <div style="flex:1">
+                <div style="font-size:11.5px;color:var(--text-2);line-height:1.4">${s.txt}</div>
+                ${s.acao?`<button onclick="${s.acao}" style="margin-top:6px;font-size:10.5px;font-weight:700;color:${s.tipo==='red'?'var(--red)':s.tipo==='amber'?'var(--amber)':'var(--green)'};background:none;border:none;cursor:pointer;font-family:var(--font);padding:0">${s.label} →</button>`:''}
+              </div>
+            </div>
+          </div>`).join('')}
+      </div>
+    </div>
+  </div>
+
+  ${METAS.filter(m=>m.ativo!==false).length > 0 ? `
+  <!-- METAS WIDGET -->
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;overflow:hidden;box-shadow:var(--shadow)">
+    <div style="padding:12px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="font-size:14px">🎯</span>
+        <span style="font-size:12px;font-weight:700;color:var(--text)">Metas Financeiras</span>
+      </div>
+      <button onclick="go('metas')" style="font-size:10.5px;color:var(--gold);background:none;border:none;cursor:pointer;font-weight:600;font-family:var(--font)">Ver todas →</button>
+    </div>
+    <div style="padding:14px 18px;display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px">
+      ${METAS.filter(m=>m.ativo!==false).slice(0,4).map(m => {
+        const atual = calcularProgressoMeta(m);
+        const alvo  = parseFloat(m.valor_alvo);
+        const pct   = Math.min(100, alvo > 0 ? Math.round((atual/alvo)*100) : 0);
+        const st    = statusMeta(m, atual);
+        return `<div style="background:var(--bg-2);border-radius:10px;padding:13px;border:1px solid var(--border);border-top:2px solid ${m.cor||'var(--gold)'}">
+          <div style="font-size:12px;font-weight:600;color:var(--text);margin-bottom:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${m.nome}</div>
+          <div style="font-size:10px;color:var(--text-3);margin-bottom:10px">${TIPO_META_LABEL[m.tipo]||m.tipo}</div>
+          <div style="height:5px;background:var(--surface);border-radius:99px;overflow:hidden;margin-bottom:8px">
+            <div style="height:100%;width:${pct}%;background:${m.cor||'var(--gold)'};border-radius:99px;transition:width .6s ease"></div>
+          </div>
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <span style="font-size:13px;font-weight:700;font-family:var(--mono);color:${st.cor}">${pct}%</span>
+            <span style="font-size:11px;font-family:var(--mono);color:var(--text-3)">${fmtMoeda(atual)} / ${fmtMoeda(alvo)}</span>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>
+  </div>` : ''}
+
+  <!-- ROW 3: Chart + Lançamentos recentes -->
   <div style="display:grid;grid-template-columns:360px 1fr;gap:16px">
 
     <!-- Gráfico -->
@@ -1114,7 +1292,7 @@ function renderDashboard() {
     </div>
   </div>
 
-  <!-- ROW 3: Categorias Receita + Categorias Despesa + Vencimentos + Contas -->
+  <!-- ROW 4: Categorias Receita + Categorias Despesa + Vencimentos + Contas -->
   <div style="display:grid;grid-template-columns:1fr 1fr 1fr 200px;gap:16px">
 
     <!-- Top Receitas por Categoria -->
@@ -1830,6 +2008,255 @@ function renderConfiguracoes() {
     <strong style="font-size:14px;display:block;margin-bottom:10px;color:var(--text)">Banco de Dados</strong>
     <div style="font-size:12px;color:var(--text-3);font-family:var(--mono)">Supabase · ${SUPA_URL.replace('https://','').split('.')[0]}</div>
   </div>`;
+}
+
+// ── METAS ─────────────────────────────────────────────────────
+/*
+  SQL para criar a tabela (rodar no Supabase SQL Editor):
+
+  CREATE TABLE IF NOT EXISTS fin_metas (
+    id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id   uuid NOT NULL,
+    nome        text NOT NULL,
+    tipo        text NOT NULL CHECK (tipo IN ('receita_mes','despesa_mes','saldo','receita_acum','economia')),
+    valor_alvo  numeric(14,2) NOT NULL,
+    prazo       date,
+    cor         text DEFAULT '#c9a84c',
+    ativo       boolean DEFAULT true,
+    criado_em   timestamptz DEFAULT now()
+  );
+  ALTER TABLE fin_metas ENABLE ROW LEVEL SECURITY;
+  CREATE POLICY "tenant_iso" ON fin_metas USING (tenant_id::text = current_setting('request.jwt.claims', true)::json->>'sub' OR true);
+*/
+
+// Calcula o valor atual de uma meta com base nos dados em memória
+function calcularProgressoMeta(meta) {
+  const hoje = today();
+  const mes  = hoje.slice(0,7);
+  let atual = 0;
+
+  switch (meta.tipo) {
+    case 'receita_mes':
+      atual = RECEITAS.filter(r => r.status==='recebido' && r.vencimento?.startsWith(mes))
+                      .reduce((s,r) => s+(parseFloat(r.valor)||0), 0);
+      break;
+    case 'despesa_mes':
+      // meta de controle: quanto MENOS gastou, melhor — inverte lógica
+      atual = DESPESAS.filter(d => d.status==='pago' && d.vencimento?.startsWith(mes))
+                      .reduce((s,d) => s+(parseFloat(d.valor)||0), 0);
+      break;
+    case 'saldo':
+      atual = CONTAS.reduce((s,c) => s+(parseFloat(c.saldo_atual)||0), 0);
+      break;
+    case 'receita_acum':
+      atual = RECEITAS.filter(r => r.status==='recebido')
+                      .reduce((s,r) => s+(parseFloat(r.valor)||0), 0);
+      break;
+    case 'economia':
+      // Resultado acumulado (receitas - despesas realizadas)
+      const recTotal  = RECEITAS.filter(r=>r.status==='recebido').reduce((s,r)=>s+(parseFloat(r.valor)||0),0);
+      const despTotal = DESPESAS.filter(d=>d.status==='pago').reduce((s,d)=>s+(parseFloat(d.valor)||0),0);
+      atual = recTotal - despTotal;
+      break;
+  }
+  return Math.max(0, atual);
+}
+
+function statusMeta(meta, atual) {
+  const alvo   = parseFloat(meta.valor_alvo);
+  const pct    = alvo > 0 ? (atual / alvo) * 100 : 0;
+  const hoje   = today();
+  const vencida = meta.prazo && meta.prazo < hoje && pct < 100;
+
+  if (pct >= 100)  return { label: 'Atingida',   cor: 'var(--green)', badge: 'badge-green' };
+  if (vencida)     return { label: 'Vencida',     cor: 'var(--red)',   badge: 'badge-red'   };
+  if (pct >= 75)   return { label: 'Quase lá',    cor: 'var(--gold)',  badge: 'badge-gold'  };
+  if (pct >= 40)   return { label: 'Em progresso',cor: 'var(--amber)', badge: 'badge-amber' };
+  return             { label: 'Iniciada',          cor: 'var(--text-3)',badge: 'badge-gray'  };
+}
+
+const TIPO_META_LABEL = {
+  receita_mes:  'Receita do mês',
+  despesa_mes:  'Despesa do mês (limite)',
+  saldo:        'Saldo em caixa',
+  receita_acum: 'Receita acumulada',
+  economia:     'Resultado acumulado',
+};
+
+function renderMetas() {
+  $id('topbar-actions').innerHTML = `<button class="btn btn-gold btn-sm" onclick="modalNovaMeta()">+ Nova Meta</button>`;
+
+  const ativas   = METAS.filter(m => m.ativo !== false);
+  const hoje     = today();
+
+  // Resumo rápido
+  const atingidas   = ativas.filter(m => { const a=calcularProgressoMeta(m); return a >= parseFloat(m.valor_alvo); });
+  const emRisco     = ativas.filter(m => { const a=calcularProgressoMeta(m); const p=(a/parseFloat(m.valor_alvo))*100; return p<40 && m.prazo && m.prazo > hoje; });
+
+  $id('page-content').innerHTML = `
+  <div style="display:flex;flex-direction:column;gap:18px">
+
+  <!-- KPIs -->
+  <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr)">
+    <div class="kpi-card k-gold"><div class="kpi-label">Total de Metas</div><div class="kpi-value" style="color:var(--gold)">${ativas.length}</div><div class="kpi-sub">ativas</div></div>
+    <div class="kpi-card k-green"><div class="kpi-label">Atingidas</div><div class="kpi-value" style="color:var(--green)">${atingidas.length}</div><div class="kpi-sub">${ativas.length>0?Math.round(atingidas.length/ativas.length*100):0}% do total</div></div>
+    <div class="kpi-card k-red"><div class="kpi-label">Em Risco</div><div class="kpi-value" style="color:var(--red)">${emRisco.length}</div><div class="kpi-sub">abaixo de 40%</div></div>
+    <div class="kpi-card"><div class="kpi-label">Sem prazo</div><div class="kpi-value">${ativas.filter(m=>!m.prazo).length}</div><div class="kpi-sub">metas abertas</div></div>
+  </div>
+
+  <!-- SQL helper -->
+  <div style="background:rgba(201,168,76,.06);border:1px solid rgba(201,168,76,.2);border-radius:12px;padding:14px 18px;display:flex;align-items:flex-start;gap:12px">
+    <span style="font-size:18px;flex-shrink:0">🗄️</span>
+    <div>
+      <div style="font-size:12px;font-weight:700;color:var(--gold);margin-bottom:4px">Configuração necessária</div>
+      <div style="font-size:12px;color:var(--text-2);line-height:1.6">Rode o SQL de criação da tabela <code style="background:var(--surface-2);padding:1px 6px;border-radius:4px;font-family:var(--mono);font-size:11px">fin_metas</code> no Supabase SQL Editor antes de cadastrar metas. O script está comentado no código-fonte do app (busque por <code style="background:var(--surface-2);padding:1px 6px;border-radius:4px;font-family:var(--mono);font-size:11px">CREATE TABLE IF NOT EXISTS fin_metas</code>).</div>
+    </div>
+  </div>
+
+  <!-- Grid de metas -->
+  ${ativas.length === 0
+    ? `<div class="empty-state"><div class="empty-icon">🎯</div><h3>Nenhuma meta cadastrada</h3><p style="font-size:13px;color:var(--text-3);margin-top:6px">Defina objetivos financeiros e acompanhe seu progresso.</p></div>`
+    : `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px">
+        ${ativas.map(m => {
+          const atual = calcularProgressoMeta(m);
+          const alvo  = parseFloat(m.valor_alvo);
+          const pct   = Math.min(100, alvo > 0 ? Math.round((atual/alvo)*100) : 0);
+          const st    = statusMeta(m, atual);
+          const diasRestantes = m.prazo ? Math.ceil((new Date(m.prazo+' 12:00:00') - new Date()) / 86400000) : null;
+          return `
+          <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:20px;box-shadow:var(--shadow);position:relative;overflow:hidden">
+            <!-- Linha de cor no topo -->
+            <div style="position:absolute;top:0;left:0;right:0;height:3px;background:${m.cor||'var(--gold)'}"></div>
+            <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:14px">
+              <div style="flex:1;min-width:0">
+                <div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${m.nome}</div>
+                <div style="font-size:11px;color:var(--text-3)">${TIPO_META_LABEL[m.tipo]||m.tipo}</div>
+              </div>
+              <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;margin-left:10px">
+                <span class="badge ${st.badge}">${st.label}</span>
+                <button onclick="excluirMeta('${m.id}')" style="background:none;border:none;cursor:pointer;color:var(--text-3);font-size:14px;padding:2px;transition:var(--tr)" onmouseover="this.style.color='var(--red)'" onmouseout="this.style.color='var(--text-3)'">✕</button>
+              </div>
+            </div>
+
+            <!-- Valores -->
+            <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px">
+              <div>
+                <div style="font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px">Atual</div>
+                <div style="font-size:20px;font-weight:700;font-family:var(--mono);color:${st.cor}">${fmtMoeda(atual)}</div>
+              </div>
+              <div style="text-align:right">
+                <div style="font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px">Alvo</div>
+                <div style="font-size:15px;font-weight:700;font-family:var(--mono);color:var(--text-2)">${fmtMoeda(alvo)}</div>
+              </div>
+            </div>
+
+            <!-- Barra de progresso -->
+            <div style="margin-bottom:8px">
+              <div style="height:8px;background:var(--surface-2);border-radius:99px;overflow:hidden">
+                <div style="height:100%;width:${pct}%;background:${m.cor||'var(--gold)'};border-radius:99px;transition:width .6s ease;${pct>=100?'':''}"></div>
+              </div>
+            </div>
+
+            <!-- Rodapé -->
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <div style="font-size:22px;font-weight:700;font-family:var(--mono);color:${st.cor}">${pct}%</div>
+              <div style="text-align:right;font-size:11px;color:var(--text-3)">
+                ${m.prazo
+                  ? diasRestantes > 0
+                    ? `<span style="color:${diasRestantes<=7?'var(--red)':diasRestantes<=30?'var(--amber)':'var(--text-3)'}">
+                        ${diasRestantes} dia${diasRestantes===1?'':'s'} restante${diasRestantes===1?'':'s'}
+                       </span><br><span>Prazo: ${fmtData(m.prazo)}</span>`
+                    : pct >= 100
+                      ? `<span style="color:var(--green)">Meta atingida! 🏆</span>`
+                      : `<span style="color:var(--red)">Prazo encerrado em ${fmtData(m.prazo)}</span>`
+                  : `<span>Sem prazo definido</span>`}
+              </div>
+            </div>
+          </div>`;
+        }).join('')}
+      </div>`}
+  </div>`;
+}
+
+function modalNovaMeta() {
+  openModal('Nova Meta Financeira', `
+    <div class="form-grid">
+      <div class="form-field full">
+        <label class="form-label">Nome da Meta *</label>
+        <input class="form-input" id="nm-nome" placeholder="Ex: Receita de R$ 50k no mês">
+      </div>
+      <div class="form-field">
+        <label class="form-label">Tipo *</label>
+        <select class="form-select" id="nm-tipo">
+          <option value="receita_mes">Receita do mês</option>
+          <option value="despesa_mes">Despesa do mês (limite)</option>
+          <option value="saldo">Saldo em caixa</option>
+          <option value="receita_acum">Receita acumulada</option>
+          <option value="economia">Resultado acumulado</option>
+        </select>
+      </div>
+      <div class="form-field">
+        <label class="form-label">Valor Alvo (R$) *</label>
+        <input class="form-input" type="number" id="nm-alvo" placeholder="0,00" step="0.01" min="0">
+      </div>
+      <div class="form-field">
+        <label class="form-label">Prazo</label>
+        <input class="form-input" type="date" id="nm-prazo">
+      </div>
+      <div class="form-field">
+        <label class="form-label">Cor</label>
+        <select class="form-select" id="nm-cor">
+          <option value="#c9a84c">Dourado</option>
+          <option value="#52b882">Verde</option>
+          <option value="#5b7ae0">Azul</option>
+          <option value="#9b8cd4">Roxo</option>
+          <option value="#e09a3a">Âmbar</option>
+          <option value="#e05c5c">Vermelho</option>
+        </select>
+      </div>
+    </div>
+    <div style="margin-top:14px;padding:12px 14px;background:var(--bg-2);border-radius:9px;border:1px solid var(--border)">
+      <div style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Como funciona</div>
+      <div style="font-size:11.5px;color:var(--text-2);line-height:1.6">
+        O progresso é calculado automaticamente com base nos seus lançamentos.
+        <strong>Receita do mês</strong>: soma das receitas recebidas no mês atual.
+        <strong>Limite de despesa</strong>: compara despesas pagas com o limite.
+        <strong>Saldo em caixa</strong>: total atual das suas contas.
+      </div>
+    </div>`,
+    `<button class="btn btn-outline" onclick="closeModal()">Cancelar</button>
+     <button class="btn btn-gold" onclick="salvarMeta()">Salvar Meta</button>`
+  );
+}
+
+async function salvarMeta() {
+  const nome = $id('nm-nome').value.trim();
+  const alvo = parseFloat($id('nm-alvo').value);
+  const tipo = $id('nm-tipo').value;
+  if (!nome || !alvo || alvo <= 0) { toast('Preencha nome e valor alvo.', 'error'); return; }
+  try {
+    await supa('POST', 'fin_metas', { body: {
+      tenant_id:  APP.user.tenant_id,
+      nome, tipo,
+      valor_alvo: alvo,
+      prazo:      $id('nm-prazo').value || null,
+      cor:        $id('nm-cor').value || '#c9a84c',
+    }});
+    closeModal();
+    toast('Meta criada!', 'success');
+    await carregarDados();
+    renderMetas();
+  } catch(e) { toast('Erro: ' + e.message + ' (verifique se a tabela fin_metas foi criada no Supabase)', 'error'); }
+}
+
+async function excluirMeta(id) {
+  if (!confirm('Excluir esta meta?')) return;
+  try {
+    await supa('DELETE', 'fin_metas', { params: { id: `eq.${id}` } });
+    toast('Meta removida.', 'success');
+    await carregarDados();
+    renderMetas();
+  } catch(e) { toast('Erro: ' + e.message, 'error'); }
 }
 
 // ── MOBILE MENU ────────────────────────────────────────────────

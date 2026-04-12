@@ -27,7 +27,7 @@
   --red-lt:      #e05c5c18;
   --amber:       #e09a3a;
   --amber-lt:    #e09a3a18;
-  --sidebar-w:   230px;
+  --sidebar-w:   200px;
   --radius:      12px;
   --shadow:      0 1px 3px rgba(0,0,0,.4), 0 4px 20px rgba(0,0,0,.25);
   --shadow-lg:   0 8px 40px rgba(0,0,0,.5);
@@ -440,6 +440,46 @@ tbody td { padding: 11px 16px; font-size: 13px; }
 .divider { border: none; border-top: 1px solid var(--border); margin: 20px 0; }
 
 /* ── RESPONSIVE ──────────────────────────────────────────── */
+/* ── MEDIUM SCREENS (900–1400px) ─────────────────────────────── */
+@media (min-width: 901px) and (max-width: 1400px) {
+  /* Sidebar compacta */
+  .sidebar { width: 190px; }
+  .main    { margin-left: 190px; }
+  .brand-name { font-size: 12.5px; }
+  .nav-item   { font-size: 12px; padding: 7px 9px; }
+  .nav-section { font-size: 9px; }
+  .content { padding: 16px 18px; }
+
+  /* KPIs */
+  .kpi-value { font-size: 20px; }
+  .kpi-label { font-size: 10px; }
+
+  /* Dashboard: KPI row 5 cols → scroll horizontal em telas muito estreitas */
+  #page-content [style*="grid-template-columns:repeat(5,1fr)"] {
+    overflow-x: auto;
+  }
+
+  /* Dashboard ROW 2: Saúde + Projeção + Sugestões */
+  #page-content [style*="grid-template-columns:200px 1fr 1fr"] {
+    grid-template-columns: 180px 1fr 1fr !important;
+  }
+
+  /* Dashboard ROW 3: Chart + Lançamentos */
+  #page-content [style*="grid-template-columns:360px 1fr"] {
+    grid-template-columns: 300px 1fr !important;
+  }
+
+  /* Dashboard ROW 4: 4 colunas → 2+2 */
+  #page-content [style*="grid-template-columns:1fr 1fr 1fr 200px"] {
+    grid-template-columns: 1fr 1fr !important;
+  }
+
+  /* KPI grids 4 cols → 2 cols em telas menores */
+  @media (max-width: 1200px) {
+    .kpi-grid { grid-template-columns: 1fr 1fr !important; }
+  }
+}
+
 /* ── SIDEBAR OVERLAY (mobile) ─────────────────────────────── */
 .sidebar-overlay {
   display: none; position: fixed; inset: 0; z-index: 199;
@@ -1255,7 +1295,7 @@ function renderDashboard() {
   ${alertaVenc}
 
   <!-- KPI ROW -->
-  <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:14px 20px;display:grid;grid-template-columns:repeat(5,1fr);gap:0;box-shadow:var(--shadow)">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:10px 16px;display:grid;grid-template-columns:repeat(5,1fr);gap:0;box-shadow:var(--shadow)">
     ${[
       {l:'Saldo Total',     v:fmtMoeda(saldoTotal),   td:tendencia(saldoTotal,0), c:'var(--gold)',  click:"go('contas')"},
       {l:'A Receber',       v:fmtMoeda(totalReceber), td:'',                      c:'var(--green)', click:"go('receber')"},
@@ -1263,15 +1303,15 @@ function renderDashboard() {
       {l:'Recebido no Mês', v:fmtMoeda(recMes),       td:tendencia(recMes,mediaRec3),  c:'var(--green)', click:"go('receber')"},
       {l:'Pago no Mês',     v:fmtMoeda(despMes),      td:tendencia(despMes,mediaDesp3),c:'var(--red)',   click:"go('pagar')"},
     ].map((k,i)=>`
-      <div onclick="${k.click}" style="padding:6px 18px;${i>0?'border-left:1px solid var(--border)':''}cursor:pointer;transition:opacity .15s" onmouseover="this.style.opacity='.8'" onmouseout="this.style.opacity='1'">
-        <div style="font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">${k.l}</div>
-        <div style="font-size:17px;font-weight:700;font-family:var(--mono);color:${k.c};letter-spacing:-.5px">${k.v}</div>
-        <div style="margin-top:4px">${k.td || chip(null).replace('sem ref. ant.','')}</div>
+      <div onclick="${k.click}" style="padding:5px 12px;${i>0?'border-left:1px solid var(--border)':''}cursor:pointer;transition:opacity .15s" onmouseover="this.style.opacity='.8'" onmouseout="this.style.opacity='1'">
+        <div style="font-size:9.5px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.07em;margin-bottom:5px">${k.l}</div>
+        <div style="font-size:15px;font-weight:700;font-family:var(--mono);color:${k.c};letter-spacing:-.5px">${k.v}</div>
+        <div style="margin-top:3px">${k.td || chip(null).replace('sem ref. ant.','')}</div>
       </div>`).join('')}
   </div>
 
   <!-- ROW 2: Saúde + Projeção + Sugestões -->
-  <div style="display:grid;grid-template-columns:200px 1fr 1fr;gap:16px">
+  <div style="display:grid;grid-template-columns:clamp(160px,200px,200px) 1fr 1fr;gap:14px">
 
     <!-- Índice de Saúde -->
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:16px;box-shadow:var(--shadow);display:flex;flex-direction:column;align-items:center">
@@ -1364,7 +1404,7 @@ function renderDashboard() {
   </div>` : ''}
 
   <!-- ROW 3: Chart + Lançamentos recentes -->
-  <div style="display:grid;grid-template-columns:360px 1fr;gap:16px">
+  <div style="display:grid;grid-template-columns:minmax(280px,320px) 1fr;gap:14px">
 
     <!-- Gráfico -->
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:16px 18px;box-shadow:var(--shadow)">
@@ -1422,7 +1462,7 @@ function renderDashboard() {
   </div>
 
   <!-- ROW 4: Categorias Receita + Categorias Despesa + Vencimentos + Contas -->
-  <div style="display:grid;grid-template-columns:1fr 1fr 1fr 200px;gap:16px">
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr minmax(160px,200px);gap:14px">
 
     <!-- Top Receitas por Categoria -->
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;overflow:hidden;box-shadow:var(--shadow)">

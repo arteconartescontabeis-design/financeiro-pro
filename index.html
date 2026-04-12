@@ -734,291 +734,281 @@ function badgeStatus(s) {
 // ── DASHBOARD ─────────────────────────────────────────────────
 function renderDashboard() {
   const hoje = today();
-  const mesAtual = hoje.slice(0,7);
+  const mesAtual   = hoje.slice(0,7);
+  const anoAtual   = hoje.slice(0,4);
+  const mesAnterior = (() => { const d=new Date(); d.setMonth(d.getMonth()-1); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); })();
 
-  // ── Cálculos base ──────────────────────────────────────────
-  const recPend  = RECEITAS.filter(r => r.status === 'pendente');
-  const despPend = DESPESAS.filter(d => d.status === 'pendente');
-  const recVenc  = RECEITAS.filter(r => r.status === 'pendente' && r.vencimento < hoje);
-  const despVenc = DESPESAS.filter(d => d.status === 'pendente' && d.vencimento < hoje);
-  const recHoje  = RECEITAS.filter(r => r.status === 'pendente' && r.vencimento === hoje);
-  const despHoje = DESPESAS.filter(d => d.status === 'pendente' && d.vencimento === hoje);
+  // ── Cálculos ───────────────────────────────────────────────
+  const saldoTotal   = CONTAS.reduce((s,c)=>s+(parseFloat(c.saldo_atual)||0),0);
+  const recPend      = RECEITAS.filter(r=>r.status==='pendente');
+  const despPend     = DESPESAS.filter(d=>d.status==='pendente');
+  const recVenc      = RECEITAS.filter(r=>r.status==='pendente'&&r.vencimento<hoje);
+  const despVenc     = DESPESAS.filter(d=>d.status==='pendente'&&d.vencimento<hoje);
+  const totalReceber = recPend.reduce((s,r)=>s+(parseFloat(r.valor)||0),0);
+  const totalPagar   = despPend.reduce((s,d)=>s+(parseFloat(d.valor)||0),0);
 
-  const saldoTotal   = CONTAS.reduce((s,c) => s + (parseFloat(c.saldo_atual)||0), 0);
-  const totalReceber = recPend.reduce((s,r) => s + (parseFloat(r.valor)||0), 0);
-  const totalPagar   = despPend.reduce((s,d) => s + (parseFloat(d.valor)||0), 0);
-  const resultado    = totalReceber - totalPagar;
+  // Mês atual e anterior realizados
+  const recMes  = RECEITAS.filter(r=>r.status==='recebido'&&r.vencimento?.startsWith(mesAtual)).reduce((s,r)=>s+(parseFloat(r.valor)||0),0);
+  const despMes = DESPESAS.filter(d=>d.status==='pago'&&d.vencimento?.startsWith(mesAtual)).reduce((s,d)=>s+(parseFloat(d.valor)||0),0);
+  const recAnt  = RECEITAS.filter(r=>r.status==='recebido'&&r.vencimento?.startsWith(mesAnterior)).reduce((s,r)=>s+(parseFloat(r.valor)||0),0);
+  const despAnt = DESPESAS.filter(d=>d.status==='pago'&&d.vencimento?.startsWith(mesAnterior)).reduce((s,d)=>s+(parseFloat(d.valor)||0),0);
 
-  // Mês atual realizados
-  const recMesVal  = RECEITAS.filter(r => r.status==='recebido' && r.vencimento?.startsWith(mesAtual)).reduce((s,r)=>s+(parseFloat(r.valor)||0),0);
-  const despMesVal = DESPESAS.filter(d => d.status==='pago'     && d.vencimento?.startsWith(mesAtual)).reduce((s,d)=>s+(parseFloat(d.valor)||0),0);
+  // Variação %
+  const varRec  = recAnt>0  ? ((recMes-recAnt)/recAnt*100).toFixed(1)  : null;
+  const varDesp = despAnt>0 ? ((despMes-despAnt)/despAnt*100).toFixed(1) : null;
+  const varSaldo = saldoTotal;
 
-  // ── Últimos 6 meses ────────────────────────────────────────
-  const meses6 = [];
-  for (let i=5; i>=0; i--) {
-    const d = new Date(); d.setMonth(d.getMonth()-i);
-    const k  = d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
-    const lb = d.toLocaleDateString('pt-BR',{month:'short'}).replace('.','');
-    const r  = RECEITAS.filter(x=>x.vencimento?.startsWith(k)).reduce((s,x)=>s+(parseFloat(x.valor)||0),0);
-    const dp = DESPESAS.filter(x=>x.vencimento?.startsWith(k)).reduce((s,x)=>s+(parseFloat(x.valor)||0),0);
-    meses6.push({k,lb,r,dp,isCur:k===mesAtual});
+  // Últimos 6 meses
+  const meses6=[];
+  for(let i=5;i>=0;i--){
+    const d=new Date();d.setMonth(d.getMonth()-i);
+    const k=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+    const lb=d.toLocaleDateString('pt-BR',{month:'short'}).replace('.','');
+    const r=RECEITAS.filter(x=>x.vencimento?.startsWith(k)&&x.status==='recebido').reduce((s,x)=>s+(parseFloat(x.valor)||0),0);
+    const dp=DESPESAS.filter(x=>x.vencimento?.startsWith(k)&&x.status==='pago').reduce((s,x)=>s+(parseFloat(x.valor)||0),0);
+    const rp=RECEITAS.filter(x=>x.vencimento?.startsWith(k)).reduce((s,x)=>s+(parseFloat(x.valor)||0),0);
+    meses6.push({k,lb,r,dp,rp,isCur:k===mesAtual});
   }
-  const grafMax = Math.max(...meses6.flatMap(m=>[m.r,m.dp]),1);
+  const grafMax=Math.max(...meses6.flatMap(m=>[m.rp,m.dp]),1);
 
-  // ── Gráfico SVG barras duplas animado ──────────────────────
-  function svgChart() {
-    const W=500,H=160,BOT=24,PAD=10,barW=22,gap=(W-PAD*2)/meses6.length;
-    const sc = v => H-BOT-Math.max((v/grafMax)*(H-BOT-8),0);
-    let rects='',labels='',grid='';
-    for(let i=1;i<=3;i++){
-      const y=H-BOT-((i/4)*(H-BOT-8));
-      grid+=`<line x1="${PAD}" y1="${y.toFixed(0)}" x2="${W-PAD}" y2="${y.toFixed(0)}" stroke="var(--border)" stroke-width="1" stroke-dasharray="3,3"/>`;
-    }
-    meses6.forEach((m,i)=>{
-      const cx=PAD+i*gap+gap/2;
-      const yr=sc(m.r),ydp=sc(m.dp);
-      const hr=H-BOT-yr,hdp=H-BOT-ydp;
-      const hl=m.isCur?'1':'0.5';
-      rects+=`
-        <rect x="${(cx-barW-2).toFixed(0)}" y="${yr.toFixed(0)}" width="${barW}" height="${Math.max(hr,2).toFixed(0)}"
-          fill="var(--green)" opacity="${hl}" rx="4">
-          <animate attributeName="height" from="0" to="${Math.max(hr,2).toFixed(0)}" dur=".5s" begin="${i*0.07}s" fill="freeze"/>
-          <animate attributeName="y" from="${(H-BOT).toFixed(0)}" to="${yr.toFixed(0)}" dur=".5s" begin="${i*0.07}s" fill="freeze"/>
-        </rect>
-        <rect x="${(cx+2).toFixed(0)}" y="${ydp.toFixed(0)}" width="${barW}" height="${Math.max(hdp,2).toFixed(0)}"
-          fill="var(--red)" opacity="${hl}" rx="4">
-          <animate attributeName="height" from="0" to="${Math.max(hdp,2).toFixed(0)}" dur=".5s" begin="${i*0.07+0.05}s" fill="freeze"/>
-          <animate attributeName="y" from="${(H-BOT).toFixed(0)}" to="${ydp.toFixed(0)}" dur=".5s" begin="${i*0.07+0.05}s" fill="freeze"/>
-        </rect>
-        ${m.isCur?`<rect x="${(cx-barW-6).toFixed(0)}" y="4" width="${barW*2+16}" height="${H-BOT-6}" fill="var(--accent)" opacity="0.04" rx="8"/>`:``}`;
-      labels+=`<text x="${cx.toFixed(0)}" y="${H-6}" text-anchor="middle" font-size="10" fill="${m.isCur?'var(--text)':'var(--text-3)'}" font-weight="${m.isCur?700:400}" font-family="var(--font)">${m.lb}</text>`;
-    });
-    return `<svg width="100%" viewBox="0 0 ${W} ${H}" style="overflow:visible;display:block">
-      ${grid}${rects}${labels}
-      <line x1="${PAD}" y1="${H-BOT}" x2="${W-PAD}" y2="${H-BOT}" stroke="var(--border)" stroke-width="1.5"/>
-    </svg>`;
-  }
+  // Top categorias receita e despesa
+  const catR={},catD={};
+  RECEITAS.forEach(r=>{const c=(CATEGORIAS.find(x=>x.id===r.categoria_id)||{}).nome||'Outros';catR[c]=(catR[c]||0)+(parseFloat(r.valor)||0);});
+  DESPESAS.forEach(d=>{const c=(CATEGORIAS.find(x=>x.id===d.categoria_id)||{}).nome||'Outros';catD[c]=(catD[c]||0)+(parseFloat(d.valor)||0);});
+  const topR=Object.entries(catR).sort((a,b)=>b[1]-a[1]).slice(0,5);
+  const topD=Object.entries(catD).sort((a,b)=>b[1]-a[1]).slice(0,5);
+  const maxR=Math.max(...topR.map(([,v])=>v),1);
+  const maxD=Math.max(...topD.map(([,v])=>v),1);
 
-  // ── Próximos 7 dias ────────────────────────────────────────
-  const em7 = new Date(); em7.setDate(em7.getDate()+7);
-  const em7s = em7.toISOString().slice(0,10);
-  const proxVenc = [
+  // Últimos lançamentos
+  const ults=[
+    ...RECEITAS.slice(-10).map(r=>({...r,_t:'rec'})),
+    ...DESPESAS.slice(-10).map(d=>({...d,_t:'dep'})),
+  ].sort((a,b)=>(b.criado_em||b.vencimento||'').localeCompare(a.criado_em||a.vencimento||'')).slice(0,8);
+
+  // Próximos vencimentos
+  const em7=new Date();em7.setDate(em7.getDate()+7);
+  const em7s=em7.toISOString().slice(0,10);
+  const proxVenc=[
     ...RECEITAS.filter(r=>r.status==='pendente'&&r.vencimento>=hoje&&r.vencimento<=em7s).map(r=>({...r,_t:'rec'})),
     ...DESPESAS.filter(d=>d.status==='pendente'&&d.vencimento>=hoje&&d.vencimento<=em7s).map(d=>({...d,_t:'dep'})),
   ].sort((a,b)=>a.vencimento.localeCompare(b.vencimento)).slice(0,6);
 
-  // ── Top categorias mês ─────────────────────────────────────
-  const catD={};
-  DESPESAS.filter(d=>d.vencimento?.startsWith(mesAtual)).forEach(d=>{
-    const c=(CATEGORIAS.find(x=>x.id===d.categoria_id)||{}).nome||'Outros';
-    catD[c]=(catD[c]||0)+(parseFloat(d.valor)||0);
-  });
-  const topCat=Object.entries(catD).sort((a,b)=>b[1]-a[1]).slice(0,4);
-  const totCat=topCat.reduce((s,[,v])=>s+v,0)||1;
+  // SVG Gráfico barras
+  function svgChart(){
+    const W=400,H=120,BOT=22,PAD=8,bW=20,gap=(W-PAD*2)/meses6.length;
+    const sc=v=>H-BOT-Math.max((v/grafMax)*(H-BOT-6),0);
+    let out='';
+    for(let i=1;i<=3;i++){
+      const y=H-BOT-((i/4)*(H-BOT-6));
+      out+=`<line x1="${PAD}" y1="${y.toFixed(0)}" x2="${W-PAD}" y2="${y.toFixed(0)}" stroke="#E8E6E0" stroke-width="1" stroke-dasharray="3,3"/>`;
+    }
+    meses6.forEach((m,i)=>{
+      const cx=PAD+i*gap+gap/2;
+      const yr=sc(m.rp),ydp=sc(m.dp);
+      const hr=H-BOT-yr,hdp=H-BOT-ydp;
+      out+=`
+        <rect x="${(cx-bW-1).toFixed(0)}" y="${yr.toFixed(0)}" width="${bW}" height="${Math.max(hr,2).toFixed(0)}" fill="${m.isCur?'#1A56DB':'#93C5FD'}" rx="3">
+          <animate attributeName="height" from="0" to="${Math.max(hr,2).toFixed(0)}" dur=".45s" begin="${i*0.06}s" fill="freeze"/>
+          <animate attributeName="y" from="${H-BOT}" to="${yr.toFixed(0)}" dur=".45s" begin="${i*0.06}s" fill="freeze"/>
+        </rect>
+        <rect x="${(cx+1).toFixed(0)}" y="${ydp.toFixed(0)}" width="${bW}" height="${Math.max(hdp,2).toFixed(0)}" fill="${m.isCur?'#DC2626':'#FCA5A5'}" rx="3">
+          <animate attributeName="height" from="0" to="${Math.max(hdp,2).toFixed(0)}" dur=".45s" begin="${i*0.06+0.04}s" fill="freeze"/>
+          <animate attributeName="y" from="${H-BOT}" to="${ydp.toFixed(0)}" dur=".45s" begin="${i*0.06+0.04}s" fill="freeze"/>
+        </rect>
+        <text x="${cx.toFixed(0)}" y="${H-5}" text-anchor="middle" font-size="9" fill="${m.isCur?'#1C1917':'#A8A29E'}" font-weight="${m.isCur?700:400}">${m.lb}</text>`;
+    });
+    out+=`<line x1="${PAD}" y1="${H-BOT}" x2="${W-PAD}" y2="${H-BOT}" stroke="#E8E6E0" stroke-width="1.5"/>`;
+    return `<svg width="100%" viewBox="0 0 ${W} ${H}" style="overflow:visible;display:block">${out}</svg>`;
+  }
 
-  // ── Últimos lançamentos ────────────────────────────────────
-  const ults=[
-    ...RECEITAS.slice(-8).map(r=>({...r,_t:'rec'})),
-    ...DESPESAS.slice(-8).map(d=>({...d,_t:'dep'})),
-  ].sort((a,b)=>(b.criado_em||b.vencimento||'').localeCompare(a.criado_em||a.vencimento||'')).slice(0,6);
-
-  const isNew = RECEITAS.length===0&&DESPESAS.length===0;
+  // Chip variação
+  function chip(v){
+    if(v===null) return `<span style="font-size:10px;color:#A8A29E">sem dados ant.</span>`;
+    const up=parseFloat(v)>=0;
+    return `<span style="font-size:10px;font-weight:700;color:${up?'#16A34A':'#DC2626'}">${up?'▲':'▼'} ${Math.abs(v)}% vs mês ant.</span>`;
+  }
 
   $id('topbar-actions').innerHTML=`
     <button class="btn btn-sm btn-green" onclick="go('receber')">+ Receita</button>
-    <button class="btn btn-sm btn-red"   onclick="go('pagar')">+ Despesa</button>`;
+    <button class="btn btn-sm btn-red" onclick="go('pagar')">+ Despesa</button>`;
 
   $id('page-content').innerHTML=`
+  <div style="display:flex;flex-direction:column;gap:14px">
 
-  ${isNew?`<div style="background:linear-gradient(135deg,var(--accent-lt),#F0FDF4);border:1px solid var(--accent);border-radius:14px;padding:20px 24px;margin-bottom:24px;display:flex;align-items:center;gap:20px">
-    <div style="font-size:36px">🎯</div>
-    <div style="flex:1">
-      <div style="font-size:15px;font-weight:700;color:var(--accent);margin-bottom:4px">Bem-vindo ao Financeiro Pro!</div>
-      <div style="font-size:13px;color:var(--text-2)">Tudo configurado. Adicione seu primeiro lançamento para começar.</div>
-    </div>
-    <div style="display:flex;gap:8px;flex-shrink:0">
-      <button class="btn btn-sm btn-green" onclick="go('receber')">+ Primeira Receita</button>
-      <button class="btn btn-sm btn-red" onclick="go('pagar')">+ Primeira Despesa</button>
-    </div>
-  </div>`:''}
-
-  ${recVenc.length||despVenc.length?`<div style="background:var(--red-lt);border:1px solid var(--red);border-radius:10px;padding:12px 18px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;gap:12px">
+  ${recVenc.length||despVenc.length?`<div style="background:var(--red-lt);border:1px solid #FCA5A5;border-radius:8px;padding:10px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px">
     <div style="display:flex;align-items:center;gap:10px">
-      <span style="font-size:18px">⚠️</span>
-      <div>
-        <div style="font-weight:700;color:var(--red);font-size:13px">Lançamentos vencidos</div>
-        <div style="font-size:12px;color:var(--text-2)">${[recVenc.length?`${recVenc.length} receita${recVenc.length>1?'s':''} · ${fmtMoeda(recVenc.reduce((s,r)=>s+(parseFloat(r.valor)||0),0))}`:null,despVenc.length?`${despVenc.length} despesa${despVenc.length>1?'s':''} · ${fmtMoeda(despVenc.reduce((s,d)=>s+(parseFloat(d.valor)||0),0))}`:null].filter(Boolean).join(' · ')}</div>
-      </div>
+      <span>⚠️</span>
+      <span style="font-size:12px;font-weight:600;color:var(--red)">${[recVenc.length?`${recVenc.length} receita${recVenc.length>1?'s':''} vencida${recVenc.length>1?'s':''}`:null,despVenc.length?`${despVenc.length} despesa${despVenc.length>1?'s':''} vencida${despVenc.length>1?'s':''}`:null].filter(Boolean).join(' · ')}</span>
     </div>
-    <div style="display:flex;gap:6px">${recVenc.length?`<button class="btn btn-sm btn-red" onclick="go('receber')">Receitas →</button>`:``}${despVenc.length?`<button class="btn btn-sm btn-red" onclick="go('pagar')">Despesas →</button>`:``}</div>
+    <div style="display:flex;gap:6px">${recVenc.length?`<button class="btn btn-sm btn-red" onclick="go('receber')">Ver →</button>`:``}${despVenc.length?`<button class="btn btn-sm btn-red" onclick="go('pagar')">Ver →</button>`:``}</div>
   </div>`:''}
 
-  ${recHoje.length||despHoje.length?`<div style="background:var(--amber-lt);border:1px solid var(--amber);border-radius:10px;padding:11px 18px;margin-bottom:16px;display:flex;align-items:center;gap:10px">
-    <span style="font-size:16px">📅</span>
-    <span style="font-size:13px;font-weight:600;color:var(--amber)">Vence hoje: ${[recHoje.length?`${recHoje.length} receita`:null,despHoje.length?`${despHoje.length} despesa`:null].filter(Boolean).join(' · ')}</span>
-  </div>`:''}
-
-  <!-- KPIs -->
-  <div class="kpi-grid" style="margin-bottom:24px">
-    <div class="kpi-pro dash-fade" style="--kpi-c1:#1A56DB;--kpi-c2:#60A5FA" onclick="go('contas')">
-      <div class="kpi-pro-icon">💳</div>
-      <div class="kpi-pro-label">Saldo Total</div>
-      <div class="kpi-pro-value" style="color:${saldoTotal>=0?'var(--accent)':'var(--red)'}">${fmtMoeda(saldoTotal)}</div>
-      <div class="kpi-pro-sub" style="color:var(--text-3)">${CONTAS.length} conta${CONTAS.length!==1?'s':''} · clique para ver</div>
-    </div>
-    <div class="kpi-pro dash-fade" style="--kpi-c1:#16A34A;--kpi-c2:#4ADE80" onclick="go('receber')">
-      <div class="kpi-pro-icon">📥</div>
-      <div class="kpi-pro-label">A Receber</div>
-      <div class="kpi-pro-value" style="color:var(--green)">${fmtMoeda(totalReceber)}</div>
-      <div class="kpi-pro-sub">${recPend.length} pendente${recPend.length!==1?'s':''}${recVenc.length?` · <span style="color:var(--red);font-weight:700">${recVenc.length} vencido${recVenc.length>1?'s':''}</span>`:''}</div>
-    </div>
-    <div class="kpi-pro dash-fade" style="--kpi-c1:#DC2626;--kpi-c2:#F87171" onclick="go('pagar')">
-      <div class="kpi-pro-icon">📤</div>
-      <div class="kpi-pro-label">A Pagar</div>
-      <div class="kpi-pro-value" style="color:var(--red)">${fmtMoeda(totalPagar)}</div>
-      <div class="kpi-pro-sub">${despPend.length} pendente${despPend.length!==1?'s':''}${despVenc.length?` · <span style="color:var(--red);font-weight:700">${despVenc.length} vencido${despVenc.length>1?'s':''}</span>`:''}</div>
-    </div>
-    <div class="kpi-pro dash-fade" style="--kpi-c1:${resultado>=0?'#16A34A':'#DC2626'};--kpi-c2:${resultado>=0?'#4ADE80':'#F87171'}" onclick="go('fluxo')">
-      <div class="kpi-pro-icon">${resultado>=0?'📈':'📉'}</div>
-      <div class="kpi-pro-label">Resultado Previsto</div>
-      <div class="kpi-pro-value" style="color:${resultado>=0?'var(--green)':'var(--red)'}">${fmtMoeda(resultado)}</div>
-      <div class="kpi-pro-sub" style="color:${resultado>=0?'var(--green)':'var(--red)'}">${resultado>=0?'superávit':'déficit'} · ver fluxo</div>
-    </div>
+  <!-- LINHA 1: KPIs compactos -->
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 20px;display:grid;grid-template-columns:repeat(5,1fr);gap:0;box-shadow:var(--shadow)">
+    ${[
+      {l:'Saldo Total',     v:fmtMoeda(saldoTotal),     ch:null,    c:'var(--accent)',  click:"go('contas')"},
+      {l:'A Receber',       v:fmtMoeda(totalReceber),   ch:null,    c:'var(--green)',   click:"go('receber')"},
+      {l:'A Pagar',         v:fmtMoeda(totalPagar),     ch:null,    c:'var(--red)',     click:"go('pagar')"},
+      {l:'Recebido no Mês', v:fmtMoeda(recMes),         ch:varRec,  c:'var(--green)',   click:"go('receber')"},
+      {l:'Pago no Mês',     v:fmtMoeda(despMes),        ch:varDesp, c:'var(--red)',     click:"go('pagar')"},
+    ].map((k,i)=>`
+      <div onclick="${k.click}" style="padding:4px 16px;${i>0?'border-left:1px solid var(--border)':''}cursor:pointer">
+        <div style="font-size:10px;font-weight:600;color:var(--text-3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:5px">${k.l}</div>
+        <div style="font-size:18px;font-weight:700;font-family:var(--mono);color:${k.c};letter-spacing:-.5px">${k.v}</div>
+        <div style="margin-top:4px">${chip(k.ch)}</div>
+      </div>`).join('')}
   </div>
 
-  <!-- Gráfico + Resumo mês -->
-  <div style="display:grid;grid-template-columns:1fr 260px;gap:16px;margin-bottom:24px">
-    <div class="card dash-fade" style="animation-delay:.25s">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px">
+  <!-- LINHA 2: Gráfico + Lançamentos recentes -->
+  <div style="display:grid;grid-template-columns:380px 1fr;gap:14px">
+
+    <!-- Gráfico -->
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px 18px;box-shadow:var(--shadow)">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
         <div>
-          <div class="dash-section-title" style="margin-bottom:2px">Entradas × Saídas</div>
-          <div style="font-size:12px;color:var(--text-3)">Últimos 6 meses — previsto</div>
+          <div style="font-size:12px;font-weight:700;color:var(--text);letter-spacing:-.1px">Total Realizado</div>
+          <div style="font-size:10px;color:var(--text-3);margin-top:1px">Últimos 6 meses</div>
         </div>
-        <div style="display:flex;gap:14px;font-size:11px;color:var(--text-3)">
-          <span style="display:flex;align-items:center;gap:5px"><span style="width:10px;height:10px;background:var(--green);border-radius:2px;display:inline-block;opacity:.8"></span>Receitas</span>
-          <span style="display:flex;align-items:center;gap:5px"><span style="width:10px;height:10px;background:var(--red);border-radius:2px;display:inline-block;opacity:.8"></span>Despesas</span>
+        <div style="display:flex;gap:10px;font-size:10px;color:var(--text-3)">
+          <span style="display:flex;align-items:center;gap:4px"><span style="width:8px;height:8px;background:#1A56DB;border-radius:2px;display:inline-block"></span>Receita</span>
+          <span style="display:flex;align-items:center;gap:4px"><span style="width:8px;height:8px;background:#DC2626;border-radius:2px;display:inline-block"></span>Despesa</span>
         </div>
       </div>
       ${svgChart()}
     </div>
 
-    <div class="card dash-fade" style="animation-delay:.3s;display:flex;flex-direction:column;gap:0">
-      <div style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.07em;margin-bottom:16px">Mês Atual</div>
-
-      <div style="flex:1;display:flex;flex-direction:column;gap:16px">
-        <div>
-          <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px">
-            <span style="font-size:12px;color:var(--text-3)">Receitas realizadas</span>
-            <span style="font-family:var(--mono);font-weight:700;font-size:15px;color:var(--green)">${fmtMoeda(recMesVal)}</span>
-          </div>
-          <div class="prog-bar"><div class="prog-fill" style="width:${grafMax>0?Math.min(100,Math.round(recMesVal/grafMax*100)):0}%;background:var(--green)"></div></div>
-        </div>
-        <div>
-          <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px">
-            <span style="font-size:12px;color:var(--text-3)">Despesas pagas</span>
-            <span style="font-family:var(--mono);font-weight:700;font-size:15px;color:var(--red)">${fmtMoeda(despMesVal)}</span>
-          </div>
-          <div class="prog-bar"><div class="prog-fill" style="width:${grafMax>0?Math.min(100,Math.round(despMesVal/grafMax*100)):0}%;background:var(--red)"></div></div>
-        </div>
-        <div style="border-top:1px solid var(--border);padding-top:14px;margin-top:auto">
-          <div style="font-size:11px;color:var(--text-3);margin-bottom:4px">Resultado do mês</div>
-          <div style="font-size:22px;font-weight:700;font-family:var(--mono);color:${recMesVal-despMesVal>=0?'var(--green)':'var(--red)'}">${fmtMoeda(recMesVal-despMesVal)}</div>
-          <div style="font-size:11px;color:var(--text-3);margin-top:4px">${recMesVal-despMesVal>=0?'✅ positivo':'❌ negativo'}</div>
+    <!-- Lançamentos recentes -->
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;box-shadow:var(--shadow);overflow:hidden">
+      <div style="padding:12px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
+        <span style="font-size:12px;font-weight:700;color:var(--text)">Lançamentos Recentes</span>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-sm btn-green" onclick="go('receber')" style="font-size:11px;padding:4px 10px">+ Receita</button>
+          <button class="btn btn-sm btn-red"   onclick="go('pagar')"   style="font-size:11px;padding:4px 10px">+ Despesa</button>
         </div>
       </div>
+      ${ults.length===0?`<div style="text-align:center;padding:30px;color:var(--text-3);font-size:12px">Nenhum lançamento ainda</div>`:`
+      <table style="width:100%;border-collapse:collapse">
+        <thead><tr style="background:var(--bg)">
+          <th style="padding:8px 14px;text-align:left;font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em;border-bottom:1px solid var(--border)">Descrição</th>
+          <th style="padding:8px 14px;text-align:left;font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em;border-bottom:1px solid var(--border)">Categoria</th>
+          <th style="padding:8px 14px;text-align:left;font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em;border-bottom:1px solid var(--border)">Vcto</th>
+          <th style="padding:8px 14px;text-align:right;font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em;border-bottom:1px solid var(--border)">Valor</th>
+          <th style="padding:8px 14px;text-align:center;font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em;border-bottom:1px solid var(--border)">Status</th>
+        </tr></thead>
+        <tbody>${ults.map(l=>`
+          <tr style="border-bottom:1px solid var(--border);cursor:pointer" onclick="go('${l._t==='rec'?'receber':'pagar'}')" onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background=''">
+            <td style="padding:9px 14px;font-size:12px;font-weight:500;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+              <span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:${l._t==='rec'?'var(--green)':'var(--red)'};margin-right:7px;flex-shrink:0"></span>${l.descricao}
+            </td>
+            <td style="padding:9px 14px;font-size:11px;color:var(--text-3)">${(CATEGORIAS.find(x=>x.id===l.categoria_id)||{}).nome||'—'}</td>
+            <td style="padding:9px 14px;font-size:11px;font-family:var(--mono);color:var(--text-2)">${fmtData(l.vencimento)}</td>
+            <td style="padding:9px 14px;font-size:12px;font-family:var(--mono);font-weight:700;text-align:right;color:${l._t==='rec'?'var(--green)':'var(--red)'}">${fmtMoeda(l.valor)}</td>
+            <td style="padding:9px 14px;text-align:center">${badgeStatus(l.status)}</td>
+          </tr>`).join('')}</tbody>
+      </table>`}
     </div>
   </div>
 
-  <!-- Vencimentos + Categorias + Contas -->
-  <div style="display:grid;grid-template-columns:1fr 1fr 220px;gap:16px;margin-bottom:24px">
+  <!-- LINHA 3: Categorias Receita + Categorias Despesa + Vencimentos + Contas -->
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr 200px;gap:14px">
 
-    <!-- Próximos vencimentos -->
-    <div class="card dash-fade" style="animation-delay:.35s">
-      <div class="dash-section-title">📅 Próximos 7 dias</div>
-      ${proxVenc.length===0?`<div style="text-align:center;padding:24px;color:var(--text-3);font-size:13px">
-        <div style="font-size:28px;margin-bottom:8px">✅</div>Nada vencendo nos próximos 7 dias
-      </div>`:proxVenc.map(l=>`
-        <div class="venc-row" onclick="go('${l._t==='rec'?'receber':'pagar'}')">
-          <div class="venc-dot" style="background:${l._t==='rec'?'var(--green)':'var(--red)'}"></div>
-          <div style="flex:1;min-width:0">
-            <div style="font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${l.descricao}</div>
-            <div style="font-size:11px;color:${l.vencimento===hoje?'var(--amber)':'var(--text-3)'};font-weight:${l.vencimento===hoje?700:400}">${l.vencimento===hoje?'📅 Hoje':fmtData(l.vencimento)}</div>
-          </div>
-          <div>
-            <div style="font-size:13px;font-weight:700;font-family:var(--mono);color:${l._t==='rec'?'var(--green)':'var(--red)'};text-align:right">${fmtMoeda(l.valor)}</div>
-            <div style="font-size:10px;color:var(--text-3);text-align:right">${l._t==='rec'?'receber':'pagar'}</div>
-          </div>
-        </div>`).join('')}
+    <!-- Top Receitas por Categoria -->
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;overflow:hidden;box-shadow:var(--shadow)">
+      <div style="padding:11px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
+        <span style="font-size:11px;font-weight:700;color:var(--text)">Total por Categoria — Receitas</span>
+        <button onclick="go('dre')" style="font-size:10px;color:var(--accent);background:none;border:none;cursor:pointer;font-weight:600">DRE →</button>
+      </div>
+      ${topR.length===0?`<div style="padding:20px;text-align:center;font-size:12px;color:var(--text-3)">Sem dados</div>`:`
+      <table style="width:100%;border-collapse:collapse">
+        <thead><tr style="background:var(--bg)">
+          <th style="padding:7px 12px;font-size:9px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em;border-bottom:1px solid var(--border);text-align:left">Categoria</th>
+          <th style="padding:7px 12px;font-size:9px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em;border-bottom:1px solid var(--border);text-align:right">Total</th>
+          <th style="padding:7px 12px;font-size:9px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em;border-bottom:1px solid var(--border);text-align:right">%</th>
+        </tr></thead>
+        <tbody>${topR.map(([c,v])=>`
+          <tr style="border-bottom:1px solid var(--border)">
+            <td style="padding:8px 12px;font-size:11px;font-weight:500">
+              <div>${c}</div>
+              <div style="margin-top:3px;height:3px;background:var(--border);border-radius:2px;overflow:hidden"><div style="height:100%;width:${Math.round(v/maxR*100)}%;background:var(--green);border-radius:2px"></div></div>
+            </td>
+            <td style="padding:8px 12px;font-size:11px;font-family:var(--mono);font-weight:700;color:var(--green);text-align:right">${fmtMoeda(v)}</td>
+            <td style="padding:8px 12px;font-size:10px;color:var(--text-3);text-align:right">${Math.round(v/maxR*100)}%</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>`}
     </div>
 
-    <!-- Top categorias -->
-    <div class="card dash-fade" style="animation-delay:.4s">
-      <div style="display:flex;align-items:center;justify-content:space-between">
-        <div class="dash-section-title" style="flex:1">📂 Despesas por Categoria</div>
-        <button class="btn btn-sm" style="background:none;color:var(--text-3);font-size:11px;padding:0;margin-bottom:14px" onclick="go('dre')">Ver DRE →</button>
+    <!-- Top Despesas por Categoria -->
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;overflow:hidden;box-shadow:var(--shadow)">
+      <div style="padding:11px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
+        <span style="font-size:11px;font-weight:700;color:var(--text)">Total por Categoria — Despesas</span>
+        <button onclick="go('dre')" style="font-size:10px;color:var(--accent);background:none;border:none;cursor:pointer;font-weight:600">DRE →</button>
       </div>
-      ${topCat.length===0?`<div style="text-align:center;padding:24px;color:var(--text-3);font-size:13px">Sem despesas no mês atual</div>`:
-      topCat.map(([c,v],i)=>{
-        const cores=['var(--red)','var(--amber)','var(--purple)','var(--accent)'];
-        const pct=Math.round(v/totCat*100);
-        return`<div style="margin-bottom:14px">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px">
-            <div style="display:flex;align-items:center;gap:7px">
-              <div style="width:8px;height:8px;border-radius:2px;background:${cores[i]};flex-shrink:0"></div>
-              <span style="font-size:13px;font-weight:500">${c}</span>
-            </div>
-            <div style="text-align:right">
-              <span style="font-family:var(--mono);font-size:12px;font-weight:600;color:${cores[i]}">${fmtMoeda(v)}</span>
-              <span style="font-size:10px;color:var(--text-3);margin-left:6px">${pct}%</span>
-            </div>
-          </div>
-          <div class="prog-bar"><div class="prog-fill" style="width:${pct}%;background:${cores[i]}"></div></div>
-        </div>`;
-      }).join('')}
+      ${topD.length===0?`<div style="padding:20px;text-align:center;font-size:12px;color:var(--text-3)">Sem dados</div>`:`
+      <table style="width:100%;border-collapse:collapse">
+        <thead><tr style="background:var(--bg)">
+          <th style="padding:7px 12px;font-size:9px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em;border-bottom:1px solid var(--border);text-align:left">Categoria</th>
+          <th style="padding:7px 12px;font-size:9px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em;border-bottom:1px solid var(--border);text-align:right">Total</th>
+          <th style="padding:7px 12px;font-size:9px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em;border-bottom:1px solid var(--border);text-align:right">%</th>
+        </tr></thead>
+        <tbody>${topD.map(([c,v])=>`
+          <tr style="border-bottom:1px solid var(--border)">
+            <td style="padding:8px 12px;font-size:11px;font-weight:500">
+              <div>${c}</div>
+              <div style="margin-top:3px;height:3px;background:var(--border);border-radius:2px;overflow:hidden"><div style="height:100%;width:${Math.round(v/maxD*100)}%;background:var(--red);border-radius:2px"></div></div>
+            </td>
+            <td style="padding:8px 12px;font-size:11px;font-family:var(--mono);font-weight:700;color:var(--red);text-align:right">${fmtMoeda(v)}</td>
+            <td style="padding:8px 12px;font-size:10px;color:var(--text-3);text-align:right">${Math.round(v/maxD*100)}%</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>`}
+    </div>
+
+    <!-- Próximos vencimentos -->
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;overflow:hidden;box-shadow:var(--shadow)">
+      <div style="padding:11px 14px;border-bottom:1px solid var(--border)">
+        <span style="font-size:11px;font-weight:700;color:var(--text)">Próximos Vencimentos — 7 dias</span>
+      </div>
+      ${proxVenc.length===0?`<div style="padding:24px;text-align:center;color:var(--text-3);font-size:12px">✅ Nada vencendo nos<br>próximos 7 dias</div>`:`
+      <table style="width:100%;border-collapse:collapse">
+        <thead><tr style="background:var(--bg)">
+          <th style="padding:7px 12px;font-size:9px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em;border-bottom:1px solid var(--border);text-align:left">Descrição</th>
+          <th style="padding:7px 12px;font-size:9px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em;border-bottom:1px solid var(--border);text-align:right">Valor</th>
+          <th style="padding:7px 12px;font-size:9px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em;border-bottom:1px solid var(--border);text-align:center">Data</th>
+        </tr></thead>
+        <tbody>${proxVenc.map(l=>`
+          <tr style="border-bottom:1px solid var(--border);cursor:pointer" onclick="go('${l._t==='rec'?'receber':'pagar'}')" onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background=''">
+            <td style="padding:8px 12px;font-size:11px;font-weight:500">
+              <span style="width:5px;height:5px;border-radius:50%;background:${l._t==='rec'?'var(--green)':'var(--red)'};display:inline-block;margin-right:6px"></span>${l.descricao.length>18?l.descricao.slice(0,18)+'…':l.descricao}
+            </td>
+            <td style="padding:8px 12px;font-size:11px;font-family:var(--mono);font-weight:700;color:${l._t==='rec'?'var(--green)':'var(--red)'};text-align:right">${fmtMoeda(l.valor)}</td>
+            <td style="padding:8px 12px;font-size:10px;font-family:var(--mono);color:${l.vencimento===hoje?'var(--amber)':'var(--text-3)'};font-weight:${l.vencimento===hoje?700:400};text-align:center">${l.vencimento===hoje?'Hoje':fmtData(l.vencimento)}</td>
+          </tr>`).join('')}</tbody>
+      </table>`}
     </div>
 
     <!-- Contas -->
-    <div class="card dash-fade" style="animation-delay:.45s">
-      <div style="display:flex;align-items:center;justify-content:space-between">
-        <div class="dash-section-title" style="flex:1">💳 Contas</div>
-        <button class="btn btn-sm" style="background:none;color:var(--text-3);font-size:11px;padding:0;margin-bottom:14px" onclick="go('contas')">Gerenciar →</button>
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;overflow:hidden;box-shadow:var(--shadow)">
+      <div style="padding:11px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
+        <span style="font-size:11px;font-weight:700;color:var(--text)">Contas</span>
+        <button onclick="go('contas')" style="font-size:10px;color:var(--accent);background:none;border:none;cursor:pointer;font-weight:600">Ver →</button>
       </div>
-      ${CONTAS.length===0?`<div style="text-align:center;padding:20px;color:var(--text-3);font-size:12px">Nenhuma conta</div>`:
-      CONTAS.map(c=>`
-        <div class="conta-row">
-          <div>
-            <div style="font-size:12px;font-weight:600;color:var(--text)">${c.nome}</div>
-            <div style="font-size:10px;color:var(--text-3);text-transform:capitalize">${c.tipo||'conta'}</div>
-          </div>
-          <span style="font-family:var(--mono);font-size:13px;font-weight:700;color:${parseFloat(c.saldo_atual)>=0?'var(--green)':'var(--red)'}">${fmtMoeda(c.saldo_atual)}</span>
-        </div>`).join('')}
-      <div style="border-top:1px solid var(--border);margin-top:10px;padding-top:10px;display:flex;justify-content:space-between;align-items:center">
-        <span style="font-size:11px;font-weight:600;color:var(--text-3)">TOTAL</span>
-        <span style="font-family:var(--mono);font-size:14px;font-weight:700;color:${saldoTotal>=0?'var(--accent)':'var(--red)'}">${fmtMoeda(saldoTotal)}</span>
-      </div>
+      ${CONTAS.length===0?`<div style="padding:20px;text-align:center;font-size:12px;color:var(--text-3)">Sem contas</div>`:`
+      <div style="padding:8px 0">
+        ${CONTAS.map(c=>`
+          <div style="padding:8px 14px;border-bottom:1px solid var(--border)">
+            <div style="font-size:11px;font-weight:600;color:var(--text);margin-bottom:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${c.nome}</div>
+            <div style="font-size:13px;font-weight:700;font-family:var(--mono);color:${parseFloat(c.saldo_atual)>=0?'var(--green)':'var(--red)'}">${fmtMoeda(c.saldo_atual)}</div>
+          </div>`).join('')}
+        <div style="padding:10px 14px;display:flex;justify-content:space-between;align-items:center;background:var(--bg)">
+          <span style="font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase">Total</span>
+          <span style="font-size:14px;font-weight:700;font-family:var(--mono);color:${saldoTotal>=0?'var(--accent)':'var(--red)'}">${fmtMoeda(saldoTotal)}</span>
+        </div>
+      </div>`}
     </div>
-  </div>
 
-  <!-- Últimos lançamentos -->
-  <div class="card dash-fade" style="animation-delay:.5s">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
-      <div class="dash-section-title" style="flex:1;margin-bottom:0">🕐 Últimos Lançamentos</div>
-      <div style="display:flex;gap:6px">
-        <button class="btn btn-sm btn-green" onclick="go('receber')">+ Receita</button>
-        <button class="btn btn-sm btn-red" onclick="go('pagar')">+ Despesa</button>
-      </div>
-    </div>
-    ${ults.length===0?`<div class="empty-state" style="padding:32px"><div class="empty-icon">📋</div><h3>Nenhum lançamento ainda</h3><p>Adicione receitas ou despesas para visualizar aqui.</p></div>`:`
-    <table>
-      <thead><tr><th>Descrição</th><th>Tipo</th><th>Vencimento</th><th style="text-align:right">Valor</th><th>Status</th></tr></thead>
-      <tbody>${ults.map(l=>`<tr onclick="go('${l._t==='rec'?'receber':'pagar'}')">
-        <td style="font-weight:500;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${l.descricao}</td>
-        <td><span class="tag-pill" style="background:${l._t==='rec'?'var(--green-lt)':'var(--red-lt)'};color:${l._t==='rec'?'var(--green)':'var(--red)'}">${l._t==='rec'?'↑ Receita':'↓ Despesa'}</span></td>
-        <td style="font-family:var(--mono);font-size:12px;color:var(--text-2)">${fmtData(l.vencimento)}</td>
-        <td style="text-align:right;font-family:var(--mono);font-weight:700;color:${l._t==='rec'?'var(--green)':'var(--red)'}">${fmtMoeda(l.valor)}</td>
-        <td>${badgeStatus(l.status)}</td>
-      </tr>`).join('')}</tbody>
-    </table>`}
+  </div>
   </div>`;
 }
 

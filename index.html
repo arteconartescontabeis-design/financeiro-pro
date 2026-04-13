@@ -644,6 +644,10 @@ tbody td { padding: 11px 16px; font-size: 13px; }
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/></svg>
         Conciliação
       </button>
+      <button class="nav-item" onclick="go('documentos')" data-page="documentos">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 6h-2.18c.07-.44.18-.88.18-1.36C18 2.54 15.46 0 12 0S6 2.54 6 4.64c0 .48.11.92.18 1.36H4c-1.11 0-2 .89-2 2v14c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V8c0-1.11-.89-2-2-2zM12 2c1.36 0 2 .64 2 2.64 0 .36-.5 2.36-2 2.36S10 5 10 4.64C10 2.64 10.64 2 12 2zm0 9c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3zm6 10H6v-1.05C6 19.27 8.67 18 12 18s6 1.27 6 2.95V21z"/></svg>
+        Documentos
+      </button>
       <button class="nav-item" onclick="go('contas')" data-page="contas">
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 10v7h3v-7H4zm6.5 0v7h3v-7h-3zM2 22h19v-3H2v3zm15-12v7h3v-7h-3zM11.5 1L2 6v2h19V6l-9.5-5z"/></svg>
         Caixa / Bancos
@@ -746,7 +750,7 @@ const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsI
 
 // ── ESTADO ────────────────────────────────────────────────────
 const APP = { token: null, user: null, tenant: null, page: 'dashboard' };
-let CONTAS = [], CATEGORIAS = [], CLIENTES = [], FORNECEDORES = [], RECEITAS = [], DESPESAS = [], METAS = [], RECORRENCIAS = [], IMPOSTOS = [];
+let CONTAS = [], CATEGORIAS = [], CLIENTES = [], FORNECEDORES = [], RECEITAS = [], DESPESAS = [], METAS = [], RECORRENCIAS = [], IMPOSTOS = [], ANEXOS = [];
 
 // ── SUPABASE ──────────────────────────────────────────────────
 const $id = id => document.getElementById(id);
@@ -888,6 +892,7 @@ async function carregarDados() {
   METAS = metas || []; RECORRENCIAS = recorr || [];
   // Impostos carregado separado (tabela pode não existir)
   try { IMPOSTOS = await supa('GET', 'fin_impostos', { params: { tenant_id: `eq.${tid}`, select: '*', order: 'vencimento.desc', limit: 200 } }); } catch(_) { IMPOSTOS = []; }
+  try { ANEXOS = await supa('GET', 'fin_anexos', { params: { tenant_id: `eq.${tid}`, select: '*', order: 'criado_em.desc' } }); } catch(_) { ANEXOS = []; }
 }
 
 function mostrarApp() {
@@ -1041,6 +1046,7 @@ const PAGES = {
   recorrencias: { title: 'Recorrências',    render: renderRecorrencias },
   impostos:     { title: 'Impostos',        render: renderImpostos },
   conciliacao:  { title: 'Conciliação',     render: renderConciliacao },
+  documentos:   { title: 'Documentos',       render: renderDocumentos },
   contas:       { title: 'Caixa / Bancos',  render: renderContas },
   fluxo:        { title: 'Fluxo de Caixa',  render: renderFluxo },
   dre:          { title: 'DRE',             render: renderDRE },
@@ -1843,7 +1849,8 @@ function editarReceita(id, e) {
         ${CONTAS.map(c=>`<option value="${c.id}" ${r.conta_id===c.id?'selected':''}>${c.nome}</option>`).join('')}
       </select></div>
       <div class="form-field full"><label class="form-label">Observação</label><input class="form-input" id="er-obs" value="${r.observacao||''}"></div>
-    </div>`,
+    </div>
+    <div id="widget-anexos-${id}">${htmlWidgetAnexos('receita', id)}</div>`,
     `<button class="btn btn-outline" onclick="closeModal()">Cancelar</button>
      <button class="btn btn-gold" onclick="salvarEdicaoReceita('${id}')">Salvar alterações</button>`
   );
@@ -2053,7 +2060,8 @@ function editarDespesa(id, e) {
         ${CONTAS.map(c=>`<option value="${c.id}" ${d.conta_id===c.id?'selected':''}>${c.nome}</option>`).join('')}
       </select></div>
       <div class="form-field full"><label class="form-label">Observação</label><input class="form-input" id="ed-obs" value="${d.observacao||''}"></div>
-    </div>`,
+    </div>
+    <div id="widget-anexos-${id}">${htmlWidgetAnexos('despesa', id)}</div>`,
     `<button class="btn btn-outline" onclick="closeModal()">Cancelar</button>
      <button class="btn btn-gold" onclick="salvarEdicaoDespesa('${id}')">Salvar alterações</button>`
   );
@@ -3782,6 +3790,506 @@ function importarExtrato(input) {
   input.value = '';
 }
 
+
+// ── DOCUMENTOS ────────────────────────────────────────────────
+/*
+  SQL (já criado via instruções):
+  CREATE TABLE IF NOT EXISTS fin_anexos (
+    id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id    uuid NOT NULL,
+    tipo_ref     text NOT NULL,
+    ref_id       uuid NOT NULL,
+    nome         text NOT NULL,
+    tipo_arquivo text,
+    storage_path text NOT NULL,
+    tamanho      int,
+    criado_em    timestamptz DEFAULT now()
+  );
+  Bucket Supabase Storage: fin-documentos (privado)
+*/
+
+// ── Storage helpers ───────────────────────────────────────────
+async function uploadStorage(path, file) {
+  const res = await fetch(`${SUPA_URL}/storage/v1/object/fin-documentos/${path}`, {
+    method: 'POST',
+    headers: {
+      'apikey': SUPA_KEY,
+      'Authorization': `Bearer ${APP.token}`,
+      'Content-Type': file.type || 'application/octet-stream',
+      'x-upsert': 'true',
+    },
+    body: file,
+  });
+  if (!res.ok) { const e = await res.text(); throw new Error(e); }
+  return path;
+}
+
+async function getStorageUrl(path) {
+  // URL pré-assinada válida por 1 hora
+  const res = await fetch(`${SUPA_URL}/storage/v1/object/sign/fin-documentos/${path}`, {
+    method: 'POST',
+    headers: {
+      'apikey': SUPA_KEY,
+      'Authorization': `Bearer ${APP.token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ expiresIn: 3600 }),
+  });
+  if (!res.ok) throw new Error('Erro ao gerar URL');
+  const data = await res.json();
+  return `${SUPA_URL}/storage/v1${data.signedURL}`;
+}
+
+async function deleteStorage(path) {
+  await fetch(`${SUPA_URL}/storage/v1/object/fin-documentos/${path}`, {
+    method: 'DELETE',
+    headers: { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${APP.token}` },
+  });
+}
+
+// ── Upload de anexo a um lançamento ───────────────────────────
+async function anexarDocumento(tipoRef, refId, file) {
+  const ext  = file.name.split('.').pop();
+  const path = `${APP.user.tenant_id}/${tipoRef}/${refId}/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g,'_')}`;
+  await uploadStorage(path, file);
+  await supa('POST', 'fin_anexos', { body: {
+    tenant_id:    APP.user.tenant_id,
+    tipo_ref:     tipoRef,
+    ref_id:       refId,
+    nome:         file.name,
+    tipo_arquivo: file.type,
+    storage_path: path,
+    tamanho:      file.size,
+  }});
+  await carregarDados();
+  toast(`Documento "${file.name}" anexado!`, 'success');
+}
+
+async function verAnexo(path) {
+  try {
+    const url = await getStorageUrl(path);
+    window.open(url, '_blank');
+  } catch(e) { toast('Erro ao abrir documento: ' + e.message, 'error'); }
+}
+
+async function excluirAnexo(id, path) {
+  if (!confirm('Excluir este documento?')) return;
+  try {
+    await supa('DELETE', 'fin_anexos', { params: { id: `eq.${id}` } });
+    await deleteStorage(path);
+    await carregarDados();
+    toast('Documento excluído.', 'success');
+    renderDocumentos();
+  } catch(e) { toast('Erro: ' + e.message, 'error'); }
+}
+
+function fmtTamanho(bytes) {
+  if (!bytes) return '—';
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024*1024) return (bytes/1024).toFixed(1) + ' KB';
+  return (bytes/1024/1024).toFixed(1) + ' MB';
+}
+
+function iconeArquivo(tipo) {
+  if (!tipo) return '📄';
+  if (tipo.includes('pdf'))   return '📕';
+  if (tipo.includes('image')) return '🖼️';
+  if (tipo.includes('xml'))   return '📋';
+  if (tipo.includes('sheet') || tipo.includes('excel') || tipo.includes('csv')) return '📊';
+  if (tipo.includes('word') || tipo.includes('document')) return '📝';
+  return '📄';
+}
+
+// Widget de anexos para uso nos modais de receita/despesa
+function htmlWidgetAnexos(tipoRef, refId) {
+  const anexos = ANEXOS.filter(a => a.tipo_ref===tipoRef && a.ref_id===refId);
+  return `
+    <div style="margin-top:14px;border-top:1px solid var(--border);padding-top:14px">
+      <div style="font-size:10.5px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">Documentos Anexados</div>
+      ${anexos.length===0
+        ? `<div style="font-size:12px;color:var(--text-3);margin-bottom:10px">Nenhum documento anexado.</div>`
+        : `<div style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px">
+            ${anexos.map(a=>`
+              <div style="display:flex;align-items:center;gap:8px;padding:7px 10px;background:var(--surface-2);border-radius:8px;border:1px solid var(--border)">
+                <span style="font-size:16px;flex-shrink:0">${iconeArquivo(a.tipo_arquivo)}</span>
+                <div style="flex:1;min-width:0">
+                  <div style="font-size:12px;font-weight:500;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${a.nome}</div>
+                  <div style="font-size:10.5px;color:var(--text-3)">${fmtTamanho(a.tamanho)} · ${fmtData(a.criado_em?.slice(0,10))}</div>
+                </div>
+                <button onclick="verAnexo('${a.storage_path}')" style="padding:4px 10px;border-radius:7px;border:1px solid var(--border-lt);background:none;color:var(--gold);font-size:11px;cursor:pointer;font-family:var(--font);font-weight:600">Ver</button>
+                <button onclick="excluirAnexoModal('${a.id}','${a.storage_path}')" style="padding:4px 10px;border-radius:7px;border:1px solid rgba(192,57,43,.2);background:var(--red-lt);color:var(--red);font-size:11px;cursor:pointer;font-family:var(--font)">✕</button>
+              </div>`).join('')}
+          </div>`}
+      <label style="display:flex;align-items:center;gap:8px;padding:9px 12px;background:var(--gold-lt);border:1.5px dashed var(--gold);border-radius:9px;cursor:pointer;font-size:12px;color:var(--gold);font-weight:600">
+        📎 Clique para anexar documento (PDF, imagem, XML)
+        <input type="file" accept=".pdf,.png,.jpg,.jpeg,.xml,.csv,.xlsx,.doc,.docx" style="display:none"
+          onchange="handleAnexoUpload(this,'${tipoRef}','${refId}')">
+      </label>
+    </div>`;
+}
+
+async function handleAnexoUpload(input, tipoRef, refId) {
+  const file = input.files[0]; if (!file) return;
+  if (file.size > 10*1024*1024) { toast('Arquivo muito grande. Máximo 10MB.', 'error'); return; }
+  try {
+    toast('Enviando...', 'default', 10000);
+    await anexarDocumento(tipoRef, refId, file);
+    // Atualiza widget dentro do modal
+    const widget = document.getElementById(`widget-anexos-${refId}`);
+    if (widget) widget.outerHTML = htmlWidgetAnexos(tipoRef, refId);
+  } catch(e) { toast('Erro no upload: ' + e.message, 'error'); }
+  input.value = '';
+}
+
+async function excluirAnexoModal(id, path) {
+  if (!confirm('Excluir este documento?')) return;
+  try {
+    await supa('DELETE', 'fin_anexos', { params: { id: `eq.${id}` } });
+    await deleteStorage(path);
+    await carregarDados();
+    toast('Documento excluído.', 'success');
+    // Fecha modal e reabre não é necessário, mas recarrega a lista
+  } catch(e) { toast('Erro: ' + e.message, 'error'); }
+}
+
+// ── PÁGINA CENTRAL DE DOCUMENTOS ──────────────────────────────
+function renderDocumentos() {
+  const filtroTipo = window._docFiltro || '';
+  const buscaDoc   = window._docBusca  || '';
+
+  $id('topbar-actions').innerHTML = `
+    <button class="btn btn-sm" onclick="renderImportarNFe()" style="background:var(--surface-2);color:var(--text-2);border:1px solid var(--border-lt)">📋 XML NF-e</button>
+    <button class="btn btn-sm" onclick="renderImportarExtrato()" style="background:var(--surface-2);color:var(--text-2);border:1px solid var(--border-lt)">📂 Extrato OFX/CSV</button>`;
+
+  let lista = [...ANEXOS];
+  if (filtroTipo) lista = lista.filter(a => a.tipo_ref === filtroTipo);
+  if (buscaDoc)   lista = lista.filter(a => a.nome.toLowerCase().includes(buscaDoc.toLowerCase()));
+  lista.sort((a,b) => (b.criado_em||'').localeCompare(a.criado_em||''));
+
+  // Cruzar com nomes dos lançamentos
+  function getNomeLanc(a) {
+    if (a.tipo_ref==='receita') return (RECEITAS.find(r=>r.id===a.ref_id)||{}).descricao||'—';
+    if (a.tipo_ref==='despesa') return (DESPESAS.find(d=>d.id===a.ref_id)||{}).descricao||'—';
+    return '—';
+  }
+
+  const totalSize = ANEXOS.reduce((s,a)=>s+(a.tamanho||0),0);
+
+  $id('page-content').innerHTML = `
+  <div style="display:flex;flex-direction:column;gap:16px">
+
+  <!-- KPIs -->
+  <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr)">
+    <div class="kpi-card k-gold"><div class="kpi-label">Total de Documentos</div><div class="kpi-value" style="color:var(--gold)">${ANEXOS.length}</div></div>
+    <div class="kpi-card"><div class="kpi-label">Receitas c/ doc.</div><div class="kpi-value">${ANEXOS.filter(a=>a.tipo_ref==='receita').length}</div></div>
+    <div class="kpi-card"><div class="kpi-label">Despesas c/ doc.</div><div class="kpi-value">${ANEXOS.filter(a=>a.tipo_ref==='despesa').length}</div></div>
+    <div class="kpi-card"><div class="kpi-label">Espaço utilizado</div><div class="kpi-value" style="font-size:18px">${fmtTamanho(totalSize)}</div></div>
+  </div>
+
+  <!-- Filtros -->
+  <div style="${filterBarStyle()}">
+    <input style="${inputFiltroStyle()};flex:1;min-width:180px" placeholder="🔍 Buscar por nome do arquivo…"
+      value="${buscaDoc}" oninput="window._docBusca=this.value;renderDocumentos()">
+    <select style="${selectFiltroStyle()}" onchange="window._docFiltro=this.value;renderDocumentos()">
+      <option value="" ${!filtroTipo?'selected':''}>Todos os tipos</option>
+      <option value="receita" ${filtroTipo==='receita'?'selected':''}>Receitas</option>
+      <option value="despesa" ${filtroTipo==='despesa'?'selected':''}>Despesas</option>
+    </select>
+    ${filtroTipo||buscaDoc?`<button onclick="window._docFiltro='';window._docBusca='';renderDocumentos()" style="padding:6px 12px;border-radius:7px;border:1px solid var(--border-lt);background:none;color:var(--text-3);font-size:11.5px;cursor:pointer;font-family:var(--font)">✕ Limpar</button>`:''}
+    <span style="font-size:11px;color:var(--text-3);margin-left:auto">${lista.length} documento(s)</span>
+  </div>
+
+  ${lista.length===0
+    ? `<div class="empty-state"><div class="empty-icon">📁</div><h3>Nenhum documento encontrado</h3><p style="font-size:13px;color:var(--text-3);margin-top:6px">Anexe documentos abrindo um lançamento em A Receber ou A Pagar e clicando em "📎 Anexar documento".</p></div>`
+    : `<div class="card" style="padding:0;overflow:hidden">
+        <table>
+          <thead><tr>
+            <th>Documento</th>
+            <th>Lançamento</th>
+            <th>Tipo</th>
+            <th>Tamanho</th>
+            <th>Data</th>
+            <th></th>
+          </tr></thead>
+          <tbody>
+            ${lista.map(a => `
+              <tr>
+                <td>
+                  <div style="display:flex;align-items:center;gap:8px">
+                    <span style="font-size:18px">${iconeArquivo(a.tipo_arquivo)}</span>
+                    <div>
+                      <div style="font-size:12.5px;font-weight:500;color:var(--text);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${a.nome}</div>
+                      <div style="font-size:10.5px;color:var(--text-3)">${a.tipo_arquivo||'—'}</div>
+                    </div>
+                  </div>
+                </td>
+                <td>
+                  <div style="font-size:12px;color:var(--text-2);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${getNomeLanc(a)}</div>
+                  <span class="badge ${a.tipo_ref==='receita'?'badge-green':'badge-red'}" style="font-size:10px">${a.tipo_ref==='receita'?'Receita':'Despesa'}</span>
+                </td>
+                <td style="color:var(--text-3);font-size:12px">${a.tipo_arquivo?.split('/')[1]?.toUpperCase()||'—'}</td>
+                <td style="font-family:var(--mono);font-size:12px;color:var(--text-2)">${fmtTamanho(a.tamanho)}</td>
+                <td style="font-family:var(--mono);font-size:11px;color:var(--text-3)">${fmtData(a.criado_em?.slice(0,10))}</td>
+                <td style="white-space:nowrap">
+                  <div style="display:flex;gap:5px">
+                    <button onclick="verAnexo('${a.storage_path}')" class="btn btn-sm" style="padding:4px 10px;font-size:11px;background:var(--gold-lt);color:var(--gold);border:1px solid rgba(26,82,118,.2)">Ver</button>
+                    <button onclick="excluirAnexo('${a.id}','${a.storage_path}')" class="btn btn-sm" style="padding:4px 10px;font-size:11px;background:var(--red-lt);color:var(--red);border:1px solid rgba(192,57,43,.2)">✕</button>
+                  </div>
+                </td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>`}
+
+  <!-- Instrução de uso -->
+  <div style="background:var(--gold-lt);border:1px solid rgba(26,82,118,.2);border-radius:10px;padding:14px 18px;font-size:12px;color:var(--text-2);line-height:1.7">
+    <strong style="color:var(--gold)">Como anexar documentos:</strong>
+    Abra um lançamento em <strong>A Receber</strong> ou <strong>A Pagar</strong> clicando no botão ✏ (editar).
+    No modal de edição, role até a seção <strong>Documentos Anexados</strong> e clique em <strong>📎 Clique para anexar</strong>.
+    Formatos suportados: PDF, imagens (JPG, PNG), XML de NF-e, planilhas Excel/CSV.
+    Tamanho máximo por arquivo: <strong>10 MB</strong>.
+  </div>
+
+  </div>`;
+}
+
+// ── MÓDULO 2: IMPORTAR EXTRATO OFX/CSV → LANÇAMENTOS ──────────
+let _extratoPreview = [];
+
+function renderImportarExtrato() {
+  openModal('Importar Extrato Bancário', `
+    <div style="font-size:12.5px;color:var(--text-2);line-height:1.6;margin-bottom:16px">
+      Importe seu extrato bancário e gere lançamentos automaticamente.
+      Formatos suportados: <strong>OFX</strong> (padrão bancário) e <strong>CSV</strong>.
+    </div>
+    <div style="background:var(--surface-2);border-radius:9px;padding:12px 14px;border:1px solid var(--border);margin-bottom:14px;font-size:11.5px;color:var(--text-3)">
+      <strong style="color:var(--text-2)">Formato CSV esperado:</strong><br>
+      <code style="font-family:var(--mono);font-size:11px">data;descricao;valor</code><br>
+      Ex: <code style="font-family:var(--mono);font-size:11px">2025-04-01;Honorário cliente;5000.00</code>
+    </div>
+    <label style="display:flex;align-items:center;gap:10px;padding:14px;background:var(--gold-lt);border:2px dashed var(--gold);border-radius:9px;cursor:pointer;font-size:13px;color:var(--gold);font-weight:600;justify-content:center">
+      📂 Clique para selecionar o arquivo OFX ou CSV
+      <input type="file" accept=".ofx,.csv,.txt" style="display:none" onchange="processarArquivoExtrato(this)">
+    </label>
+    <div id="extrato-preview"></div>`,
+    `<button class="btn btn-outline" onclick="closeModal()">Fechar</button>
+     <button class="btn btn-gold" id="btn-importar-extrato" style="display:none" onclick="confirmarImportacaoExtrato()">Importar lançamentos</button>`
+  );
+}
+
+function processarArquivoExtrato(input) {
+  const file = input.files[0]; if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    const text = e.target.result;
+    let items = [];
+
+    // Tentar OFX
+    if (file.name.toLowerCase().endsWith('.ofx') || text.includes('<OFX>') || text.includes('<STMTTRN>')) {
+      items = parseOFX(text);
+    } else {
+      // CSV
+      const linhas = text.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
+      for (const linha of linhas) {
+        const sep = linha.includes(';') ? ';' : ',';
+        const cols = linha.split(sep).map(c=>c.replace(/"/g,'').trim());
+        if (cols.length < 3) continue;
+        const valor = parseFloat(cols[2].replace(',','.'));
+        if (isNaN(valor)) continue;
+        const data = cols[0].length===10 ? cols[0] : null;
+        if (!data) continue;
+        items.push({ data, descricao: cols[1]||'—', valor, tipo: valor>=0?'receita':'despesa' });
+      }
+    }
+
+    if (!items.length) { document.getElementById('extrato-preview').innerHTML = '<div style="color:var(--red);font-size:12px;margin-top:12px">Nenhum item encontrado. Verifique o formato do arquivo.</div>'; return; }
+
+    _extratoPreview = items;
+    const preview = document.getElementById('extrato-preview');
+    const totalR = items.filter(i=>i.tipo==='receita').reduce((s,i)=>s+i.valor,0);
+    const totalD = items.filter(i=>i.tipo==='despesa').reduce((s,i)=>s+Math.abs(i.valor),0);
+
+    preview.innerHTML = `
+      <div style="margin-top:14px">
+        <div style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap">
+          <span style="font-size:12px;background:var(--green-lt);color:var(--green);padding:4px 10px;border-radius:20px;font-weight:600">${items.filter(i=>i.tipo==='receita').length} entradas · ${fmtMoeda(totalR)}</span>
+          <span style="font-size:12px;background:var(--red-lt);color:var(--red);padding:4px 10px;border-radius:20px;font-weight:600">${items.filter(i=>i.tipo==='despesa').length} saídas · ${fmtMoeda(totalD)}</span>
+        </div>
+        <div style="max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:9px">
+          <table style="width:100%;border-collapse:collapse">
+            <thead><tr style="background:var(--surface-2)">
+              <th style="padding:7px 12px;text-align:left;font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase">Data</th>
+              <th style="padding:7px 12px;text-align:left;font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase">Descrição</th>
+              <th style="padding:7px 12px;text-align:right;font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase">Valor</th>
+              <th style="padding:7px 12px;text-align:center;font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase">Tipo</th>
+            </tr></thead>
+            <tbody>
+              ${items.map(i=>`<tr style="border-bottom:1px solid var(--border)">
+                <td style="padding:6px 12px;font-family:var(--mono);font-size:11px;color:var(--text-2)">${i.data}</td>
+                <td style="padding:6px 12px;font-size:12px;color:var(--text);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${i.descricao}</td>
+                <td style="padding:6px 12px;font-family:var(--mono);font-weight:700;text-align:right;color:${i.tipo==='receita'?'var(--green)':'var(--red)'}">${fmtMoeda(Math.abs(i.valor))}</td>
+                <td style="padding:6px 12px;text-align:center"><span class="badge ${i.tipo==='receita'?'badge-green':'badge-red'}">${i.tipo==='receita'?'Receita':'Despesa'}</span></td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+        <div style="margin-top:10px;font-size:11.5px;color:var(--text-3)">Todos os lançamentos serão criados como <strong>Pendentes</strong>. Você pode editar ou excluir depois.</div>
+      </div>`;
+    document.getElementById('btn-importar-extrato').style.display = 'inline-flex';
+  };
+  reader.readAsText(file, 'UTF-8');
+  input.value = '';
+}
+
+function parseOFX(text) {
+  const items = [];
+  const regex = /<STMTTRN>([\s\S]*?)<\/STMTTRN>/g;
+  let m;
+  while ((m = regex.exec(text)) !== null) {
+    const bloco = m[1];
+    const getTag = (tag) => { const r = new RegExp('<'+tag+'>([^<\\r\\n]+)','i').exec(bloco); return r?r[1].trim():''; };
+    const dtpost = getTag('DTPOSTED');
+    const trnamt = getTag('TRNAMT');
+    const memo   = getTag('MEMO') || getTag('NAME') || '—';
+    if (!dtpost || !trnamt) continue;
+    // Converter data OFX (YYYYMMDD) para ISO
+    const data = dtpost.length>=8 ? `${dtpost.slice(0,4)}-${dtpost.slice(4,6)}-${dtpost.slice(6,8)}` : null;
+    if (!data) continue;
+    const valor = parseFloat(trnamt.replace(',','.'));
+    if (isNaN(valor)) continue;
+    items.push({ data, descricao: memo, valor, tipo: valor>=0?'receita':'despesa' });
+  }
+  return items;
+}
+
+async function confirmarImportacaoExtrato() {
+  if (!_extratoPreview.length) return;
+  const btn = document.getElementById('btn-importar-extrato');
+  btn.disabled = true; btn.textContent = 'Importando...';
+  let ok = 0, err = 0;
+  for (const item of _extratoPreview) {
+    try {
+      const body = {
+        tenant_id:  APP.user.tenant_id,
+        descricao:  item.descricao,
+        valor:      Math.abs(item.valor),
+        vencimento: item.data,
+        status:     'pendente',
+        observacao: 'Importado do extrato bancário',
+      };
+      if (item.tipo==='receita') await supa('POST', 'fin_receitas', { body });
+      else                       await supa('POST', 'fin_despesas', { body });
+      ok++;
+    } catch(_) { err++; }
+  }
+  closeModal();
+  await carregarDados();
+  toast(`${ok} lançamento(s) importado(s)${err?' · '+err+' erro(s)':''}!`, ok>0?'success':'error');
+  _extratoPreview = [];
+}
+
+// ── MÓDULO 3: IMPORTAR XML NF-e ───────────────────────────────
+function renderImportarNFe() {
+  openModal('Importar XML de Nota Fiscal (NF-e)', `
+    <div style="font-size:12.5px;color:var(--text-2);line-height:1.6;margin-bottom:16px">
+      Importe o XML da NF-e padrão SEFAZ e crie a receita automaticamente com os dados extraídos.
+    </div>
+    <label style="display:flex;align-items:center;gap:10px;padding:14px;background:var(--gold-lt);border:2px dashed var(--gold);border-radius:9px;cursor:pointer;font-size:13px;color:var(--gold);font-weight:600;justify-content:center">
+      📋 Clique para selecionar o arquivo XML da NF-e
+      <input type="file" accept=".xml" style="display:none" onchange="processarXMLNFe(this)">
+    </label>
+    <div id="nfe-preview"></div>`,
+    `<button class="btn btn-outline" onclick="closeModal()">Fechar</button>
+     <button class="btn btn-gold" id="btn-importar-nfe" style="display:none" onclick="confirmarImportacaoNFe()">Criar receita</button>`
+  );
+}
+
+let _nfeData = null;
+
+function processarXMLNFe(input) {
+  const file = input.files[0]; if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      const parser = new DOMParser();
+      const doc    = parser.parseFromString(e.target.result, 'text/xml');
+      const get    = (tag) => doc.getElementsByTagName(tag)[0]?.textContent?.trim() || '';
+
+      const nNF    = get('nNF');
+      const dhEmi  = get('dhEmi') || get('dEmi');
+      const data   = dhEmi ? dhEmi.slice(0,10) : today();
+      const vNF    = get('vNF');
+      const xNome  = get('xNome'); // emitente
+      const CNPJ   = get('CNPJ');
+      const xMun   = get('xMun');
+      const desc   = `NF-e nº ${nNF} — ${xNome}`;
+
+      if (!vNF) { document.getElementById('nfe-preview').innerHTML = '<div style="color:var(--red);font-size:12px;margin-top:12px">XML inválido ou não é uma NF-e padrão SEFAZ.</div>'; return; }
+
+      _nfeData = { desc, valor: parseFloat(vNF), data, nNF, xNome, CNPJ, xMun };
+
+      document.getElementById('nfe-preview').innerHTML = `
+        <div style="margin-top:14px;background:var(--surface-2);border-radius:9px;padding:14px;border:1px solid var(--border)">
+          <div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:10px">Dados extraídos da NF-e</div>
+          ${[
+            ['Número', nNF],
+            ['Data de emissão', fmtData(data)],
+            ['Emitente', xNome],
+            ['CNPJ emitente', CNPJ],
+            ['Município', xMun],
+            ['Valor total', fmtMoeda(parseFloat(vNF))],
+          ].map(([l,v])=>`
+            <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border)">
+              <span style="font-size:11.5px;color:var(--text-3)">${l}</span>
+              <strong style="font-size:12px;color:var(--text)">${v||'—'}</strong>
+            </div>`).join('')}
+          <div style="margin-top:12px">
+            <label class="form-label">Categoria (opcional)</label>
+            <select class="form-select" id="nfe-cat" style="margin-top:4px">
+              <option value="">— Nenhuma —</option>
+              ${CATEGORIAS.filter(c=>c.tipo==='receita'||c.tipo==='ambos').map(c=>`<option value="${c.id}">${c.icone||''} ${c.nome}</option>`).join('')}
+            </select>
+          </div>
+          <div style="margin-top:10px">
+            <label class="form-label">Cliente (opcional)</label>
+            <select class="form-select" id="nfe-cli" style="margin-top:4px">
+              <option value="">— Nenhum —</option>
+              ${CLIENTES.map(c=>`<option value="${c.id}">${c.nome}</option>`).join('')}
+            </select>
+          </div>
+        </div>`;
+      document.getElementById('btn-importar-nfe').style.display = 'inline-flex';
+    } catch(err) {
+      document.getElementById('nfe-preview').innerHTML = `<div style="color:var(--red);font-size:12px;margin-top:12px">Erro ao processar XML: ${err.message}</div>`;
+    }
+  };
+  reader.readAsText(file, 'UTF-8');
+  input.value = '';
+}
+
+async function confirmarImportacaoNFe() {
+  if (!_nfeData) return;
+  const btn = document.getElementById('btn-importar-nfe');
+  btn.disabled = true; btn.textContent = 'Criando...';
+  try {
+    await supa('POST', 'fin_receitas', { body: {
+      tenant_id:    APP.user.tenant_id,
+      descricao:    _nfeData.desc,
+      valor:        _nfeData.valor,
+      vencimento:   _nfeData.data,
+      status:       'pendente',
+      categoria_id: document.getElementById('nfe-cat')?.value || null,
+      cliente_id:   document.getElementById('nfe-cli')?.value || null,
+      observacao:   `NF-e importada · CNPJ ${_nfeData.CNPJ} · ${_nfeData.xMun}`,
+    }});
+    closeModal();
+    await carregarDados();
+    toast(`Receita criada: ${_nfeData.desc} — ${fmtMoeda(_nfeData.valor)}`, 'success');
+    _nfeData = null;
+    go('receber');
+  } catch(e) { toast('Erro: ' + e.message, 'error'); btn.disabled=false; btn.textContent='Criar receita'; }
+}
+
 // ── PDF ENGINE (print window) ─────────────────────────────────
 function pdfStyles() {
   return `
@@ -4516,7 +5024,7 @@ const _guardedFns = ['salvarReceita','baixarReceita','editarReceita','salvarEdic
   'salvarDespesa','baixarDespesa','editarDespesa','salvarEdicaoDespesa','excluirDespesa',
   'salvarConta','salvarCliente','salvarFornecedor','salvarCategoria',
   'salvarMeta','excluirMeta','salvarRecorrencia','toggleRecorrencia','excluirRecorrencia',
-  'salvarImposto','pagarImposto','excluirImposto','editarCliente','salvarEdicaoCliente','excluirCliente','editarFornecedor','salvarEdicaoFornecedor','excluirFornecedor','editarConta','salvarEdicaoConta','excluirConta','editarMeta','salvarEdicaoMeta',
+  'salvarImposto','pagarImposto','excluirImposto','editarCliente','salvarEdicaoCliente','excluirCliente','editarFornecedor','salvarEdicaoFornecedor','excluirFornecedor','editarConta','salvarEdicaoConta','excluirConta','editarMeta','salvarEdicaoMeta','anexarDocumento','confirmarImportacaoExtrato','confirmarImportacaoNFe',
   'modalNovaReceita','modalNovaDespesa','modalNovaConta','modalNovoCliente',
   'modalNovoFornecedor','modalNovaCategoria','modalNovaMeta','modalNovaRecorrencia','modalNovoImposto'];
 

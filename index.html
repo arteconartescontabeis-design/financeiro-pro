@@ -2729,8 +2729,11 @@ async function salvarCategoria() {
 
 // ── CONFIGURAÇÕES ─────────────────────────────────────────────
 function renderConfiguracoes() {
+  const apiKey = localStorage.getItem('artecon_claude_key') || '';
   $id('page-content').innerHTML = `
-  <div class="card" style="max-width:560px">
+  <div style="display:flex;flex-direction:column;gap:16px;max-width:560px">
+
+  <div class="card">
     <strong style="font-size:14px;display:block;margin-bottom:16px;color:var(--text)">Dados da Empresa</strong>
     <div style="display:flex;flex-direction:column;gap:12px">
       <div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border)">
@@ -2765,7 +2768,56 @@ function renderConfiguracoes() {
     <hr class="divider">
     <strong style="font-size:14px;display:block;margin-bottom:10px;color:var(--text)">Banco de Dados</strong>
     <div style="font-size:12px;color:var(--text-3);font-family:var(--mono)">Supabase · ${SUPA_URL.replace('https://','').split('.')[0]}</div>
+  </div>
+
+  <div class="card">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+      <span style="font-size:20px">🤖</span>
+      <div>
+        <strong style="font-size:14px;color:var(--text);display:block">Claude API — Leitura de PDF</strong>
+        <div style="font-size:11.5px;color:var(--text-3)">Necessário para importar boletos, NF em PDF e comprovantes</div>
+      </div>
+    </div>
+    <div style="font-size:12px;color:var(--text-2);line-height:1.7;margin-bottom:14px;background:var(--surface-2);padding:12px;border-radius:9px;border:1px solid var(--border)">
+      <strong style="color:var(--text)">Como obter a chave:</strong><br>
+      1. Acesse <a href="https://console.anthropic.com" target="_blank" style="color:var(--gold)">console.anthropic.com</a><br>
+      2. Vá em <strong>API Keys</strong> → <strong>Create Key</strong><br>
+      3. Copie e cole abaixo. A chave fica salva só neste navegador.
+    </div>
+    <div class="form-field" style="margin-bottom:12px">
+      <label class="form-label">Chave da API (sk-ant-...)</label>
+      <input class="form-input" type="password" id="cfg-api-key"
+        placeholder="sk-ant-api03-..." value="${apiKey}"
+        style="font-family:var(--mono);font-size:12px">
+    </div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <button class="btn btn-gold btn-sm" onclick="salvarApiKey()">Salvar chave</button>
+      ${apiKey
+        ? `<button onclick="removerApiKey()" class="btn btn-sm" style="background:var(--red-lt);color:var(--red);border:1px solid rgba(192,57,43,.2)">Remover</button>
+           <span style="font-size:11.5px;color:var(--green)">✓ Chave configurada</span>`
+        : `<span style="font-size:11.5px;color:var(--text-3)">Sem chave — PDF não será lido</span>`}
+    </div>
+  </div>
+
   </div>`;
+}
+
+function salvarApiKey() {
+  const key = ($id('cfg-api-key')?.value||'').trim();
+  if (!key || !key.startsWith('sk-ant-')) { toast('Chave inválida. Deve começar com sk-ant-', 'error'); return; }
+  localStorage.setItem('artecon_claude_key', key);
+  toast('Chave salva!', 'success');
+  renderConfiguracoes();
+}
+
+function removerApiKey() {
+  localStorage.removeItem('artecon_claude_key');
+  toast('Chave removida.', 'success');
+  renderConfiguracoes();
+}
+
+function getClaudeApiKey() {
+  return localStorage.getItem('artecon_claude_key') || '';
 }
 
 // ── METAS ─────────────────────────────────────────────────────
@@ -3984,10 +4036,10 @@ function renderDocImportar() {
     <div style="font-size:13px;color:var(--text-3);margin-bottom:18px">ou clique para selecionar arquivos</div>
     <label class="btn btn-gold" style="cursor:pointer;display:inline-flex;align-items:center;gap:8px">
       Selecionar arquivos
-      <input type="file" multiple accept=".xml,.ofx,.csv,.txt" style="display:none" onchange="handleDocInput(this)">
+      <input type="file" multiple accept=".pdf,.xml,.ofx,.csv,.txt" style="display:none" onchange="handleDocInput(this)">
     </label>
     <div style="margin-top:16px;font-size:11.5px;color:var(--text-3)">
-      Suportado: <strong>XML NF-e</strong> · <strong>OFX/CSV extrato bancário</strong>
+      Suportado: <strong>PDF</strong> (boleto, NF, comprovante) · <strong>XML NF-e</strong> · <strong>OFX/CSV extrato bancário</strong>
     </div>
   </div>
 
@@ -3997,7 +4049,7 @@ function renderDocImportar() {
   <!-- Como funciona -->
   <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px">
     ${[
-      {ico:'📋', titulo:'XML NF-e', desc:'Importa nota fiscal eletrônica. Cria receita (emitente externo) ou despesa (você pagou) com valor, data e CNPJ.'},
+      {ico:'📕', titulo:'PDF (boleto, NF, comprovante)', desc:'A IA lê o PDF e extrai automaticamente: valor, vencimento, beneficiário e tipo. Requer chave Claude API em Configurações.'},
       {ico:'📂', titulo:'Extrato OFX/CSV', desc:'Importa extrato bancário. Créditos viram receitas, débitos viram despesas. Criação automática.'},
       {ico:'🤖', titulo:'Processamento automático', desc:'Sem revisão necessária. O sistema identifica o tipo e cria os lançamentos instantaneamente.'},
     ].map(c=>`
@@ -4102,10 +4154,12 @@ async function processarArquivos(files) {
     try {
       if (ext === 'xml') {
         await processarXMLAutoDoc(id, file);
+      } else if (ext === 'pdf') {
+        await processarPDFAutoDoc(id, file);
       } else if (ext === 'ofx' || ext === 'csv' || ext === 'txt') {
         await processarExtratoAutoDoc(id, file);
       } else {
-        adicionarFilaItem(id, nome, 'erro', `Formato .${ext} não suportado. Use XML, OFX ou CSV.`, null);
+        adicionarFilaItem(id, nome, 'erro', `Formato .${ext} não suportado. Use PDF, XML, OFX ou CSV.`, null);
       }
     } catch(e) {
       adicionarFilaItem(id, nome, 'erro', 'Erro: ' + e.message, null);
@@ -4221,6 +4275,137 @@ async function processarExtratoAutoDoc(id, file) {
     `${ok} lançamento(s) criado(s)${err?' · '+err+' erro(s)':''}`, null);
 }
 
+
+async function processarPDFAutoDoc(id, file) {
+  const apiKey = getClaudeApiKey();
+  if (!apiKey) {
+    adicionarFilaItem(id, file.name, 'erro',
+      'Chave da Claude API não configurada. Vá em Configurações → Claude API para configurar.', null);
+    return;
+  }
+
+  adicionarFilaItem(id, file.name, 'processando', 'Enviando PDF para a IA...', null);
+
+  // Converter PDF para base64
+  const base64 = await new Promise((res, rej) => {
+    const reader = new FileReader();
+    reader.onload = () => res(reader.result.split(',')[1]);
+    reader.onerror = rej;
+    reader.readAsDataURL(file);
+  });
+
+  // Chamar Claude API com o PDF
+  let dados;
+  try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-opus-4-5',
+        max_tokens: 1024,
+        messages: [{
+          role: 'user',
+          content: [
+            {
+              type: 'document',
+              source: { type: 'base64', media_type: 'application/pdf', data: base64 }
+            },
+            {
+              type: 'text',
+              text: `Analise este documento financeiro (boleto, nota fiscal, recibo ou comprovante) e extraia as informações.
+Responda APENAS com JSON válido, sem explicações, no formato:
+{
+  "tipo": "despesa" ou "receita",
+  "descricao": "descrição curta do documento",
+  "valor": 0.00,
+  "vencimento": "YYYY-MM-DD",
+  "beneficiario": "nome do beneficiário ou emitente",
+  "observacao": "detalhes adicionais relevantes"
+}
+Regras:
+- boleto = despesa (você paga)
+- nota fiscal recebida de fornecedor = despesa
+- nota fiscal emitida por você/comprovante de recebimento = receita
+- Se não encontrar vencimento, use a data de emissão ou hoje
+- valor deve ser número sem símbolos`
+            }
+          ]
+        }]
+      })
+    });
+
+    if (!response.ok) {
+      const err = await response.text();
+      throw new Error(`Claude API: ${response.status} — ${err.slice(0,200)}`);
+    }
+
+    const result = await response.json();
+    const text   = result.content?.[0]?.text || '';
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new Error('Resposta da IA não contém JSON válido');
+    dados = JSON.parse(jsonMatch[0]);
+  } catch(e) {
+    adicionarFilaItem(id, file.name, 'erro', 'Erro na IA: ' + e.message, null);
+    return;
+  }
+
+  // Validar dados extraídos
+  const valor = parseFloat(dados.valor);
+  if (!valor || isNaN(valor)) {
+    adicionarFilaItem(id, file.name, 'erro', 'IA não conseguiu extrair o valor do documento.', null);
+    return;
+  }
+
+  const tipo      = dados.tipo === 'receita' ? 'receita' : 'despesa';
+  const descricao = dados.descricao || file.name;
+  const vencimento = dados.vencimento || today();
+
+  adicionarFilaItem(id, file.name, 'processando', `Criando ${tipo}: ${descricao}...`, tipo);
+
+  const body = {
+    tenant_id:  APP.user.tenant_id,
+    descricao,
+    valor,
+    vencimento,
+    status:     'pendente',
+    observacao: `${dados.observacao||''} | Beneficiário: ${dados.beneficiario||'—'} | Importado via PDF+IA`,
+  };
+
+  let refId;
+  try {
+    if (tipo === 'receita') {
+      const r = await supa('POST', 'fin_receitas', { body, returning: true });
+      refId = r[0]?.id;
+    } else {
+      const r = await supa('POST', 'fin_despesas', { body, returning: true });
+      refId = r[0]?.id;
+    }
+  } catch(e) {
+    adicionarFilaItem(id, file.name, 'erro', 'Erro ao salvar lançamento: ' + e.message, null);
+    return;
+  }
+
+  // Salvar PDF no storage
+  if (refId) {
+    try {
+      const path = `${APP.user.tenant_id}/${tipo}/${refId}/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g,'_')}`;
+      await uploadStorage(path, file);
+      await supa('POST', 'fin_anexos', { body: {
+        tenant_id: APP.user.tenant_id, tipo_ref: tipo, ref_id: refId,
+        nome: file.name, tipo_arquivo: 'application/pdf',
+        storage_path: path, tamanho: file.size,
+      }});
+    } catch(_) {}
+  }
+
+  adicionarFilaItem(id, file.name, 'ok',
+    `${tipo === 'receita' ? 'Receita' : 'Despesa'} criada: ${descricao} — ${fmtMoeda(valor)} · Venc: ${fmtData(vencimento)}`,
+    tipo);
+}
 
 // ── MÓDULO 2: IMPORTAR EXTRATO OFX/CSV → LANÇAMENTOS ──────────
 let _extratoPreview = [];

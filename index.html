@@ -4325,6 +4325,7 @@ async function processarPDFAutoDoc(id, file) {
   // Extrair texto do PDF no browser primeiro (evita enviar base64 enorme)
   // Usa abordagem de enviar o PDF em chunks via FormData
   let dados;
+  let dadosLista = [];
   try {
     const proxyUrl = `${SUPA_URL}/functions/v1/claude-proxy`;
 
@@ -4394,73 +4395,105 @@ async function processarPDFAutoDoc(id, file) {
     // Log para diagnóstico
     console.log('IA retornou:', JSON.stringify(dados));
 
-    // Normalizar campos — IA pode usar nomes ligeiramente diferentes
-    dados.valor      = parseFloat(String(dados.valor||dados.value||dados.total||dados.amount||dados.valor_total||dados.vl||0).replace(/[^\d.,]/g,'').replace(',','.')) || 0;
-    dados.tipo       = String(dados.tipo||dados.type||dados.natureza||'despesa').toLowerCase().includes('receita') ? 'receita' : 'despesa';
-    dados.vencimento = dados.vencimento||dados.due_date||dados.data_vencimento||dados.data||dados.date||today();
-    dados.descricao  = dados.descricao||dados.description||dados.titulo||dados.title||dados.nome||file.name;
-    dados.beneficiario = dados.beneficiario||dados.beneficiary||dados.emitente||dados.pagador||dados.cedente||'—';
-    dados.observacao = dados.observacao||dados.observation||dados.notes||dados.detalhes||'';
+    // Normalizar função
+    function normalizarItem(d) {
+      return {
+        valor:       parseFloat(String(d.valor||d.value||d.total||d.amount||d.valor_total||d.vl||0).replace(/[^\d.,]/g,'').replace(',','.')) || 0,
+        tipo:        String(d.tipo||d.type||d.natureza||'despesa').toLowerCase().includes('receita') ? 'receita' : 'despesa',
+        vencimento:  d.vencimento||d.due_date||d.data_vencimento||d.data||d.date||today(),
+        descricao:   d.descricao||d.description||d.titulo||d.title||d.nome||file.name,
+        beneficiario:d.beneficiario||d.beneficiary||d.emitente||d.pagador||d.cedente||'—',
+        observacao:  d.observacao||d.observation||d.notes||d.detalhes||'',
+      };
+    }
 
-    console.log('Dados normalizados:', JSON.stringify(dados));
+    // Suporta resposta com array ou objeto único
+    let listaItens = [];
+    if (Array.isArray(dados)) {
+      listaItens = dados.map(normalizarItem);
+    } else if (dados.lancamentos || dados.transacoes || dados.items || dados.itens) {
+      const arr = dados.lancamentos||dados.transacoes||dados.items||dados.itens;
+      listaItens = (Array.isArray(arr) ? arr : [arr]).map(normalizarItem);
+    } else {
+      listaItens = [normalizarItem(dados)];
+    }
+
+    // Também tentar pegar todos os JSONs do texto (para múltiplos objetos separados)
+    if (listaItens.length === 1 && jsonMatches.length > 1) {
+      const extras = [];
+      for (const candidate of jsonMatches) {
+        try {
+          const obj = JSON.parse(candidate);
+          if (obj.valor !== undefined || obj.value !== undefined) {
+            extras.push(normalizarItem(obj));
+          }
+        } catch(_) {}
+      }
+      if (extras.length > 1) listaItens = extras;
+    }
+
+    console.log('Itens normalizados:', listaItens.length, JSON.stringify(listaItens.slice(0,2)));
+    dadosLista = listaItens.filter(d => d.valor > 0);
+    if (!dadosLista.length) throw new Error('IA não encontrou valores válidos no documento.');
+
   } catch(e) {
     console.error('PDF processing error:', e);
     adicionarFilaItem(id, file.name, 'erro', 'Erro na IA: ' + e.message, null);
     return;
   }
 
-  // Validar dados extraídos
-  const valor = parseFloat(dados.valor);
-  if (!valor || isNaN(valor)) {
-    adicionarFilaItem(id, file.name, 'erro', 'IA não conseguiu extrair o valor do documento.', null);
-    return;
-  }
+  // Criar lançamentos para cada item
+  adicionarFilaItem(id, file.name, 'processando', `Criando ${dadosLista.length} lançamento(s)...`, null);
+  let ok = 0;
 
-  const tipo      = dados.tipo === 'receita' ? 'receita' : 'despesa';
-  const descricao = dados.descricao || file.name;
-  const vencimento = dados.vencimento || today();
+  for (const dados of dadosLista) {
+    const tipo      = dados.tipo;
+    const descricao = dados.descricao;
+    const valor     = dados.valor;
+    const vencimento = dados.vencimento;
 
-  adicionarFilaItem(id, file.name, 'processando', `Criando ${tipo}: ${descricao}...`, tipo);
+    const body = {
+      tenant_id:  APP.user.tenant_id,
+      descricao,
+      valor,
+      vencimento,
+      status:     'pendente',
+      observacao: `${dados.observacao||''} | Beneficiário: ${dados.beneficiario||'—'} | Importado via PDF+IA`,
+    };
 
-  const body = {
-    tenant_id:  APP.user.tenant_id,
-    descricao,
-    valor,
-    vencimento,
-    status:     'pendente',
-    observacao: `${dados.observacao||''} | Beneficiário: ${dados.beneficiario||'—'} | Importado via PDF+IA`,
-  };
-
-  let refId;
-  try {
-    if (tipo === 'receita') {
-      const r = await supa('POST', 'fin_receitas', { body, returning: true });
-      refId = r[0]?.id;
-    } else {
-      const r = await supa('POST', 'fin_despesas', { body, returning: true });
-      refId = r[0]?.id;
-    }
-  } catch(e) {
-    adicionarFilaItem(id, file.name, 'erro', 'Erro ao salvar lançamento: ' + e.message, null);
-    return;
-  }
-
-  // Salvar PDF no storage
-  if (refId) {
     try {
-      const path = `${APP.user.tenant_id}/${tipo}/${refId}/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g,'_')}`;
-      await uploadStorage(path, file);
-      await supa('POST', 'fin_anexos', { body: {
-        tenant_id: APP.user.tenant_id, tipo_ref: tipo, ref_id: refId,
-        nome: file.name, tipo_arquivo: 'application/pdf',
-        storage_path: path, tamanho: file.size,
-      }});
-    } catch(_) {}
+      let refId;
+      if (tipo === 'receita') {
+        const r = await supa('POST', 'fin_receitas', { body, returning: true });
+        refId = r[0]?.id;
+      } else {
+        const r = await supa('POST', 'fin_despesas', { body, returning: true });
+        refId = r[0]?.id;
+      }
+
+      // Salvar PDF no storage apenas no primeiro lançamento
+      if (refId && ok === 0) {
+        try {
+          const path = `${APP.user.tenant_id}/${tipo}/${refId}/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g,'_')}`;
+          await uploadStorage(path, file);
+          await supa('POST', 'fin_anexos', { body: {
+            tenant_id: APP.user.tenant_id, tipo_ref: tipo, ref_id: refId,
+            nome: file.name, tipo_arquivo: 'application/pdf',
+            storage_path: path, tamanho: file.size,
+          }});
+        } catch(_) {}
+      }
+      ok++;
+    } catch(e) {
+      console.error('Erro ao salvar item:', e.message);
+    }
   }
 
-  adicionarFilaItem(id, file.name, 'ok',
-    `${tipo === 'receita' ? 'Receita' : 'Despesa'} criada: ${descricao} — ${fmtMoeda(valor)} · Venc: ${fmtData(vencimento)}`,
-    tipo);
+  adicionarFilaItem(id, file.name, ok > 0 ? 'ok' : 'erro',
+    ok > 0
+      ? `${ok} lançamento(s) criado(s) via PDF+IA`
+      : 'Erro ao salvar os lançamentos.',
+    dadosLista[0]?.tipo || null);
 }
 
 // ── MÓDULO 2: IMPORTAR EXTRATO OFX/CSV → LANÇAMENTOS ──────────

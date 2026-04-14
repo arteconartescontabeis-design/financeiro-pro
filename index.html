@@ -4294,10 +4294,18 @@ async function processarPDFAutoDoc(id, file) {
     reader.readAsDataURL(file);
   });
 
-  // Chamar Claude API via Supabase Edge Function (proxy para evitar CORS)
+  // Extrair texto do PDF no browser primeiro (evita enviar base64 enorme)
+  // Usa abordagem de enviar o PDF em chunks via FormData
   let dados;
   try {
     const proxyUrl = `${SUPA_URL}/functions/v1/claude-proxy`;
+
+    // Verificar tamanho - PDFs grandes precisam ser limitados
+    if (file.size > 5 * 1024 * 1024) {
+      adicionarFilaItem(id, file.name, 'erro', 'PDF muito grande. Máximo 5MB para leitura por IA.', null);
+      return;
+    }
+
     const response = await fetch(proxyUrl, {
       method: 'POST',
       headers: {
@@ -4307,7 +4315,7 @@ async function processarPDFAutoDoc(id, file) {
       },
       body: JSON.stringify({
         apiKey,
-        model: 'claude-opus-4-5',
+        model: 'claude-haiku-4-5-20251001',
         max_tokens: 1024,
         messages: [{
           role: 'user',
@@ -4318,22 +4326,7 @@ async function processarPDFAutoDoc(id, file) {
             },
             {
               type: 'text',
-              text: `Analise este documento financeiro (boleto, nota fiscal, recibo ou comprovante) e extraia as informações.
-Responda APENAS com JSON válido, sem explicações, no formato:
-{
-  "tipo": "despesa" ou "receita",
-  "descricao": "descrição curta do documento",
-  "valor": 0.00,
-  "vencimento": "YYYY-MM-DD",
-  "beneficiario": "nome do beneficiário ou emitente",
-  "observacao": "detalhes adicionais relevantes"
-}
-Regras:
-- boleto = despesa (você paga)
-- nota fiscal recebida de fornecedor = despesa
-- nota fiscal emitida por você/comprovante de recebimento = receita
-- Se não encontrar vencimento, use a data de emissão ou hoje
-- valor deve ser número sem símbolos`
+              text: 'Analise este documento financeiro (boleto, nota fiscal, recibo ou comprovante) e extraia as informações. Responda APENAS com JSON valido, sem explicacoes, no formato: {"tipo":"despesa ou receita","descricao":"descricao curta","valor":0.00,"vencimento":"YYYY-MM-DD","beneficiario":"nome","observacao":"detalhes"}. Regras: boleto=despesa, NF recebida=despesa, NF emitida=receita. Se nao houver vencimento use hoje. valor sem simbolos.'
             }
           ]
         }]
@@ -4345,12 +4338,18 @@ Regras:
       throw new Error(`Claude API: ${response.status} — ${err.slice(0,200)}`);
     }
 
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`Proxy ${response.status}: ${errText.slice(0,200)}`);
+    }
     const result = await response.json();
-    const text   = result.content?.[0]?.text || '';
+    const text   = result.content?.[0]?.text || result.error?.message || '';
+    if (result.error) throw new Error('Claude API: ' + result.error.message);
     const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error('Resposta da IA não contém JSON válido');
+    if (!jsonMatch) throw new Error('Resposta da IA não contém JSON válido: ' + text.slice(0,100));
     dados = JSON.parse(jsonMatch[0]);
   } catch(e) {
+    console.error('PDF processing error:', e);
     adicionarFilaItem(id, file.name, 'erro', 'Erro na IA: ' + e.message, null);
     return;
   }

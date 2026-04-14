@@ -4294,17 +4294,19 @@ async function processarPDFAutoDoc(id, file) {
     reader.readAsDataURL(file);
   });
 
-  // Chamar Claude API com o PDF
+  // Chamar Claude API via Supabase Edge Function (proxy para evitar CORS)
   let dados;
   try {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
+    const proxyUrl = `${SUPA_URL}/functions/v1/claude-proxy`;
+    const response = await fetch(proxyUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
+        'Authorization': `Bearer ${APP.token}`,
+        'apikey': SUPA_KEY,
       },
       body: JSON.stringify({
+        apiKey,
         model: 'claude-opus-4-5',
         max_tokens: 1024,
         messages: [{

@@ -714,6 +714,14 @@ tbody td { padding: 11px 16px; font-size: 13px; }
         <span class="page-title" id="page-title">Dashboard</span>
       </div>
       <div class="topbar-actions" id="topbar-actions"></div>
+
+      <!-- Seletor de empresa (visível só para superadmin) -->
+      <div id="sa-empresa-sel" style="display:none;align-items:center;gap:8px;margin-left:8px">
+        <span style="font-size:11px;color:var(--text-3);font-weight:600;white-space:nowrap">Empresa:</span>
+        <select id="sa-empresa-select" onchange="trocarEmpresaSA(this.value)"
+          style="padding:5px 10px;border:1.5px solid var(--border-lt);border-radius:8px;font-family:var(--font);font-size:12px;background:var(--gold-lt);color:var(--gold);font-weight:700;outline:none;cursor:pointer;max-width:200px">
+        </select>
+      </div>
       <!-- Sino de notificações -->
       <div style="position:relative;margin-left:8px">
         <button id="notif-btn" onclick="toggleNotifPanel()" style="background:none;border:none;cursor:pointer;color:var(--text-2);padding:6px;border-radius:8px;position:relative;transition:var(--tr)" onmouseover="this.style.background='var(--surface-2)'" onmouseout="this.style.background='none'">
@@ -5494,8 +5502,63 @@ async function verificarSuperadmin() {
       SA.user = res[0];
       const wrap = $id('sa-link-wrap');
       if (wrap) wrap.style.display = 'block';
+      // Carrega seletor de empresas
+      await carregarSeletorEmpresas();
     }
   } catch(_) {}
+}
+
+async function carregarSeletorEmpresas() {
+  try {
+    const tenants = await supa('GET', 'fin_tenants', {
+      params: { select: 'id,nome', order: 'nome.asc', limit: 200 }
+    });
+    const sel = $id('sa-empresa-select');
+    const wrap = $id('sa-empresa-sel');
+    if (!sel || !tenants?.length) return;
+
+    sel.innerHTML = `<option value="${APP.user.tenant_id}">⭐ ${APP.tenant?.nome||'Minha empresa'}</option>`
+      + tenants
+          .filter(t => t.id !== APP.user.tenant_id)
+          .map(t => `<option value="${t.id}">${t.nome}</option>`)
+          .join('');
+
+    wrap.style.display = 'flex';
+    SA.tenants = tenants;
+  } catch(_) {}
+}
+
+async function trocarEmpresaSA(tenantId) {
+  if (!tenantId || tenantId === APP.user.tenant_id) {
+    // Voltar para empresa própria
+    await carregarDados();
+    go(APP.page || 'dashboard');
+    toast('Visualizando: ' + (APP.tenant?.nome||'Minha empresa'), 'success');
+    return;
+  }
+
+  try {
+    // Carregar dados da empresa selecionada
+    const tenants = await supa('GET', 'fin_tenants', {
+      params: { id: `eq.${tenantId}`, select: '*', limit: 1 }
+    });
+    if (!tenants?.length) { toast('Empresa não encontrada.', 'error'); return; }
+
+    // Temporariamente trocar o tenant_id do usuário para carregar dados
+    const tenantOriginal = APP.user.tenant_id;
+    APP.user = { ...APP.user, tenant_id: tenantId };
+    APP.tenant = tenants[0];
+
+    // Atualizar sidebar
+    $id('sb-tenant').textContent = APP.tenant.nome;
+    $id('sb-setor').textContent  = APP.tenant.setor || '—';
+
+    await carregarDados();
+    go('dashboard');
+    toast(`Visualizando: ${APP.tenant.nome}`, 'success');
+  } catch(e) {
+    toast('Erro ao trocar empresa: ' + e.message, 'error');
+  }
 }
 
 async function abrirSuperadmin() {

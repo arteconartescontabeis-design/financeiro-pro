@@ -5628,9 +5628,6 @@ async function renderSuperadmin() {
 // ── Modal Cadastrar Empresa ────────────────────────────────────
 function modalCadastrarEmpresa() {
   openModal('Cadastrar Nova Empresa', `
-    <div style="font-size:12.5px;color:var(--text-2);margin-bottom:16px;line-height:1.6;background:var(--bg-2);padding:12px;border-radius:9px;border:1px solid var(--border)">
-      A empresa será criada e você poderá criar o acesso do responsável em seguida.
-    </div>
     <div class="form-grid">
       <div class="form-field full"><label class="form-label">Nome da Empresa *</label><input class="form-input" id="sa-emp-nome" placeholder="Ex: Empresa XYZ Ltda"></div>
       <div class="form-field"><label class="form-label">CNPJ</label><input class="form-input" id="sa-emp-cnpj" placeholder="00.000.000/0000-00"></div>
@@ -5639,9 +5636,7 @@ function modalCadastrarEmpresa() {
           ${['Contabilidade','Advocacia','Saúde','Educação','Comércio','Indústria','Tecnologia','Construção','Alimentação','Serviços Gerais','Outro'].map(s=>`<option value="${s}">${s}</option>`).join('')}
         </select>
       </div>
-      <div class="form-field full"><label class="form-label">E-mail do responsável *</label><input class="form-input" type="email" id="sa-emp-email" placeholder="responsavel@empresa.com.br"></div>
-      <div class="form-field"><label class="form-label">Nome do responsável *</label><input class="form-input" id="sa-emp-resp" placeholder="Nome completo"></div>
-      <div class="form-field"><label class="form-label">Senha temporária *</label><input class="form-input" type="text" id="sa-emp-senha" placeholder="Min. 6 caracteres" value="Artecon@2025"></div>
+      <div class="form-field full"><label class="form-label">Observação</label><input class="form-input" id="sa-emp-obs" placeholder="Opcional"></div>
     </div>`,
     `<button class="btn btn-outline" onclick="closeModal()">Cancelar</button>
      <button class="btn btn-gold" onclick="cadastrarEmpresaSA()">Cadastrar Empresa</button>`
@@ -5650,79 +5645,32 @@ function modalCadastrarEmpresa() {
 
 async function cadastrarEmpresaSA() {
   const nome  = $id('sa-emp-nome')?.value?.trim();
-  const email = $id('sa-emp-email')?.value?.trim();
-  const resp  = $id('sa-emp-resp')?.value?.trim();
-  const senha = $id('sa-emp-senha')?.value?.trim();
   const setor = $id('sa-emp-setor')?.value;
   const cnpj  = $id('sa-emp-cnpj')?.value?.trim();
+  const obs   = $id('sa-emp-obs')?.value?.trim();
 
-  if (!nome || !email || !resp || !senha) { toast('Preencha todos os campos obrigatórios.', 'error'); return; }
-  if (senha.length < 6) { toast('Senha mínima de 6 caracteres.', 'error'); return; }
+  if (!nome) { toast('Informe o nome da empresa.', 'error'); return; }
 
   try {
-    toast('Criando empresa...', 'default', 10000);
+    toast('Cadastrando empresa...', 'default', 5000);
 
-    // 1. Criar usuário no Supabase Auth via signup normal
-    let authUser;
-    try {
-      const signRes = await fetch(`${SUPA_URL}/auth/v1/signup`, {
-        method: 'POST',
-        headers: { 'apikey': SUPA_KEY, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password: senha }),
-      });
-      const signData = await signRes.json();
-      authUser = signData.user || signData;
-    } catch(e) {
-      throw new Error('Erro ao criar usuário: ' + e.message);
-    }
-
-    if (!authUser?.id) throw new Error('Não foi possível criar o usuário. Verifique se o e-mail já está cadastrado.');
-
-    // 2. Criar tenant
+    // Criar tenant
     const tenant = await supa('POST', 'fin_tenants', {
-      body: { nome, setor: setor||'Outro', cnpj: cnpj||null },
+      body: { nome, setor: setor||'Outro', cnpj: cnpj||null, observacao: obs||null },
       returning: true,
     });
     const tenantId = tenant[0]?.id;
     if (!tenantId) throw new Error('Erro ao criar empresa.');
 
-    // 3. Criar usuário vinculado ao tenant
-    await supa('POST', 'fin_usuarios', {
-      body: { tenant_id: tenantId, auth_id: authUser.id, nome: resp, email, perfil: 'admin' }
-    });
-
-    // 4. Criar conta padrão
+    // Criar conta padrão (Caixa)
     await supa('POST', 'fin_contas', {
       body: { tenant_id: tenantId, nome: 'Caixa', tipo: 'caixa', saldo_inicial: 0, saldo_atual: 0 }
     });
 
     closeModal();
-    toast(`Empresa "${nome}" cadastrada! Acesso: ${email} / ${senha}`, 'success');
+    toast(`Empresa "${nome}" cadastrada com sucesso!`, 'success');
+    await renderSuperadmin();
 
-    // Mostrar resumo
-    openModal('✅ Empresa Cadastrada com Sucesso!', `
-      <div style="text-align:center;padding:10px 0">
-        <div style="font-size:40px;margin-bottom:16px">🎉</div>
-        <div style="font-size:15px;font-weight:700;color:var(--text);margin-bottom:20px">${nome}</div>
-        <div style="background:var(--surface-2);border-radius:10px;padding:16px;text-align:left;border:1px solid var(--border)">
-          <div style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase;margin-bottom:10px">Dados de acesso para entregar ao cliente:</div>
-          <div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border)">
-            <span style="font-size:12px;color:var(--text-3)">Sistema</span>
-            <span style="font-size:12px;font-family:var(--mono);color:var(--gold)">arteconartescontabeis-design.github.io/financeiro-pro</span>
-          </div>
-          <div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border)">
-            <span style="font-size:12px;color:var(--text-3)">E-mail</span>
-            <strong style="font-size:13px;color:var(--text)">${email}</strong>
-          </div>
-          <div style="display:flex;justify-content:space-between;padding:8px 0">
-            <span style="font-size:12px;color:var(--text-3)">Senha</span>
-            <strong style="font-size:13px;color:var(--text);font-family:var(--mono)">${senha}</strong>
-          </div>
-        </div>
-        <div style="margin-top:12px;font-size:11.5px;color:var(--text-3)">Recomende que o cliente troque a senha no primeiro acesso.</div>
-      </div>`,
-      `<button class="btn btn-gold" onclick="closeModal();renderSuperadmin()">Fechar</button>`
-    );
   } catch(e) {
     toast('Erro: ' + e.message, 'error');
   }
@@ -5730,9 +5678,12 @@ async function cadastrarEmpresaSA() {
 
 // ── Modal Criar Usuário numa Empresa ──────────────────────────
 function modalCriarUsuarioEmpresa(tenantId, nomeEmpresa) {
-  openModal(`Adicionar Usuário — ${nomeEmpresa}`, `
+  openModal(`Criar Acesso — ${nomeEmpresa}`, `
+    <div style="font-size:12.5px;color:var(--text-2);margin-bottom:16px;line-height:1.6;background:var(--bg-2);padding:12px;border-radius:9px;border:1px solid var(--border)">
+      Crie o login de acesso para um usuário desta empresa. As credenciais serão geradas automaticamente.
+    </div>
     <div class="form-grid">
-      <div class="form-field full"><label class="form-label">Nome *</label><input class="form-input" id="sa-usr-nome" placeholder="Nome completo"></div>
+      <div class="form-field full"><label class="form-label">Nome completo *</label><input class="form-input" id="sa-usr-nome" placeholder="Nome do usuário"></div>
       <div class="form-field full"><label class="form-label">E-mail *</label><input class="form-input" type="email" id="sa-usr-email" placeholder="email@empresa.com.br"></div>
       <div class="form-field"><label class="form-label">Perfil</label>
         <select class="form-select" id="sa-usr-perfil">
@@ -5740,34 +5691,77 @@ function modalCriarUsuarioEmpresa(tenantId, nomeEmpresa) {
           <option value="viewer">Viewer (somente leitura)</option>
         </select>
       </div>
-      <div class="form-field"><label class="form-label">Senha *</label><input class="form-input" type="text" id="sa-usr-senha" value="Artecon@2025"></div>
+      <div class="form-field"><label class="form-label">Senha *</label>
+        <input class="form-input" type="text" id="sa-usr-senha" value="Artecon@2025" placeholder="Mínimo 6 caracteres">
+      </div>
     </div>`,
     `<button class="btn btn-outline" onclick="closeModal()">Cancelar</button>
-     <button class="btn btn-gold" onclick="criarUsuarioEmpresaSA('${tenantId}')">Criar Usuário</button>`
+     <button class="btn btn-gold" onclick="criarUsuarioEmpresaSA('${tenantId}','${nomeEmpresa.replace(/'/g,"\\'")}')">Criar Acesso</button>`
   );
 }
 
-async function criarUsuarioEmpresaSA(tenantId) {
-  const nome  = $id('sa-usr-nome')?.value?.trim();
-  const email = $id('sa-usr-email')?.value?.trim();
-  const senha = $id('sa-usr-senha')?.value?.trim();
-  const perfil= $id('sa-usr-perfil')?.value;
+async function criarUsuarioEmpresaSA(tenantId, nomeEmpresa) {
+  const nome   = $id('sa-usr-nome')?.value?.trim();
+  const email  = $id('sa-usr-email')?.value?.trim();
+  const senha  = $id('sa-usr-senha')?.value?.trim();
+  const perfil = $id('sa-usr-perfil')?.value;
+
   if (!nome || !email || !senha) { toast('Preencha todos os campos.', 'error'); return; }
+  if (senha.length < 6) { toast('Senha mínima de 6 caracteres.', 'error'); return; }
+
   try {
-    const signRes = await fetch(`${SUPA_URL}/auth/v1/signup`, {
+    toast('Criando acesso...', 'default', 8000);
+
+    // Chamar Edge Function criar-usuario
+    const res = await fetch(`${SUPA_URL}/functions/v1/criar-usuario`, {
       method: 'POST',
-      headers: { 'apikey': SUPA_KEY, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password: senha }),
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${APP.token}`,
+        'apikey': SUPA_KEY,
+      },
+      body: JSON.stringify({ email, password: senha, nome, tenant_id: tenantId, perfil }),
     });
-    const signData = await signRes.json();
-    const authUser = signData.user || signData;
-    if (!authUser?.id) throw new Error('Erro ao criar usuário. E-mail já cadastrado?');
-    await supa('POST', 'fin_usuarios', {
-      body: { tenant_id: tenantId, auth_id: authUser.id, nome, email, perfil }
-    });
+
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+
     closeModal();
-    toast(`Usuário ${nome} criado! Acesso: ${email} / ${senha}`, 'success');
-  } catch(e) { toast('Erro: ' + e.message, 'error'); }
+
+    // Mostrar credenciais para entregar ao cliente
+    openModal('✅ Acesso Criado com Sucesso!', `
+      <div style="text-align:center;padding:8px 0">
+        <div style="font-size:36px;margin-bottom:12px">🎉</div>
+        <div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:6px">${nome}</div>
+        <div style="font-size:12px;color:var(--text-3);margin-bottom:20px">${nomeEmpresa}</div>
+        <div style="background:var(--surface-2);border-radius:10px;padding:16px;text-align:left;border:1px solid var(--border)">
+          <div style="font-size:10.5px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px">Dados de acesso para entregar ao cliente</div>
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--border)">
+            <span style="font-size:12px;color:var(--text-3)">Sistema</span>
+            <span style="font-size:11px;font-family:var(--mono);color:var(--gold)">financeiro-pro</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--border)">
+            <span style="font-size:12px;color:var(--text-3)">E-mail</span>
+            <strong style="font-size:13px;color:var(--text)">${email}</strong>
+          </div>
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--border)">
+            <span style="font-size:12px;color:var(--text-3)">Senha</span>
+            <strong style="font-size:14px;color:var(--text);font-family:var(--mono)">${senha}</strong>
+          </div>
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0">
+            <span style="font-size:12px;color:var(--text-3)">Perfil</span>
+            <span class="badge badge-gold">${perfil}</span>
+          </div>
+        </div>
+        <div style="margin-top:12px;font-size:11.5px;color:var(--text-3)">⚠ Recomende que o cliente troque a senha no primeiro acesso.</div>
+      </div>`,
+      `<button class="btn btn-gold" onclick="closeModal()">Fechar</button>`
+    );
+
+    await renderSuperadmin();
+  } catch(e) {
+    toast('Erro: ' + e.message, 'error');
+  }
 }
 
 // ── Modal Gerenciar Empresa ────────────────────────────────────

@@ -4360,6 +4360,14 @@ async function processarPDFAutoDoc(id, file) {
       }
     }
     if (!dados) throw new Error('Resposta da IA não contém JSON válido: ' + text.slice(0,150));
+
+    // Normalizar campos — IA pode usar nomes ligeiramente diferentes
+    dados.valor      = parseFloat(String(dados.valor||dados.value||dados.total||dados.amount||0).replace(/[^\d.,]/g,'').replace(',','.')) || 0;
+    dados.tipo       = String(dados.tipo||dados.type||'despesa').toLowerCase().includes('receita') ? 'receita' : 'despesa';
+    dados.vencimento = dados.vencimento||dados.due_date||dados.data||dados.date||today();
+    dados.descricao  = dados.descricao||dados.description||dados.titulo||file.name;
+    dados.beneficiario = dados.beneficiario||dados.beneficiary||dados.emitente||'—';
+    dados.observacao = dados.observacao||dados.observation||dados.notes||'';
   } catch(e) {
     console.error('PDF processing error:', e);
     adicionarFilaItem(id, file.name, 'erro', 'Erro na IA: ' + e.message, null);

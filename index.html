@@ -4209,58 +4209,131 @@ async function processarXMLAutoDoc(id, file) {
   const text = await file.text();
   const parser = new DOMParser();
   const doc    = parser.parseFromString(text, 'text/xml');
-  const get    = (tag) => doc.getElementsByTagName(tag)[0]?.textContent?.trim() || '';
 
-  const nNF    = get('nNF');
-  const dhEmi  = get('dhEmi') || get('dEmi');
-  const data   = dhEmi ? dhEmi.slice(0,10) : today();
-  const vNF    = parseFloat(get('vNF'));
-  const xNome  = get('xNome');
-  const CNPJ   = get('CNPJ');
-  const tpNF   = get('tpNF'); // 0=entrada(despesa), 1=saída(receita)
-
-  if (!vNF || isNaN(vNF)) {
-    adicionarFilaItem(id, file.name, 'erro', 'XML inválido — não é uma NF-e padrão SEFAZ.', null);
-    return;
-  }
-
-  // tpNF=1 → saída → receita (você emitiu); tpNF=0 → entrada → despesa (você recebeu nota do fornecedor)
-  const tipo = tpNF === '0' ? 'despesa' : 'receita';
-  const desc = `NF-e nº ${nNF} — ${xNome}`;
-
-  adicionarFilaItem(id, file.name, 'processando', `Criando ${tipo}...`, tipo);
-
-  const body = {
-    tenant_id:   APP.user.tenant_id,
-    descricao:   desc,
-    valor:       vNF,
-    vencimento:  data,
-    status:      'pendente',
-    observacao:  `Importado via NF-e · CNPJ: ${CNPJ}`,
+  // Helper para pegar primeira tag encontrada (case insensitive via múltiplos nomes)
+  const get = (...tags) => {
+    for (const tag of tags) {
+      const el = doc.getElementsByTagName(tag)[0];
+      if (el?.textContent?.trim()) return el.textContent.trim();
+    }
+    return '';
   };
 
-  let refId;
-  if (tipo === 'receita') {
-    const r = await supa('POST', 'fin_receitas', { body, returning: true });
-    refId = r[0]?.id;
-  } else {
-    const r = await supa('POST', 'fin_despesas', { body, returning: true });
-    refId = r[0]?.id;
-  }
+  // ── Detectar tipo de XML ──────────────────────────────────
+  const isNFSe  = doc.getElementsByTagName('CompNfse').length > 0
+                || doc.getElementsByTagName('Nfse').length > 0
+                || doc.getElementsByTagName('nfse').length > 0
+                || text.includes('CompNfse')
+                || text.includes('ConsultarNfseResposta');
+  const isNFe   = doc.getElementsByTagName('NFe').length > 0
+                || doc.getElementsByTagName('nfeProc').length > 0
+                || get('tpNF') !== '';
 
-  // Salvar o XML no storage e registrar anexo
-  if (refId) {
+  adicionarFilaItem(id, file.name, 'processando',
+    isNFSe ? 'Lendo NFS-e...' : isNFe ? 'Lendo NF-e...' : 'Lendo XML...', null);
+
+  // ── CNPJ da empresa logada para detectar receita/despesa ──
+  const cnpjEmpresa = (APP.tenant?.cnpj||'').replace(/\D/g,'');
+
+  if (isNFSe) {
+    // ── PARSER NFSe ABRASF + prefeituras ─────────────────────
+    const numero    = get('Numero','NumeroNfse','numero','nNFSe');
+    const dataEmi   = get('DataEmissao','DataEmissaoNfse','Competencia','dataEmissao') || today();
+    const data      = dataEmi.length >= 10 ? dataEmi.slice(0,10) : today();
+
+    // Valor
+    const valorStr  = get('ValorServicos','ValorLiquidoNfse','ValorNfse','ValorTotal','Valor','ValorDeducoes');
+    const valor     = parseFloat(valorStr.replace(',','.')) || 0;
+
+    // Prestador (quem emitiu a NF)
+    const cnpjPrestador = get('CnpjPrestador','Cnpj').replace(/\D/g,'') ||
+                          (doc.getElementsByTagName('Prestador')[0]?.getElementsByTagName('Cnpj')[0]?.textContent?.trim()||'').replace(/\D/g,'');
+    const nomePrestador = get('RazaoSocialPrestador','RazaoSocial','NomeFantasiaPrestador') ||
+                          doc.getElementsByTagName('Prestador')[0]?.getElementsByTagName('RazaoSocial')[0]?.textContent?.trim() || '—';
+
+    // Tomador (quem recebeu/contratou)
+    const cnpjTomador   = (doc.getElementsByTagName('Tomador')[0]?.getElementsByTagName('Cnpj')[0]?.textContent?.trim()||'').replace(/\D/g,'');
+    const nomeTomador   = doc.getElementsByTagName('Tomador')[0]?.getElementsByTagName('RazaoSocial')[0]?.textContent?.trim() ||
+                          get('RazaoSocialTomador','NomeFantasiaTomador') || '—';
+
+    // Discriminação do serviço
+    const discriminacao = get('Discriminacao','DescricaoServico','Descricao') || '';
+
+    if (!valor) {
+      adicionarFilaItem(id, file.name, 'erro', 'NFS-e: valor não encontrado no XML.', null);
+      return;
+    }
+
+    // Detectar tipo: prestador = empresa → receita; tomador = empresa → despesa
+    let tipo = 'receita'; // padrão: você emitiu
+    if (cnpjEmpresa && cnpjTomador && cnpjTomador === cnpjEmpresa) tipo = 'despesa';
+    if (cnpjEmpresa && cnpjPrestador && cnpjPrestador !== cnpjEmpresa) tipo = 'despesa';
+
+    const contraparte = tipo === 'receita' ? nomeTomador : nomePrestador;
+    const desc = `NFS-e nº ${numero} — ${contraparte}`;
+
+    const body = {
+      tenant_id:  APP.user.tenant_id,
+      descricao:  desc,
+      valor,
+      vencimento: data,
+      status:     'pendente',
+      observacao: `${discriminacao.slice(0,200)} | Prestador: ${nomePrestador} | Tomador: ${nomeTomador} | Importado via NFS-e XML`,
+    };
+
+    let refId;
     try {
-      const path = `${APP.user.tenant_id}/${tipo}/${refId}/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g,'_')}`;
-      await uploadStorage(path, file);
-      await supa('POST', 'fin_anexos', { body: {
-        tenant_id: APP.user.tenant_id, tipo_ref: tipo, ref_id: refId,
-        nome: file.name, tipo_arquivo: 'text/xml', storage_path: path, tamanho: file.size,
-      }});
-    } catch(_) {}
-  }
+      if (tipo === 'receita') { const r = await supa('POST', 'fin_receitas', { body, returning: true }); refId = r[0]?.id; }
+      else                    { const r = await supa('POST', 'fin_despesas', { body, returning: true }); refId = r[0]?.id; }
+    } catch(e) { adicionarFilaItem(id, file.name, 'erro', 'Erro ao salvar: ' + e.message, null); return; }
 
-  adicionarFilaItem(id, file.name, 'ok', `${tipo==='receita'?'Receita':'Despesa'} criada: ${desc} — ${fmtMoeda(vNF)}`, tipo);
+    // Salvar XML no storage
+    if (refId) {
+      try {
+        const path = `${APP.user.tenant_id}/${tipo}/${refId}/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g,'_')}`;
+        await uploadStorage(path, file);
+        await supa('POST', 'fin_anexos', { body: { tenant_id: APP.user.tenant_id, tipo_ref: tipo, ref_id: refId, nome: file.name, tipo_arquivo: 'text/xml', storage_path: path, tamanho: file.size }});
+      } catch(_) {}
+    }
+
+    adicionarFilaItem(id, file.name, 'ok', `${tipo==='receita'?'Receita':'Despesa'} criada: ${desc} — ${fmtMoeda(valor)}`, tipo);
+
+  } else if (isNFe) {
+    // ── PARSER NF-e SEFAZ ────────────────────────────────────
+    const nNF   = get('nNF');
+    const dhEmi = get('dhEmi','dEmi');
+    const data  = dhEmi ? dhEmi.slice(0,10) : today();
+    const vNF   = parseFloat(get('vNF')) || 0;
+    const xNome = get('xNome');
+    const CNPJ  = get('CNPJ');
+    const tpNF  = get('tpNF');
+
+    if (!vNF) { adicionarFilaItem(id, file.name, 'erro', 'NF-e: valor não encontrado.', null); return; }
+
+    const tipo = tpNF === '0' ? 'despesa' : 'receita';
+    const desc = `NF-e nº ${nNF} — ${xNome}`;
+
+    const body = { tenant_id: APP.user.tenant_id, descricao: desc, valor: vNF, vencimento: data, status: 'pendente', observacao: `CNPJ: ${CNPJ} | Importado via NF-e XML` };
+    let refId;
+    try {
+      if (tipo === 'receita') { const r = await supa('POST', 'fin_receitas', { body, returning: true }); refId = r[0]?.id; }
+      else                    { const r = await supa('POST', 'fin_despesas', { body, returning: true }); refId = r[0]?.id; }
+    } catch(e) { adicionarFilaItem(id, file.name, 'erro', 'Erro ao salvar: ' + e.message, null); return; }
+
+    if (refId) {
+      try {
+        const path = `${APP.user.tenant_id}/${tipo}/${refId}/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g,'_')}`;
+        await uploadStorage(path, file);
+        await supa('POST', 'fin_anexos', { body: { tenant_id: APP.user.tenant_id, tipo_ref: tipo, ref_id: refId, nome: file.name, tipo_arquivo: 'text/xml', storage_path: path, tamanho: file.size }});
+      } catch(_) {}
+    }
+
+    adicionarFilaItem(id, file.name, 'ok', `${tipo==='receita'?'Receita':'Despesa'} criada: ${desc} — ${fmtMoeda(vNF)}`, tipo);
+
+  } else {
+    // XML desconhecido — tenta extrair valores genéricos
+    adicionarFilaItem(id, file.name, 'erro', 'XML não reconhecido. Formatos suportados: NFS-e (ABRASF), NF-e (SEFAZ). Tente importar como PDF.', null);
+  }
 }
 
 async function processarExtratoAutoDoc(id, file) {
@@ -4363,7 +4436,7 @@ async function processarPDFAutoDoc(id, file) {
             },
             {
               type: 'text',
-              text: 'Analise este documento financeiro (boleto, nota fiscal, recibo ou comprovante) e extraia as informações. Responda APENAS com JSON valido, sem explicacoes, no formato: {"tipo":"despesa ou receita","descricao":"descricao curta","valor":0.00,"vencimento":"YYYY-MM-DD","beneficiario":"nome","observacao":"detalhes"}. Regras: boleto=despesa, NF recebida=despesa, NF emitida=receita. Se nao houver vencimento use hoje. valor sem simbolos.'
+              text: 'Analise este documento fiscal brasileiro (NFS-e, NF-e, boleto, recibo ou comprovante) e extraia as informacoes. Responda APENAS com JSON valido, sem explicacoes, no formato: {"tipo":"despesa ou receita","descricao":"NFS-e nº XXX - Nome ou descricao","valor":0.00,"vencimento":"YYYY-MM-DD","beneficiario":"nome do prestador ou emissor","numero_nf":"numero da nota se houver","cnpj_prestador":"cnpj sem pontuacao","cnpj_tomador":"cnpj sem pontuacao","observacao":"discriminacao do servico ou detalhes"}. Regras: NFS-e emitida por voce=receita, NFS-e recebida de terceiro=despesa, boleto=despesa, comprovante de recebimento=receita. valor deve ser numero sem simbolos. Se nao houver vencimento use a data de emissao ou hoje.'
             }
           ]
         }]

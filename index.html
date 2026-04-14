@@ -5662,28 +5662,21 @@ async function cadastrarEmpresaSA() {
   try {
     toast('Criando empresa...', 'default', 10000);
 
-    // 1. Criar usuário no Supabase Auth
-    const authRes = await fetch(`${SUPA_URL}/auth/v1/admin/users`, {
-      method: 'POST',
-      headers: {
-        'apikey': SUPA_KEY,
-        'Authorization': `Bearer ${APP.token}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ email, password: senha, email_confirm: true }),
-    });
-
-    // Se não tiver permissão admin, usa signup normal
+    // 1. Criar usuário no Supabase Auth via signup normal
     let authUser;
-    if (!authRes.ok) {
-      const signRes = await authFetch('POST', 'signup', { email, password: senha });
-      authUser = signRes.user || signRes;
-    } else {
-      const authData = await authRes.json();
-      authUser = authData;
+    try {
+      const signRes = await fetch(`${SUPA_URL}/auth/v1/signup`, {
+        method: 'POST',
+        headers: { 'apikey': SUPA_KEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password: senha }),
+      });
+      const signData = await signRes.json();
+      authUser = signData.user || signData;
+    } catch(e) {
+      throw new Error('Erro ao criar usuário: ' + e.message);
     }
 
-    if (!authUser?.id) throw new Error('Não foi possível criar o usuário. Verifique o e-mail.');
+    if (!authUser?.id) throw new Error('Não foi possível criar o usuário. Verifique se o e-mail já está cadastrado.');
 
     // 2. Criar tenant
     const tenant = await supa('POST', 'fin_tenants', {
@@ -5761,9 +5754,14 @@ async function criarUsuarioEmpresaSA(tenantId) {
   const perfil= $id('sa-usr-perfil')?.value;
   if (!nome || !email || !senha) { toast('Preencha todos os campos.', 'error'); return; }
   try {
-    const signRes = await authFetch('POST', 'signup', { email, password: senha });
-    const authUser = signRes.user || signRes;
-    if (!authUser?.id) throw new Error('Erro ao criar usuário.');
+    const signRes = await fetch(`${SUPA_URL}/auth/v1/signup`, {
+      method: 'POST',
+      headers: { 'apikey': SUPA_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password: senha }),
+    });
+    const signData = await signRes.json();
+    const authUser = signData.user || signData;
+    if (!authUser?.id) throw new Error('Erro ao criar usuário. E-mail já cadastrado?');
     await supa('POST', 'fin_usuarios', {
       body: { tenant_id: tenantId, auth_id: authUser.id, nome, email, perfil }
     });

@@ -665,6 +665,10 @@ tbody td { padding: 11px 16px; font-size: 13px; }
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm3.88-11.71L10 14.17l-1.88-1.88a.996.996 0 1 0-1.41 1.41l2.59 2.59c.39.39 1.02.39 1.41 0L17.3 9.7a.996.996 0 0 0 0-1.41c-.39-.39-1.03-.39-1.42 0z"/></svg>
         Metas
       </button>
+      <button class="nav-item" onclick="go('clifinanceiro')" data-page="clifinanceiro">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
+        Clientes · Receber
+      </button>
       <button class="nav-item" onclick="go('relatorios')" data-page="relatorios">
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 2H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-2 5h-3v5.5c0 1.38-1.12 2.5-2.5 2.5S10 13.88 10 12.5 11.12 10 12.5 10c.57 0 1.08.19 1.5.51V5h4v2zM4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6z"/></svg>
         Relatórios
@@ -1088,6 +1092,7 @@ const PAGES = {
   dre:          { title: 'DRE',             render: renderDRE },
   metas:        { title: 'Metas',           render: renderMetas },
   relatorios:   { title: 'Relatórios',      render: renderRelatorios },
+  clifinanceiro:{ title: 'Clientes · A Receber', render: renderClientesAReceber },
   clientes:     { title: 'Clientes',        render: renderClientes },
   fornecedores: { title: 'Fornecedores',    render: renderFornecedores },
   categorias:   { title: 'Categorias',      render: renderCategorias },
@@ -4048,14 +4053,14 @@ function renderDocumentos() {
 
   <!-- Tabs -->
   <div style="display:flex;gap:2px;background:var(--surface-2);border-radius:10px;padding:4px;border:1px solid var(--border)">
-    ${['importar','historico'].map(t=>{
+    ${['importar','plano','historico'].map(t=>{
       const active = (window._docTab||'importar')===t;
-      const labels = {importar:'📥 Importar Documentos', historico:'📁 Histórico'};
+      const labels = {importar:'📥 Importar Documentos', plano:'📊 Plano de Contas', historico:'📁 Histórico'};
       return `<button onclick="window._docTab='${t}';renderDocumentos()" style="flex:1;padding:9px;border-radius:7px;border:none;background:${active?'var(--surface)':'transparent'};color:${active?'var(--gold)':'var(--text-2)'};font-family:var(--font);font-size:13px;font-weight:${active?700:500};cursor:pointer;box-shadow:${active?'var(--shadow)':'none'};transition:var(--tr)">${labels[t]}</button>`;
     }).join('')}
   </div>
 
-  ${(window._docTab||'importar')==='importar' ? renderDocImportar() : renderDocHistorico()}
+  ${(window._docTab||'importar')==='importar' ? renderDocImportar() : (window._docTab==='plano' ? renderDocPlanoContas() : renderDocHistorico())}
   </div>`;
 }
 
@@ -4278,6 +4283,15 @@ async function processarXMLAutoDoc(id, file) {
       return;
     }
 
+    // Validar se o documento tem relação com o CNPJ da empresa
+    if (cnpjEmpresa && cnpjPrestador && cnpjTomador) {
+      if (cnpjEmpresa !== cnpjPrestador && cnpjEmpresa !== cnpjTomador) {
+        adicionarFilaItem(id, file.name, 'erro',
+          `NFS-e rejeitada — CNPJ da empresa (${cnpjEmpresa}) não consta como prestador nem tomador deste documento.`, null);
+        return;
+      }
+    }
+
     // Detectar tipo: prestador = empresa → receita; tomador = empresa → despesa
     let tipo = 'receita'; // padrão: você emitiu
     if (cnpjEmpresa && cnpjTomador && cnpjTomador === cnpjEmpresa) tipo = 'despesa';
@@ -4294,6 +4308,21 @@ async function processarXMLAutoDoc(id, file) {
       status:     'pendente',
       observacao: `${discriminacao.slice(0,200)} | Prestador: ${nomePrestador} | Tomador: ${nomeTomador} | Importado via NFS-e XML`,
     };
+
+    // Verificar duplicado
+    const tabela = tipo === 'receita' ? 'fin_receitas' : 'fin_despesas';
+    const existentes = await supa('GET', tabela, { params: {
+      tenant_id: `eq.${APP.user.tenant_id}`,
+      descricao: `eq.${desc}`,
+      valor: `eq.${valor}`,
+      select: 'id',
+      limit: 1,
+    }}).catch(()=>[]);
+    if (existentes?.length) {
+      adicionarFilaItem(id, file.name, 'erro',
+        `Duplicado detectado — "${desc}" (${fmtMoeda(valor)}) já existe. Importação cancelada.`, null);
+      return;
+    }
 
     let refId;
     try {
@@ -4826,6 +4855,198 @@ async function confirmarImportacaoNFe() {
     _nfeData = null;
     go('receber');
   } catch(e) { toast('Erro: ' + e.message, 'error'); btn.disabled=false; btn.textContent='Criar receita'; }
+}
+
+// ── PLANO DE CONTAS ────────────────────────────────────────────
+function renderDocPlanoContas() {
+  return `
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+
+  <!-- Plano Financeiro -->
+  <div class="card">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+      <span style="font-size:24px">📊</span>
+      <div>
+        <div style="font-size:13px;font-weight:700;color:var(--text)">Plano de Contas Financeiro</div>
+        <div style="font-size:11.5px;color:var(--text-3)">Categorias de receitas e despesas</div>
+      </div>
+    </div>
+    <div style="font-size:12px;color:var(--text-2);margin-bottom:14px;line-height:1.7;background:var(--surface-2);padding:10px 12px;border-radius:8px;border:1px solid var(--border)">
+      <strong>Formato CSV:</strong><br>
+      <code style="font-family:var(--mono);font-size:11px">nome;tipo;cor</code><br>
+      <span style="font-size:11px">Ex: <code style="font-family:var(--mono)">Honorários;receita;#1e8449</code></span><br>
+      <span style="font-size:11px">Tipos: <strong>receita</strong> ou <strong>despesa</strong></span>
+    </div>
+    <label class="btn btn-gold" style="cursor:pointer;display:inline-flex;align-items:center;gap:8px;width:100%;justify-content:center">
+      📂 Importar CSV
+      <input type="file" accept=".csv,.txt" style="display:none" onchange="importarPlanoFinanceiro(this)">
+    </label>
+    <div style="margin-top:12px;font-size:11px;color:var(--text-3)">${CATEGORIAS.length} categorias cadastradas</div>
+  </div>
+
+  <!-- Plano Contábil -->
+  <div class="card">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+      <span style="font-size:24px">📒</span>
+      <div>
+        <div style="font-size:13px;font-weight:700;color:var(--text)">Plano de Contas Contábil</div>
+        <div style="font-size:11.5px;color:var(--text-3)">Contas do plano contábil da empresa</div>
+      </div>
+    </div>
+    <div style="font-size:12px;color:var(--text-2);margin-bottom:14px;line-height:1.7;background:var(--surface-2);padding:10px 12px;border-radius:8px;border:1px solid var(--border)">
+      <strong>Formato CSV:</strong><br>
+      <code style="font-family:var(--mono);font-size:11px">codigo;nome;tipo;natureza</code><br>
+      <span style="font-size:11px">Ex: <code style="font-family:var(--mono)">3.1.1;Receita Bruta;receita;credora</code></span><br>
+      <span style="font-size:11px">Natureza: <strong>devedora</strong> ou <strong>credora</strong></span>
+    </div>
+    <label class="btn btn-gold" style="cursor:pointer;display:inline-flex;align-items:center;gap:8px;width:100%;justify-content:center">
+      📂 Importar CSV
+      <input type="file" accept=".csv,.txt" style="display:none" onchange="importarPlanoContabil(this)">
+    </label>
+    <div style="margin-top:12px;font-size:11px;color:var(--text-3)">Plano contábil separado dos lançamentos financeiros</div>
+  </div>
+
+  </div>
+
+  <!-- Resultado importação -->
+  <div id="plano-resultado" style="margin-top:8px"></div>`;
+}
+
+async function importarPlanoFinanceiro(input) {
+  const file = input.files[0]; if (!file) return;
+  const text = await file.text();
+  const linhas = text.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
+  let ok=0, skip=0, err=0;
+
+  const resultado = $id('plano-resultado');
+  if (resultado) resultado.innerHTML = '<div style="color:var(--text-3);font-size:12px">Importando...</div>';
+
+  for (const linha of linhas) {
+    const sep  = linha.includes(';') ? ';' : ',';
+    const cols = linha.split(sep).map(c=>c.replace(/"/g,'').trim());
+    if (cols.length < 2) continue;
+    const [nome, tipo, cor] = cols;
+    if (!nome || !tipo) continue;
+    const tipoNorm = tipo.toLowerCase().includes('rec') ? 'receita' : 'despesa';
+
+    // Verificar duplicado
+    const existe = CATEGORIAS.find(c => c.nome.toLowerCase() === nome.toLowerCase());
+    if (existe) { skip++; continue; }
+
+    try {
+      await supa('POST', 'fin_categorias', { body: {
+        tenant_id: APP.user.tenant_id,
+        nome, tipo: tipoNorm,
+        cor: cor || (tipoNorm==='receita'?'#1e8449':'#c0392b'),
+        icone: tipoNorm==='receita'?'💰':'💸',
+      }});
+      ok++;
+    } catch(_) { err++; }
+  }
+
+  await carregarDados();
+  const msg = `${ok} categoria(s) importada(s) · ${skip} já existia(m) · ${err} erro(s)`;
+  if (resultado) resultado.innerHTML = `<div style="background:var(--green-lt);border:1px solid var(--green);border-radius:9px;padding:12px 16px;font-size:12.5px;color:var(--green);font-weight:600">${msg}</div>`;
+  toast(msg, ok>0?'success':'warn');
+  input.value='';
+}
+
+async function importarPlanoContabil(input) {
+  const file = input.files[0]; if (!file) return;
+  const text = await file.text();
+  const linhas = text.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
+  let ok=0, skip=0, err=0;
+
+  const resultado = $id('plano-resultado');
+  if (resultado) resultado.innerHTML = '<div style="color:var(--text-3);font-size:12px">Importando...</div>';
+
+  // Salvar no localStorage por enquanto (tabela contábil separada é futura)
+  const planoAtual = JSON.parse(localStorage.getItem(`plano_contabil_${APP.user.tenant_id}`)||'[]');
+  const novos = [];
+
+  for (const linha of linhas) {
+    const sep  = linha.includes(';') ? ';' : ',';
+    const cols = linha.split(sep).map(c=>c.replace(/"/g,'').trim());
+    if (cols.length < 2) continue;
+    const [codigo, nome, tipo, natureza] = cols;
+    if (!codigo || !nome) continue;
+    const existe = planoAtual.find(c=>c.codigo===codigo);
+    if (existe) { skip++; continue; }
+    novos.push({ codigo, nome, tipo: tipo||'', natureza: natureza||'devedora' });
+    ok++;
+  }
+
+  const planoFinal = [...planoAtual, ...novos];
+  localStorage.setItem(`plano_contabil_${APP.user.tenant_id}`, JSON.stringify(planoFinal));
+
+  const msg = `${ok} conta(s) importada(s) · ${skip} já existia(m)`;
+  if (resultado) resultado.innerHTML = `<div style="background:var(--green-lt);border:1px solid var(--green);border-radius:9px;padding:12px 16px;font-size:12.5px;color:var(--green);font-weight:600">${msg}<br><span style="font-size:11px;font-weight:400">Total no plano: ${planoFinal.length} contas</span></div>`;
+  toast(msg, ok>0?'success':'warn');
+  input.value='';
+}
+
+// ── CLIENTES A RECEBER ────────────────────────────────────────
+function renderClientesAReceber() {
+  $id('topbar-actions').innerHTML = '';
+  const hoje = today();
+
+  // Agrupar receitas pendentes por cliente
+  const recPend = RECEITAS.filter(r => r.status === 'pendente');
+  const porCliente = {};
+
+  recPend.forEach(r => {
+    const cliId  = r.cliente_id || '__sem_cliente__';
+    const cliNome = r.cliente_id ? getNome(CLIENTES, r.cliente_id) : 'Sem cliente';
+    if (!porCliente[cliId]) porCliente[cliId] = { nome: cliNome, total: 0, vencidas: 0, aVencer: 0, itens: [] };
+    const valor = parseFloat(r.valor)||0;
+    porCliente[cliId].total += valor;
+    porCliente[cliId].itens.push(r);
+    if (r.vencimento < hoje) porCliente[cliId].vencidas += valor;
+    else porCliente[cliId].aVencer += valor;
+  });
+
+  const lista = Object.values(porCliente).sort((a,b)=>b.total-a.total);
+  const totalGeral   = lista.reduce((s,c)=>s+c.total,0);
+  const totalVencido = lista.reduce((s,c)=>s+c.vencidas,0);
+
+  $id('page-content').innerHTML = `
+  <div style="display:flex;flex-direction:column;gap:16px">
+
+  <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr)">
+    <div class="kpi-card k-gold"><div class="kpi-label">Total a Receber</div><div class="kpi-value" style="color:var(--gold)">${fmtMoeda(totalGeral)}</div><div class="kpi-sub">${recPend.length} título(s)</div></div>
+    <div class="kpi-card k-red"><div class="kpi-label">Vencidos</div><div class="kpi-value" style="color:var(--red)">${fmtMoeda(totalVencido)}</div><div class="kpi-sub">${recPend.filter(r=>r.vencimento<hoje).length} título(s)</div></div>
+    <div class="kpi-card k-green"><div class="kpi-label">A Vencer</div><div class="kpi-value" style="color:var(--green)">${fmtMoeda(totalGeral-totalVencido)}</div></div>
+    <div class="kpi-card"><div class="kpi-label">Clientes c/ pendência</div><div class="kpi-value">${lista.length}</div></div>
+  </div>
+
+  ${lista.length===0
+    ? `<div class="empty-state"><div class="empty-icon">✅</div><h3>Nenhum título a receber</h3></div>`
+    : `<div class="card" style="padding:0;overflow:hidden">
+        <table>
+          <thead><tr>
+            <th>Cliente</th>
+            <th style="text-align:right">Total</th>
+            <th style="text-align:right">Vencido</th>
+            <th style="text-align:right">A Vencer</th>
+            <th style="text-align:center">Títulos</th>
+            <th>Próx. Venc.</th>
+          </tr></thead>
+          <tbody>
+            ${lista.map(c => {
+              const proxVenc = c.itens.filter(r=>r.vencimento>=hoje).sort((a,b)=>a.vencimento.localeCompare(b.vencimento))[0];
+              return `<tr style="${c.vencidas>0?'background:rgba(192,57,43,.03)':''}">
+                <td style="font-weight:600;color:var(--text)">${c.nome}</td>
+                <td style="text-align:right;font-family:var(--mono);font-weight:700;color:var(--gold)">${fmtMoeda(c.total)}</td>
+                <td style="text-align:right;font-family:var(--mono);font-weight:700;color:${c.vencidas>0?'var(--red)':'var(--text-3)'}">${c.vencidas>0?fmtMoeda(c.vencidas):'—'}</td>
+                <td style="text-align:right;font-family:var(--mono);color:var(--green)">${c.aVencer>0?fmtMoeda(c.aVencer):'—'}</td>
+                <td style="text-align:center;color:var(--text-2)">${c.itens.length}</td>
+                <td style="font-family:var(--mono);font-size:11px;color:var(--text-3)">${proxVenc?fmtData(proxVenc.vencimento):'—'}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>`}
+  </div>`;
 }
 
 // ── PDF ENGINE (print window) ─────────────────────────────────
@@ -5943,12 +6164,46 @@ function modalGerenciarEmpresa(tenantId) {
   );
 }
 
-async function excluirEmpresaSA(tenantId, nome) {
-  if (!confirm(`Excluir a empresa "${nome}"? Todos os dados serão perdidos permanentemente.`)) return;
-  if (!confirm('Tem certeza? Esta ação é irreversível.')) return;
+function excluirEmpresaSA(tenantId, nome) {
+  openModal('🔐 Confirmar Exclusão de Empresa', `
+    <div style="text-align:center;padding:8px 0">
+      <div style="font-size:36px;margin-bottom:12px">⚠️</div>
+      <div style="font-size:14px;font-weight:700;color:var(--red);margin-bottom:8px">Excluir "${nome}"?</div>
+      <div style="font-size:12.5px;color:var(--text-2);margin-bottom:20px;line-height:1.6">
+        Todos os dados desta empresa serão <strong>permanentemente apagados</strong>.<br>
+        Esta ação é <strong>irreversível</strong>.
+      </div>
+      <div class="form-field">
+        <label class="form-label">Digite sua senha de admin para confirmar</label>
+        <input class="form-input" type="password" id="sa-del-senha" placeholder="Sua senha de acesso">
+      </div>
+    </div>`,
+    `<button class="btn btn-outline" onclick="closeModal()">Cancelar</button>
+     <button class="btn btn-sm" style="background:var(--red);color:#fff;border:none;padding:9px 18px;border-radius:9px;font-family:var(--font);font-size:13px;font-weight:700;cursor:pointer" onclick="confirmarExcluirEmpresaSA('${tenantId}','${nome.replace(/'/g,"\'")}')">Excluir definitivamente</button>`
+  );
+}
+
+async function confirmarExcluirEmpresaSA(tenantId, nome) {
+  const senha = $id('sa-del-senha')?.value?.trim();
+  if (!senha) { toast('Digite sua senha para confirmar.', 'error'); return; }
+
+  // Verificar senha fazendo login
+  try {
+    const res = await fetch(`${SUPA_URL}/auth/v1/token?grant_type=password`, {
+      method: 'POST',
+      headers: { 'apikey': SUPA_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: APP.user.email, password: senha }),
+    });
+    const data = await res.json();
+    if (!data.access_token) throw new Error('Senha incorreta.');
+  } catch(e) {
+    toast('Senha incorreta. Exclusão cancelada.', 'error');
+    return;
+  }
+
   try {
     await supa('DELETE', 'fin_tenants', { params: { id: `eq.${tenantId}` } });
-    toast(`Empresa "${nome}" excluída.`, 'success');
+    toast(`Empresa "${nome}" excluída permanentemente.`, 'success');
     closeModal();
     await renderSuperadmin();
   } catch(e) { toast('Erro: ' + e.message, 'error'); }

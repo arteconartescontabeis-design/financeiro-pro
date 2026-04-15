@@ -4224,7 +4224,8 @@ async function processarXMLAutoDoc(id, file) {
                 || doc.getElementsByTagName('Nfse').length > 0
                 || doc.getElementsByTagName('nfse').length > 0
                 || text.includes('CompNfse')
-                || text.includes('ConsultarNfseResposta');
+                || text.includes('ConsultarNfseResposta')
+                || get('numero_nfse','NumeroNfse') !== '';
   const isNFe   = doc.getElementsByTagName('NFe').length > 0
                 || doc.getElementsByTagName('nfeProc').length > 0
                 || get('tpNF') !== '';
@@ -4237,27 +4238,40 @@ async function processarXMLAutoDoc(id, file) {
 
   if (isNFSe) {
     // ── PARSER NFSe ABRASF + prefeituras ─────────────────────
-    const numero    = get('Numero','NumeroNfse','numero','nNFSe');
-    const dataEmi   = get('DataEmissao','DataEmissaoNfse','Competencia','dataEmissao') || today();
-    const data      = dataEmi.length >= 10 ? dataEmi.slice(0,10) : today();
+    const numero    = get('numero_nfse','Numero','NumeroNfse','nNFSe');
 
-    // Valor
-    const valorStr  = get('ValorServicos','ValorLiquidoNfse','ValorNfse','ValorTotal','Valor','ValorDeducoes');
-    const valor     = parseFloat(valorStr.replace(',','.')) || 0;
+    // Data — suporta DD/MM/YYYY e YYYY-MM-DD
+    const dataRaw   = get('data_nfse','DataEmissao','DataEmissaoNfse','Competencia','dataEmissao') || today();
+    let data = today();
+    if (dataRaw.includes('/')) {
+      // DD/MM/YYYY → YYYY-MM-DD
+      const [d,m,y] = dataRaw.split('/');
+      data = `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`;
+    } else if (dataRaw.length >= 10) {
+      data = dataRaw.slice(0,10);
+    }
 
-    // Prestador (quem emitiu a NF)
-    const cnpjPrestador = get('CnpjPrestador','Cnpj').replace(/\D/g,'') ||
+    // Valor — suporta vírgula como decimal (formato BR)
+    const valorStr  = get('valor_total','ValorServicos','ValorLiquidoNfse','ValorNfse','ValorTotal','Valor','valor_tributavel');
+    const valor     = parseFloat(valorStr.replace(/\./g,'').replace(',','.')) || 0;
+
+    // Prestador
+    const cnpjPrestador = get('cpfcnpj').replace(/\D/g,'') ||
+                          (doc.getElementsByTagName('prestador')[0]?.getElementsByTagName('cpfcnpj')[0]?.textContent?.trim()||'').replace(/\D/g,'') ||
                           (doc.getElementsByTagName('Prestador')[0]?.getElementsByTagName('Cnpj')[0]?.textContent?.trim()||'').replace(/\D/g,'');
     const nomePrestador = get('RazaoSocialPrestador','RazaoSocial','NomeFantasiaPrestador') ||
                           doc.getElementsByTagName('Prestador')[0]?.getElementsByTagName('RazaoSocial')[0]?.textContent?.trim() || '—';
 
-    // Tomador (quem recebeu/contratou)
-    const cnpjTomador   = (doc.getElementsByTagName('Tomador')[0]?.getElementsByTagName('Cnpj')[0]?.textContent?.trim()||'').replace(/\D/g,'');
-    const nomeTomador   = doc.getElementsByTagName('Tomador')[0]?.getElementsByTagName('RazaoSocial')[0]?.textContent?.trim() ||
+    // Tomador
+    const cnpjTomador   = (doc.getElementsByTagName('tomador')[0]?.getElementsByTagName('cpfcnpj')[0]?.textContent?.trim()||'').replace(/\D/g,'') ||
+                          (doc.getElementsByTagName('Tomador')[0]?.getElementsByTagName('Cnpj')[0]?.textContent?.trim()||'').replace(/\D/g,'');
+    const nomeTomador   = doc.getElementsByTagName('tomador')[0]?.getElementsByTagName('nome_razao_social')[0]?.textContent?.trim() ||
+                          doc.getElementsByTagName('tomador')[0]?.getElementsByTagName('sobrenome_nome_fantasia')[0]?.textContent?.trim() ||
+                          doc.getElementsByTagName('Tomador')[0]?.getElementsByTagName('RazaoSocial')[0]?.textContent?.trim() ||
                           get('RazaoSocialTomador','NomeFantasiaTomador') || '—';
 
     // Discriminação do serviço
-    const discriminacao = get('Discriminacao','DescricaoServico','Descricao') || '';
+    const discriminacao = get('descritivo','Discriminacao','DescricaoServico','Descricao') || '';
 
     if (!valor) {
       adicionarFilaItem(id, file.name, 'erro', 'NFS-e: valor não encontrado no XML.', null);

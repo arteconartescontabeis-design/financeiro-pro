@@ -1,182 +1,1178 @@
-# CORREÇÕES RLS - APLICAR NO CÓDIGO ORIGINAL
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Artecon · Financeiro Pro</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=DM+Mono:wght@400;500&family=Playfair+Display:wght@700&family=Lato:wght@300;400;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  /* ── Artecon IRRF Palette ── */
+  --bg:          #f4f6f9;
+  --bg-2:        #ffffff;
+  --surface:     #ffffff;
+  --surface-2:   #f0f2f5;
+  --border:      rgba(0,0,0,0.08);
+  --border-lt:   rgba(0,0,0,0.14);
+  --text:        #1a2332;
+  --text-2:      #4a5568;
+  --text-3:      #8896a8;
+  --gold:        #1a5276;
+  --gold-lt:     #d6e4f0;
+  --gold-dim:    #154360;
+  --green:       #1e8449;
+  --green-lt:    #eafaf1;
+  --red:         #c0392b;
+  --red-lt:      #fdedec;
+  --amber:       #b7770d;
+  --amber-lt:    #fef9e7;
+  --sidebar-w:   200px;
+  --radius:      12px;
+  --shadow:      0 2px 12px rgba(0,0,0,0.08);
+  --shadow-lg:   0 8px 32px rgba(0,0,0,0.14);
+  --font:        'DM Sans', sans-serif;
+  --mono:        'DM Mono', monospace;
+  --tr:          160ms cubic-bezier(.4,0,.2,1);
+  --gold-glow:   0 0 20px rgba(26,82,118,.15);
+}
 
-## 1. ADICIONAR FUNÇÃO setTenantIdInJWT DEPOIS DA FUNÇÃO supaAuth:
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-```javascript
-// ── FUNÇÃO CRÍTICA: SETAR TENANT_ID NO JWT ────────────────────
-async function setTenantIdInJWT(tenantId) {
-  try {
-    console.log('🔧 Setando tenant_id no JWT:', tenantId);
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13.5px;
+  line-height: 1.55;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* ── SCROLLBAR ─────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-lt); border-radius: 99px; }
+
+/* ── BASE CLASSES ─────────────────────────────────────────── */
+.btn {
+  padding: 8px 16px; border: none; border-radius: 8px; font-family: var(--font);
+  font-size: 12.5px; font-weight: 600; cursor: pointer; transition: var(--tr);
+  text-decoration: none; display: inline-flex; align-items: center; gap: 6px;
+}
+.btn-gold {
+  background: var(--gold); color: #ffffff;
+}
+.btn-gold:hover { background: var(--gold-dim); }
+.btn-outline {
+  background: transparent; color: var(--text-2); border: 1px solid var(--border-lt);
+}
+.btn-outline:hover { background: var(--surface-2); }
+
+.card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 20px; box-shadow: var(--shadow);
+}
+
+/* ── MODAL ─────────────────────────────────────────────────── */
+#modal-overlay {
+  display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,.6); z-index: 1000; align-items: center; justify-content: center;
+  padding: 20px;
+}
+#modal-overlay.visible { display: flex; }
+
+#modal {
+  background: var(--surface); border-radius: 16px; max-width: 800px; width: 100%;
+  max-height: 90vh; overflow: auto; box-shadow: var(--shadow-lg);
+}
+
+.modal-header {
+  padding: 20px 24px 16px; border-bottom: 1px solid var(--border);
+  display: flex; justify-content: space-between; align-items: center;
+}
+.modal-title { font-size: 16px; font-weight: 700; color: var(--text); }
+.modal-close { 
+  background: none; border: none; font-size: 20px; cursor: pointer;
+  color: var(--text-3); padding: 4px; border-radius: 6px;
+}
+.modal-close:hover { background: var(--surface-2); }
+
+.modal-body { padding: 20px 24px; }
+.modal-footer { 
+  padding: 16px 24px; border-top: 1px solid var(--border);
+  display: flex; justify-content: flex-end; gap: 10px;
+}
+
+/* ── DROP ZONE ─────────────────────────────────────────────── */
+.drop-zone {
+  border: 2px dashed var(--border-lt);
+  border-radius: 14px;
+  padding: 48px 24px;
+  text-align: center;
+  background: var(--surface);
+  cursor: pointer;
+  transition: all .2s;
+  position: relative;
+}
+
+.drop-zone:hover,
+.drop-zone.drag-over {
+  border-color: var(--gold);
+  background: var(--gold-lt);
+}
+
+.drop-zone input[type="file"] { display: none; }
+
+/* ── PREVIEW TABLE ────────────────────────────────────────── */
+.preview-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 16px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.preview-table th {
+  background: var(--surface-2);
+  padding: 10px 12px;
+  text-align: left;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: .06em;
+}
+
+.preview-table td {
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.preview-table tr.selected {
+  background: var(--gold-lt);
+}
+
+/* ── BADGES ────────────────────────────────────────────────── */
+.badge {
+  padding: 3px 8px;
+  border-radius: 20px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+
+.badge-green { background: var(--green-lt); color: var(--green); }
+.badge-red { background: var(--red-lt); color: var(--red); }
+.badge-amber { background: var(--amber-lt); color: var(--amber); }
+
+/* ── CHECKBOX ──────────────────────────────────────────────── */
+.checkbox {
+  position: relative;
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+}
+
+.checkbox input {
+  position: absolute;
+  opacity: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  cursor: pointer;
+}
+
+.checkbox-mark {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: var(--surface);
+  border: 2px solid var(--border-lt);
+  border-radius: 4px;
+  transition: var(--tr);
+}
+
+.checkbox input:checked + .checkbox-mark {
+  background: var(--gold);
+  border-color: var(--gold);
+}
+
+.checkbox-mark:after {
+  content: "";
+  position: absolute;
+  display: none;
+  left: 5px;
+  top: 2px;
+  width: 4px;
+  height: 8px;
+  border: solid white;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.checkbox input:checked + .checkbox-mark:after {
+  display: block;
+}
+
+/* ── PROGRESS BAR ──────────────────────────────────────────── */
+.progress-bar {
+  background: var(--surface-2);
+  border-radius: 10px;
+  height: 6px;
+  overflow: hidden;
+  margin: 10px 0;
+}
+
+.progress-fill {
+  background: var(--gold);
+  height: 100%;
+  border-radius: 10px;
+  transition: width 0.3s ease;
+  width: 0%;
+}
+
+/* ── LOADING SPINNER ───────────────────────────────────────── */
+.spinner {
+  border: 2px solid var(--surface-2);
+  border-top: 2px solid var(--gold);
+  border-radius: 50%;
+  width: 16px;
+  height: 16px;
+  animation: spin 1s linear infinite;
+  display: inline-block;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+</style>
+</head>
+<body>
+
+<!-- Modal para importação de OFX -->
+<div id="modal-overlay">
+  <div id="modal">
+    <div class="modal-header">
+      <div class="modal-title">Importar Extrato Bancário (OFX/CSV)</div>
+      <button class="modal-close" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div id="modal-content">
+        <!-- Conteúdo será inserido aqui -->
+      </div>
+    </div>
+    <div class="modal-footer" id="modal-footer">
+      <!-- Botões serão inseridos aqui -->
+    </div>
+  </div>
+</div>
+
+<div style="padding: 40px 20px;">
+  <div style="max-width: 1200px; margin: 0 auto;">
     
-    // Atualizar user metadata com tenant_id
-    const updateRes = await fetch(`${SUPA_URL}/auth/v1/user`, {
-      method: 'PUT',
-      headers: {
-        'apikey': SUPA_KEY,
-        'Authorization': `Bearer ${APP.token}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        data: { tenant_id: tenantId }
-      })
-    });
-    
-    if (updateRes.ok) {
-      console.log('✅ tenant_id setado no JWT:', tenantId);
+    <div style="margin-bottom: 32px;">
+      <h1 style="font-size: 24px; font-weight: 700; color: var(--text); margin-bottom: 8px;">
+        Financeiro Pro - Fase 2
+      </h1>
+      <p style="color: var(--text-2);">
+        Importação inteligente de extratos bancários com categorização automática
+      </p>
+    </div>
+
+    <!-- Drop zone principal -->
+    <div class="drop-zone" 
+         ondragover="handleDragOver(event)"
+         ondragleave="handleDragLeave(event)"
+         ondrop="handleDrop(event)"
+         onclick="document.getElementById('file-input').click()">
       
-      // Refresh token para pegar as claims atualizadas
-      const refreshToken = JSON.parse(localStorage.getItem('supabase.auth.token') || '{}').refresh_token;
-      if (refreshToken) {
-        const refreshRes = await fetch(`${SUPA_URL}/auth/v1/token?grant_type=refresh_token`, {
-          method: 'POST',
-          headers: { 'apikey': SUPA_KEY, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ refresh_token: refreshToken })
-        });
+      <div style="font-size: 48px; margin-bottom: 12px;">📂</div>
+      <div style="font-size: 18px; font-weight: 700; color: var(--text); margin-bottom: 8px;">
+        Arraste seu extrato bancário aqui
+      </div>
+      <div style="font-size: 14px; color: var(--text-3); margin-bottom: 20px;">
+        ou clique para selecionar arquivo
+      </div>
+      
+      <label class="btn btn-gold">
+        Selecionar arquivo OFX/CSV
+        <input type="file" id="file-input" accept=".ofx,.csv,.txt" onchange="handleFileSelect(event)">
+      </label>
+      
+      <div style="margin-top: 20px; font-size: 12px; color: var(--text-3);">
+        <strong>Formatos suportados:</strong> OFX (Open Financial Exchange), CSV, TXT<br>
+        <strong>Bancos testados:</strong> Itaú, Bradesco, Santander, Banco do Brasil, Caixa, Nubank
+      </div>
+    </div>
+
+    <!-- Área de configurações -->
+    <div class="card" style="margin-top: 24px;">
+      <h3 style="font-size: 16px; font-weight: 700; margin-bottom: 16px; color: var(--text);">
+        ⚙️ Configurações de Importação
+      </h3>
+      
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+        <div>
+          <label style="display: block; font-size: 12px; font-weight: 600; color: var(--text-2); margin-bottom: 6px;">
+            Conta bancária padrão
+          </label>
+          <select id="conta-select" style="width: 100%; padding: 8px 12px; border: 1px solid var(--border-lt); border-radius: 6px; font-size: 13px;">
+            <option value="">Detectar automaticamente</option>
+            <option value="manual">Criar nova conta</option>
+          </select>
+        </div>
         
-        if (refreshRes.ok) {
-          const newTokenData = await refreshRes.json();
-          APP.token = newTokenData.access_token;
-          localStorage.setItem('supabase.auth.token', JSON.stringify(newTokenData));
-          console.log('✅ Token refreshed com tenant_id no JWT');
-        }
-      }
-    }
-  } catch(e) {
-    console.error('❌ Erro ao setar tenant_id no JWT:', e);
+        <div>
+          <label style="display: block; font-size: 12px; font-weight: 600; color: var(--text-2); margin-bottom: 6px;">
+            Categorização automática (IA)
+          </label>
+          <label class="checkbox" style="display: flex; align-items: center; gap: 8px;">
+            <input type="checkbox" id="auto-categorize" checked>
+            <span class="checkbox-mark"></span>
+            <span style="font-size: 13px;">Usar Claude API para categorizar transações</span>
+          </label>
+        </div>
+      </div>
+      
+      <div style="margin-top: 16px; padding: 12px; background: var(--amber-lt); border-radius: 8px; border: 1px solid rgba(183,119,13,.2);">
+        <div style="font-size: 12px; color: var(--amber); font-weight: 600; margin-bottom: 4px;">
+          💡 Funcionalidades da Fase 2
+        </div>
+        <ul style="font-size: 12px; color: var(--text-2); margin-left: 16px;">
+          <li>Parser OFX melhorado para todos os bancos brasileiros</li>
+          <li>Detecção automática de contas bancárias</li>
+          <li>Categorização inteligente via IA (descrição → categoria/conta contábil)</li>
+          <li>Preview interativo antes da importação</li>
+          <li>Detecção de duplicatas</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- Log de atividades -->
+    <div id="activity-log" style="margin-top: 24px; display: none;">
+      <div class="card">
+        <h3 style="font-size: 16px; font-weight: 700; margin-bottom: 16px; color: var(--text);">
+          📋 Log de Importação
+        </h3>
+        <div id="log-content"></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+// ── CONFIGURAÇÕES ──────────────────────────────────────────────
+const SUPABASE_URL = 'https://vuwgxndahrzinfdlapxz.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ1d2d4bmRhaHJ6aW5mZGxhcHh6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3MDg5NjI0MTgsImV4cCI6MjAyNDUzODQxOH0.O4zCtIm2jCEhKWQg8_EF5jvRLWJeGtM6turADnVYGKQ';
+
+// Mapeamento de bancos brasileiros
+const BANCOS_BRASIL = {
+  '001': { nome: 'Banco do Brasil', cor: '#FFD700' },
+  '237': { nome: 'Bradesco', cor: '#CC092F' },
+  '341': { nome: 'Itaú', cor: '#EC7000' },
+  '033': { nome: 'Santander', cor: '#EB0000' },
+  '104': { nome: 'Caixa Econômica', cor: '#0066B2' },
+  '260': { nome: 'Nu Pagamentos (Nubank)', cor: '#8A05BE' },
+  '212': { nome: 'Banco Original', cor: '#00A651' },
+  '077': { nome: 'Banco Inter', cor: '#FF6900' },
+  '290': { nome: 'PagSeguro', cor: '#00AEEF' },
+  '336': { nome: 'Banco C6', cor: '#000000' },
+};
+
+// Estado global
+let importState = {
+  file: null,
+  transactions: [],
+  accounts: [],
+  categories: [],
+  selectedItems: new Set(),
+  processing: false
+};
+
+// ── UTILITÁRIOS ────────────────────────────────────────────────
+function formatCurrency(value) {
+  return new Intl.NumberFormat('pt-BR', {
+    style: 'currency',
+    currency: 'BRL'
+  }).format(value);
+}
+
+function formatDate(dateStr) {
+  if (!dateStr) return '';
+  try {
+    const date = new Date(dateStr + 'T00:00:00');
+    return date.toLocaleDateString('pt-BR');
+  } catch {
+    return dateStr;
   }
 }
-```
 
-## 2. MODIFICAR FUNÇÃO doLogin - ADICIONAR localStorage:
+function addLog(message, type = 'info') {
+  const logEl = document.getElementById('log-content');
+  const activityLog = document.getElementById('activity-log');
+  
+  if (!logEl) return;
+  
+  activityLog.style.display = 'block';
+  
+  const icons = { info: 'ℹ️', success: '✅', error: '❌', warning: '⚠️' };
+  const colors = { 
+    info: 'var(--text-2)', 
+    success: 'var(--green)', 
+    error: 'var(--red)', 
+    warning: 'var(--amber)' 
+  };
+  
+  const timestamp = new Date().toLocaleTimeString('pt-BR');
+  
+  logEl.insertAdjacentHTML('beforeend', `
+    <div style="display: flex; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--border);">
+      <span>${icons[type] || 'ℹ️'}</span>
+      <div style="flex: 1;">
+        <span style="font-size: 11px; color: var(--text-3); font-family: var(--mono);">${timestamp}</span>
+        <div style="font-size: 12px; color: ${colors[type] || 'var(--text-2)'};">${message}</div>
+      </div>
+    </div>
+  `);
+  
+  // Scroll para o final
+  logEl.scrollTop = logEl.scrollHeight;
+}
 
-Encontre esta linha na função doLogin:
-```javascript
-APP.token = data.access_token;
-```
+// ── DRAG & DROP ────────────────────────────────────────────────
+function handleDragOver(event) {
+  event.preventDefault();
+  event.currentTarget.classList.add('drag-over');
+}
 
-Substitua por:
-```javascript
-APP.token = data.access_token;
+function handleDragLeave(event) {
+  event.currentTarget.classList.remove('drag-over');
+}
 
-// Salvar token no localStorage para refresh
-localStorage.setItem('supabase.auth.token', JSON.stringify(data));
-```
+function handleDrop(event) {
+  event.preventDefault();
+  event.currentTarget.classList.remove('drag-over');
+  
+  const files = event.dataTransfer.files;
+  if (files.length > 0) {
+    processFile(files[0]);
+  }
+}
 
-## 3. MODIFICAR FUNÇÃO doRegister - ADICIONAR localStorage:
+function handleFileSelect(event) {
+  const file = event.target.files[0];
+  if (file) {
+    processFile(file);
+  }
+}
 
-Encontre esta linha na função doRegister:
-```javascript
-APP.token = data.access_token;
-```
-
-Substitua por:
-```javascript
-APP.token = data.access_token;
-APP.nomeTemp = nome;
-APP.emailTemp = email;
-
-// Salvar token no localStorage para refresh
-localStorage.setItem('supabase.auth.token', JSON.stringify(data));
-```
-
-## 4. MODIFICAR FUNÇÃO inicializar - ADICIONAR setTenantIdInJWT:
-
-Encontre esta linha:
-```javascript
-APP.user = usuarios[0];
-```
-
-Adicione DEPOIS dela:
-```javascript
-APP.user = usuarios[0];
-
-// CRÍTICO: Setar tenant_id no JWT para RLS funcionar
-await setTenantIdInJWT(APP.user.tenant_id);
-```
-
-## 5. MODIFICAR FUNÇÃO finalizarOnboarding - ADICIONAR setTenantIdInJWT:
-
-Encontre esta linha:
-```javascript
-});
-console.log('👤 Usuário criado:', APP.nomeTemp);
-```
-
-Adicione DEPOIS dela:
-```javascript
-});
-console.log('👤 Usuário criado:', APP.nomeTemp);
-
-// CRÍTICO: Setar tenant_id no JWT antes de continuar
-await setTenantIdInJWT(tenant.id);
-```
-
-## 6. MODIFICAR FUNÇÃO carregarDados - REMOVER FILTROS tenant_id:
-
-ANTES:
-```javascript
-supa('GET', 'fin_contas', { params: { tenant_id: `eq.${tid}`, ativo: 'eq.true', select: '*' } }),
-```
-
-DEPOIS:
-```javascript
-supa('GET', 'fin_contas', { params: { ativo: 'eq.true', select: '*' } }),
-```
-
-Faça o mesmo para TODAS as queries em carregarDados (remover `tenant_id: eq.${tid}`)
-
-## 7. ADICIONAR FUNÇÃO DE TESTE (no final do arquivo):
-
-```javascript
-// ── FUNÇÃO DE TESTE RLS ───────────────────────────────────────
-async function testarRLS() {
-  console.log('🧪 TESTE RLS - Iniciando...');
+// ── PROCESSAMENTO DE ARQUIVOS ──────────────────────────────────
+async function processFile(file) {
+  if (importState.processing) return;
+  
+  importState.processing = true;
+  importState.file = file;
+  
+  addLog(`Processando arquivo: ${file.name} (${(file.size/1024).toFixed(1)}KB)`);
   
   try {
-    // Teste 1: Listar dados que devem estar filtrados por tenant
-    console.log('📊 Teste 1: Carregar dados via RLS...');
-    const contas = await supa('GET', 'fin_contas', { params: { select: '*' } });
-    const receitas = await supa('GET', 'fin_receitas', { params: { select: '*' } });
-    const categorias = await supa('GET', 'fin_categorias', { params: { select: '*' } });
+    const text = await readFileAsText(file);
+    const transactions = await parseTransactions(text, file.name);
     
-    console.log('✅ Dados retornados:', {
-      contas: contas.length,
-      receitas: receitas.length, 
-      categorias: categorias.length,
-      tenant_atual: APP.user.tenant_id
-    });
-    
-    // Teste 2: Tentar inserir sem tenant_id manual
-    console.log('📊 Teste 2: Inserir categoria sem tenant_id manual...');
-    const novaCategoria = await supa('POST', 'fin_categorias', {
-      body: { nome: 'Teste RLS', tipo: 'receita', cor: '#ff0000', icone: '🧪' },
-      returning: true
-    });
-    console.log('✅ Inserção via RLS funcionou:', novaCategoria[0]);
-    
-    // Teste 3: Verificar se foi criado com tenant_id correto
-    const testeCats = await supa('GET', 'fin_categorias', { 
-      params: { nome: 'eq.Teste RLS', select: '*' } 
-    });
-    if (testeCats[0]?.tenant_id === APP.user.tenant_id) {
-      console.log('✅ RLS funcionando: categoria criada com tenant_id correto');
-    } else {
-      console.log('❌ RLS falhou: tenant_id incorreto ou ausente');
+    if (transactions.length === 0) {
+      addLog('Nenhuma transação encontrada no arquivo', 'error');
+      return;
     }
     
-    // Limpar teste
-    await supa('DELETE', 'fin_categorias', { params: { nome: 'eq.Teste RLS' } });
+    importState.transactions = transactions;
+    addLog(`${transactions.length} transações encontradas`, 'success');
     
-    toast('🧪 Teste RLS concluído - ver console', 'success');
+    // Auto-categorizar se habilitado
+    if (document.getElementById('auto-categorize').checked) {
+      await categorizeTransactions(transactions);
+    }
     
-  } catch(e) {
-    console.error('❌ Erro no teste RLS:', e);
-    toast('❌ Teste RLS falhou: ' + e.message, 'error');
+    // Mostrar preview
+    showImportPreview(transactions);
+    
+  } catch (error) {
+    addLog(`Erro ao processar arquivo: ${error.message}`, 'error');
+  } finally {
+    importState.processing = false;
   }
 }
 
-// Adicionar função ao escopo global
-window.testarRLS = testarRLS;
-```
+function readFileAsText(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = e => resolve(e.target.result);
+    reader.onerror = () => reject(new Error('Erro ao ler arquivo'));
+    reader.readAsText(file, 'utf-8');
+  });
+}
 
-APLIQUE ESSAS MUDANÇAS ESPECÍFICAS NO SEU CÓDIGO ORIGINAL!
+// ── PARSER OFX MELHORADO ───────────────────────────────────────
+async function parseTransactions(text, fileName) {
+  const ext = fileName.toLowerCase().split('.').pop();
+  
+  if (ext === 'ofx' || text.includes('<OFX>') || text.includes('<STMTTRN>')) {
+    return parseOFXFormat(text);
+  } else if (ext === 'csv' || ext === 'txt') {
+    return parseCSVFormat(text);
+  } else {
+    throw new Error('Formato de arquivo não suportado');
+  }
+}
+
+function parseOFXFormat(text) {
+  const transactions = [];
+  
+  // Extrair informações da conta
+  const bankInfo = extractBankInfo(text);
+  addLog(`Banco detectado: ${bankInfo.bankName} - Agência: ${bankInfo.agency} - Conta: ${bankInfo.account}`);
+  
+  // Parser das transações
+  const stmtRegex = /<STMTTRN>([\s\S]*?)<\/STMTTRN>/g;
+  let match;
+  
+  while ((match = stmtRegex.exec(text)) !== null) {
+    const block = match[1];
+    
+    const getTag = (tag) => {
+      const regex = new RegExp(`<${tag}>([^<\\r\\n]+)`, 'i');
+      const result = regex.exec(block);
+      return result ? result[1].trim() : '';
+    };
+    
+    const trnType = getTag('TRNTYPE');
+    const dtPosted = getTag('DTPOSTED');
+    const trnAmt = getTag('TRNAMT');
+    const fitId = getTag('FITID');
+    const memo = getTag('MEMO') || getTag('NAME') || getTag('PAYEE') || '';
+    const checkNum = getTag('CHECKNUM');
+    
+    if (!dtPosted || !trnAmt) continue;
+    
+    // Converter data OFX (YYYYMMDDHHMMSS ou YYYYMMDD) para ISO
+    const dateStr = dtPosted.slice(0, 8);
+    const date = `${dateStr.slice(0,4)}-${dateStr.slice(4,6)}-${dateStr.slice(6,8)}`;
+    
+    // Validar data
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+    
+    const amount = parseFloat(trnAmt.replace(',', '.'));
+    if (isNaN(amount)) continue;
+    
+    // Limpar e melhorar descrição
+    let description = memo
+      .replace(/\s+/g, ' ')
+      .replace(/[^\w\sÀ-ÿ\-]/g, ' ')
+      .trim();
+    
+    if (!description) description = `${trnType} ${checkNum}`.trim() || 'Transação bancária';
+    
+    transactions.push({
+      id: fitId || `${date}_${amount}_${Math.random().toString(36).slice(2)}`,
+      date,
+      description,
+      amount,
+      type: amount >= 0 ? 'receita' : 'despesa',
+      bankInfo,
+      trnType,
+      checkNum,
+      memo,
+      category: null // Será preenchido pela IA
+    });
+  }
+  
+  return transactions;
+}
+
+function extractBankInfo(ofxText) {
+  const getTag = (tag) => {
+    const regex = new RegExp(`<${tag}>([^<\\r\\n]+)`, 'i');
+    const match = regex.exec(ofxText);
+    return match ? match[1].trim() : '';
+  };
+  
+  const bankId = getTag('BANKID');
+  const acctId = getTag('ACCTID');
+  const branchId = getTag('BRANCHID');
+  
+  const bankInfo = BANCOS_BRASIL[bankId] || { nome: 'Banco não identificado', cor: '#666' };
+  
+  return {
+    bankId,
+    bankName: bankInfo.nome,
+    bankColor: bankInfo.cor,
+    account: acctId,
+    agency: branchId || getTag('ROUTINGNUM') || '',
+    acctType: getTag('ACCTTYPE') || 'CHECKING'
+  };
+}
+
+function parseCSVFormat(text) {
+  const transactions = [];
+  const lines = text.split(/\r?\n/).filter(line => line.trim());
+  
+  if (lines.length === 0) return transactions;
+  
+  // Detectar separador
+  const separator = detectCSVSeparator(lines[0]);
+  addLog(`Separador CSV detectado: "${separator}"`);
+  
+  // Detectar se primeira linha é cabeçalho
+  const hasHeader = detectCSVHeader(lines[0], separator);
+  const dataLines = hasHeader ? lines.slice(1) : lines;
+  
+  addLog(`Formato CSV: ${hasHeader ? 'com' : 'sem'} cabeçalho, ${dataLines.length} linhas de dados`);
+  
+  for (let i = 0; i < dataLines.length; i++) {
+    try {
+      const transaction = parseCSVLine(dataLines[i], separator, i);
+      if (transaction) {
+        transactions.push(transaction);
+      }
+    } catch (error) {
+      addLog(`Erro na linha ${i + 1}: ${error.message}`, 'warning');
+    }
+  }
+  
+  return transactions;
+}
+
+function detectCSVSeparator(line) {
+  const separators = [';', ',', '\t', '|'];
+  let maxCount = 0;
+  let bestSeparator = ';';
+  
+  for (const sep of separators) {
+    const count = (line.match(new RegExp('\\' + sep, 'g')) || []).length;
+    if (count > maxCount) {
+      maxCount = count;
+      bestSeparator = sep;
+    }
+  }
+  
+  return bestSeparator;
+}
+
+function detectCSVHeader(line, separator) {
+  const cols = line.split(separator);
+  const headerKeywords = ['data', 'valor', 'descricao', 'historico', 'date', 'amount', 'description'];
+  
+  return cols.some(col => 
+    headerKeywords.some(keyword => 
+      col.toLowerCase().includes(keyword)
+    )
+  );
+}
+
+function parseCSVLine(line, separator, index) {
+  const cols = line.split(separator).map(col => col.replace(/"/g, '').trim());
+  
+  if (cols.length < 3) {
+    throw new Error('Linha incompleta - mínimo 3 colunas necessárias');
+  }
+  
+  // Tentar diferentes formatos de CSV
+  let date, description, amount;
+  
+  // Formato 1: Data, Descrição, Valor
+  if (isValidDate(cols[0])) {
+    date = normalizeDate(cols[0]);
+    description = cols[1] || `Transação ${index + 1}`;
+    amount = parseAmount(cols[2]);
+  }
+  // Formato 2: Descrição, Data, Valor  
+  else if (cols.length >= 3 && isValidDate(cols[1])) {
+    description = cols[0] || `Transação ${index + 1}`;
+    date = normalizeDate(cols[1]);
+    amount = parseAmount(cols[2]);
+  }
+  // Formato 3: buscar valor primeiro (números com vírgula/ponto)
+  else {
+    let valueCol = -1;
+    let dateCol = -1;
+    
+    for (let i = 0; i < cols.length; i++) {
+      if (valueCol === -1 && /^-?\d+[,.]?\d*$/.test(cols[i].replace(/\./g, ''))) {
+        valueCol = i;
+      }
+      if (dateCol === -1 && isValidDate(cols[i])) {
+        dateCol = i;
+      }
+    }
+    
+    if (valueCol === -1 || dateCol === -1) {
+      throw new Error('Não foi possível identificar colunas de data e valor');
+    }
+    
+    date = normalizeDate(cols[dateCol]);
+    amount = parseAmount(cols[valueCol]);
+    
+    // Descrição = outras colunas concatenadas
+    description = cols
+      .filter((col, i) => i !== dateCol && i !== valueCol && col.length > 0)
+      .join(' ')
+      .substring(0, 100) || `Transação ${index + 1}`;
+  }
+  
+  if (!date || isNaN(amount)) {
+    throw new Error('Data ou valor inválidos');
+  }
+  
+  return {
+    id: `csv_${index}_${date}_${amount}`,
+    date,
+    description: description.substring(0, 100),
+    amount,
+    type: amount >= 0 ? 'receita' : 'despesa',
+    bankInfo: { bankName: 'CSV Import', bankColor: '#666' },
+    category: null
+  };
+}
+
+function isValidDate(str) {
+  if (!str || typeof str !== 'string') return false;
+  
+  // DD/MM/YYYY ou DD-MM-YYYY ou DD.MM.YYYY
+  const dateRegex = /^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})$/;
+  // YYYY-MM-DD
+  const isoRegex = /^(\d{4})-(\d{1,2})-(\d{1,2})$/;
+  
+  return dateRegex.test(str) || isoRegex.test(str);
+}
+
+function normalizeDate(str) {
+  if (!str) return null;
+  
+  // DD/MM/YYYY → YYYY-MM-DD
+  const ddmmyyyy = str.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})$/);
+  if (ddmmyyyy) {
+    const [, day, month, year] = ddmmyyyy;
+    return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+  }
+  
+  // YYYY-MM-DD (já normalizado)
+  const yyyymmdd = str.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (yyyymmdd) {
+    const [, year, month, day] = yyyymmdd;
+    return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+  }
+  
+  return null;
+}
+
+function parseAmount(str) {
+  if (!str || typeof str !== 'string') return NaN;
+  
+  // Remove tudo exceto números, vírgula e ponto
+  let cleaned = str.replace(/[^\d,.-]/g, '');
+  
+  // Se tem vírgula como decimal (formato BR)
+  if (cleaned.includes(',')) {
+    // Remove pontos (milhares) e troca vírgula por ponto
+    cleaned = cleaned.replace(/\./g, '').replace(',', '.');
+  }
+  
+  return parseFloat(cleaned) || 0;
+}
+
+// ── CATEGORIZAÇÃO AUTOMÁTICA (IA) ──────────────────────────────
+async function categorizeTransactions(transactions) {
+  if (!transactions.length) return;
+  
+  addLog('Iniciando categorização automática via IA...', 'info');
+  
+  // Processar em lotes de 10 transações
+  const batchSize = 10;
+  const batches = [];
+  
+  for (let i = 0; i < transactions.length; i += batchSize) {
+    batches.push(transactions.slice(i, i + batchSize));
+  }
+  
+  let processed = 0;
+  
+  for (const batch of batches) {
+    try {
+      await categorizeBatch(batch);
+      processed += batch.length;
+      addLog(`Categorizadas ${processed}/${transactions.length} transações`, 'info');
+    } catch (error) {
+      addLog(`Erro na categorização: ${error.message}`, 'error');
+    }
+  }
+}
+
+async function categorizeBatch(transactions) {
+  const prompt = `
+Analise estas transações bancárias brasileiras e categorize cada uma. Para cada transação, determine:
+1. Categoria principal (ex: "Alimentação", "Transporte", "Salário", "Vendas")
+2. Subcategoria (ex: "Restaurante", "Combustível", "Salário CLT")
+3. Se é receita ou despesa operacional/não operacional
+
+Transações:
+${transactions.map((t, i) => `${i + 1}. ${t.description} - ${formatCurrency(t.amount)}`).join('\n')}
+
+Responda APENAS um JSON válido no formato:
+[
+  {
+    "index": 1,
+    "categoria": "Categoria Principal",
+    "subcategoria": "Subcategoria Específica",
+    "tipo_operacao": "operacional" ou "nao_operacional",
+    "confianca": 0.85
+  }
+]
+`;
+
+  try {
+    // Simular resposta da IA (replace com chamada real à Claude API)
+    const categorized = simulateAICategorization(transactions);
+    
+    // Aplicar categorização
+    categorized.forEach(cat => {
+      const transaction = transactions[cat.index - 1];
+      if (transaction) {
+        transaction.category = {
+          main: cat.categoria,
+          sub: cat.subcategoria,
+          operational: cat.tipo_operacao === 'operacional',
+          confidence: cat.confianca
+        };
+      }
+    });
+    
+  } catch (error) {
+    // Fallback: categorização básica por palavras-chave
+    transactions.forEach(t => {
+      t.category = categorizeByKeywords(t.description, t.amount);
+    });
+  }
+}
+
+function simulateAICategorization(transactions) {
+  // Simulação - substituir por chamada real à Claude API
+  return transactions.map((t, i) => {
+    const desc = t.description.toLowerCase();
+    let categoria = 'Outros';
+    let subcategoria = 'Geral';
+    
+    if (desc.includes('pix') || desc.includes('ted') || desc.includes('doc')) {
+      categoria = 'Transferências';
+      subcategoria = 'PIX/TED/DOC';
+    } else if (desc.includes('mercado') || desc.includes('super') || desc.includes('alimentacao')) {
+      categoria = 'Alimentação';
+      subcategoria = 'Mercado';
+    } else if (desc.includes('combustivel') || desc.includes('posto')) {
+      categoria = 'Transporte';
+      subcategoria = 'Combustível';
+    } else if (desc.includes('salario') || desc.includes('pagamento')) {
+      categoria = t.amount > 0 ? 'Receitas' : 'Despesas';
+      subcategoria = t.amount > 0 ? 'Salário' : 'Pagamento';
+    }
+    
+    return {
+      index: i + 1,
+      categoria,
+      subcategoria,
+      tipo_operacao: 'operacional',
+      confianca: 0.75
+    };
+  });
+}
+
+function categorizeByKeywords(description, amount) {
+  const desc = description.toLowerCase();
+  const keywords = {
+    'Alimentação': ['mercado', 'super', 'padaria', 'restaurante', 'lanche', 'delivery'],
+    'Transporte': ['combustivel', 'posto', 'uber', 'taxi', '99', 'estacionamento'],
+    'Saúde': ['farmacia', 'medico', 'hospital', 'clinica', 'exame'],
+    'Educação': ['escola', 'curso', 'livro', 'material'],
+    'Casa': ['energia', 'agua', 'gas', 'internet', 'telefone', 'aluguel'],
+    'Lazer': ['cinema', 'streaming', 'netflix', 'spotify', 'jogo'],
+    'Transferências': ['pix', 'ted', 'doc', 'transferencia'],
+    'Receitas': amount > 0 ? ['salario', 'pagamento', 'deposito', 'credito'] : [],
+  };
+  
+  for (const [category, terms] of Object.entries(keywords)) {
+    if (terms.some(term => desc.includes(term))) {
+      return {
+        main: category,
+        sub: 'Geral',
+        operational: true,
+        confidence: 0.6
+      };
+    }
+  }
+  
+  return {
+    main: 'Outros',
+    sub: 'Geral', 
+    operational: true,
+    confidence: 0.3
+  };
+}
+
+// ── PREVIEW DE IMPORTAÇÃO ──────────────────────────────────────
+function showImportPreview(transactions) {
+  const totalValue = transactions.reduce((sum, t) => sum + Math.abs(t.amount), 0);
+  const receitas = transactions.filter(t => t.amount > 0);
+  const despesas = transactions.filter(t => t.amount < 0);
+  
+  // Selecionar todas por padrão
+  importState.selectedItems = new Set(transactions.map(t => t.id));
+  
+  openModal('Preview da Importação', `
+    <div style="margin-bottom: 20px;">
+      <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 16px;">
+        <div style="text-align: center; padding: 12px; background: var(--surface-2); border-radius: 8px;">
+          <div style="font-size: 20px; font-weight: 700; color: var(--text);">${transactions.length}</div>
+          <div style="font-size: 11px; color: var(--text-3); text-transform: uppercase;">Transações</div>
+        </div>
+        <div style="text-align: center; padding: 12px; background: var(--green-lt); border-radius: 8px;">
+          <div style="font-size: 20px; font-weight: 700; color: var(--green);">${receitas.length}</div>
+          <div style="font-size: 11px; color: var(--green); text-transform: uppercase;">Receitas</div>
+        </div>
+        <div style="text-align: center; padding: 12px; background: var(--red-lt); border-radius: 8px;">
+          <div style="font-size: 20px; font-weight: 700; color: var(--red);">${despesas.length}</div>
+          <div style="font-size: 11px; color: var(--red); text-transform: uppercase;">Despesas</div>
+        </div>
+      </div>
+      
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+        <div>
+          <label class="checkbox" style="display: flex; align-items: center; gap: 8px;">
+            <input type="checkbox" id="select-all" checked onchange="toggleSelectAll(this.checked)">
+            <span class="checkbox-mark"></span>
+            <span style="font-size: 13px; font-weight: 600;">Selecionar todas</span>
+          </label>
+        </div>
+        <div style="font-size: 12px; color: var(--text-3);">
+          <span id="selected-count">${transactions.length}</span> de ${transactions.length} selecionadas
+        </div>
+      </div>
+    </div>
+    
+    <div style="max-height: 400px; overflow-y: auto;">
+      <table class="preview-table">
+        <thead>
+          <tr>
+            <th style="width: 30px;"></th>
+            <th>Data</th>
+            <th>Descrição</th>
+            <th>Categoria</th>
+            <th style="text-align: right;">Valor</th>
+            <th>Tipo</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${transactions.map(t => `
+            <tr id="row-${t.id}" class="selected">
+              <td>
+                <label class="checkbox">
+                  <input type="checkbox" checked onchange="toggleTransaction('${t.id}', this.checked)">
+                  <span class="checkbox-mark"></span>
+                </label>
+              </td>
+              <td style="font-family: var(--mono); font-size: 11px;">${formatDate(t.date)}</td>
+              <td style="max-width: 200px; overflow: hidden; text-overflow: ellipsis;">${t.description}</td>
+              <td>
+                ${t.category ? 
+                  `<span style="font-size: 11px; color: var(--text-2);">${t.category.main}</span>
+                   ${t.category.confidence < 0.7 ? '<span style="color: var(--amber);">⚠️</span>' : ''}` 
+                  : '<span style="color: var(--text-3);">Não categorizada</span>'
+                }
+              </td>
+              <td style="text-align: right; font-family: var(--mono); font-weight: 600; color: ${t.amount >= 0 ? 'var(--green)' : 'var(--red)'};">
+                ${formatCurrency(Math.abs(t.amount))}
+              </td>
+              <td>
+                <span class="badge ${t.type === 'receita' ? 'badge-green' : 'badge-red'}">
+                  ${t.type === 'receita' ? 'Receita' : 'Despesa'}
+                </span>
+              </td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  `, `
+    <button class="btn btn-outline" onclick="closeModal()">Cancelar</button>
+    <button class="btn btn-gold" onclick="executeImport()" id="import-btn">
+      <span class="spinner" style="display: none;"></span>
+      Importar Selecionadas
+    </button>
+  `);
+}
+
+function toggleSelectAll(checked) {
+  const checkboxes = document.querySelectorAll('.preview-table tbody input[type="checkbox"]');
+  const rows = document.querySelectorAll('.preview-table tbody tr');
+  
+  checkboxes.forEach((cb, i) => {
+    cb.checked = checked;
+    const row = rows[i];
+    const transactionId = row.id.replace('row-', '');
+    
+    if (checked) {
+      importState.selectedItems.add(transactionId);
+      row.classList.add('selected');
+    } else {
+      importState.selectedItems.delete(transactionId);
+      row.classList.remove('selected');
+    }
+  });
+  
+  updateSelectedCount();
+}
+
+function toggleTransaction(transactionId, checked) {
+  const row = document.getElementById(`row-${transactionId}`);
+  
+  if (checked) {
+    importState.selectedItems.add(transactionId);
+    row.classList.add('selected');
+  } else {
+    importState.selectedItems.delete(transactionId);
+    row.classList.remove('selected');
+  }
+  
+  updateSelectedCount();
+  
+  // Atualizar checkbox "selecionar todas"
+  const selectAllCb = document.getElementById('select-all');
+  selectAllCb.checked = importState.selectedItems.size === importState.transactions.length;
+}
+
+function updateSelectedCount() {
+  const countEl = document.getElementById('selected-count');
+  if (countEl) {
+    countEl.textContent = importState.selectedItems.size;
+  }
+}
+
+// ── EXECUÇÃO DA IMPORTAÇÃO ─────────────────────────────────────
+async function executeImport() {
+  if (importState.selectedItems.size === 0) {
+    addLog('Nenhuma transação selecionada para importação', 'warning');
+    return;
+  }
+  
+  const importBtn = document.getElementById('import-btn');
+  const spinner = importBtn.querySelector('.spinner');
+  
+  importBtn.disabled = true;
+  spinner.style.display = 'inline-block';
+  importBtn.querySelector('span:not(.spinner)') ? 
+    importBtn.querySelector('span:not(.spinner)').textContent = 'Importando...' :
+    importBtn.textContent = 'Importando...';
+  
+  const selectedTransactions = importState.transactions.filter(t => 
+    importState.selectedItems.has(t.id)
+  );
+  
+  addLog(`Iniciando importação de ${selectedTransactions.length} transações...`);
+  
+  let imported = 0;
+  let errors = 0;
+  
+  for (const transaction of selectedTransactions) {
+    try {
+      await importTransaction(transaction);
+      imported++;
+      addLog(`✓ ${transaction.description} - ${formatCurrency(transaction.amount)}`, 'success');
+    } catch (error) {
+      errors++;
+      addLog(`✗ Erro ao importar: ${transaction.description} - ${error.message}`, 'error');
+    }
+  }
+  
+  closeModal();
+  
+  addLog(`Importação concluída: ${imported} sucesso, ${errors} erros`, 
+         errors > 0 ? 'warning' : 'success');
+  
+  // Reset state
+  importState = {
+    file: null,
+    transactions: [],
+    accounts: [],
+    categories: [],
+    selectedItems: new Set(),
+    processing: false
+  };
+}
+
+async function importTransaction(transaction) {
+  // Simular importação para Supabase
+  // Em implementação real, usar API do Supabase aqui
+  
+  const data = {
+    tenant_id: 'demo-tenant',
+    descricao: transaction.description,
+    valor: Math.abs(transaction.amount),
+    vencimento: transaction.date,
+    status: 'pendente',
+    categoria: transaction.category?.main || 'Outros',
+    subcategoria: transaction.category?.sub || 'Geral',
+    banco_origem: transaction.bankInfo?.bankName || 'Não informado',
+    observacao: `Importado via ${importState.file?.name || 'upload'} - ID: ${transaction.id}`
+  };
+  
+  // Simular delay da API
+  await new Promise(resolve => setTimeout(resolve, 100));
+  
+  // Simular erro ocasional para demonstração
+  if (Math.random() < 0.05) {
+    throw new Error('Erro simulado de conexão');
+  }
+  
+  console.log(`[SIMULATED] Imported transaction:`, data);
+  
+  return { id: Date.now(), ...data };
+}
+
+// ── MODAL ──────────────────────────────────────────────────────
+function openModal(title, body, footer = '') {
+  document.querySelector('.modal-title').textContent = title;
+  document.getElementById('modal-content').innerHTML = body;
+  document.getElementById('modal-footer').innerHTML = footer || `
+    <button class="btn btn-outline" onclick="closeModal()">Fechar</button>
+  `;
+  document.getElementById('modal-overlay').classList.add('visible');
+}
+
+function closeModal() {
+  document.getElementById('modal-overlay').classList.remove('visible');
+}
+
+// ── INICIALIZAÇÃO ──────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', function() {
+  addLog('Sistema iniciado - Fase 2 do Financeiro Pro carregada', 'success');
+  
+  // Fechar modal com ESC
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+      closeModal();
+    }
+  });
+  
+  // Fechar modal clicando fora
+  document.getElementById('modal-overlay').addEventListener('click', function(e) {
+    if (e.target === this) {
+      closeModal();
+    }
+  });
+});
+
+</script>
+</body>
+</html>

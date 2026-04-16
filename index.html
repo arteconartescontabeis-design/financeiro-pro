@@ -4091,8 +4091,8 @@ function renderDocImportar() {
   <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px">
     ${[
       {ico:'📕', titulo:'PDF (boleto, NF, comprovante)', desc:'A IA lê o PDF e extrai automaticamente: valor, vencimento, beneficiário e tipo. Requer chave Claude API em Configurações.'},
-      {ico:'🏦', titulo:'Extrato OFX/CSV (Fase 2)', desc:'Parser aprimorado para todos os bancos brasileiros. Detecção automática de conta, agência e banco. Preview completo antes da importação.'},
-      {ico:'🤖', titulo:'Processamento inteligente', desc:'Categorização automática via IA, detecção de duplicatas e validação de dados. Preview interativo para revisar antes de importar.'},
+      {ico:'📂', titulo:'Extrato OFX/CSV', desc:'Importa extrato bancário. Créditos viram receitas, débitos viram despesas. Criação automática.'},
+      {ico:'🤖', titulo:'Processamento automático', desc:'Sem revisão necessária. O sistema identifica o tipo e cria os lançamentos instantaneamente.'},
     ].map(c=>`
       <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px">
         <div style="font-size:24px;margin-bottom:8px">${c.ico}</div>
@@ -4381,16 +4381,22 @@ async function processarXMLAutoDoc(id, file) {
 
 async function processarExtratoAutoDoc(id, file) {
   const text = await file.text();
-  let items = [];
+  let items  = [];
 
   if (file.name.toLowerCase().endsWith('.ofx') || text.includes('<OFX>') || text.includes('<STMTTRN>')) {
     items = parseOFX(text);
-    if (items.length > 0 && items[0].banco) {
-      adicionarFilaItem(id, file.name, 'processando', `OFX ${items[0].banco} - ${items.length} transação(ões)...`, null);
-    }
   } else {
-    // Parser CSV/TXT aprimorado
-    items = parseCSVExtrato(text, file.name);
+    const linhas = text.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
+    for (const linha of linhas) {
+      const sep  = linha.includes(';') ? ';' : ',';
+      const cols = linha.split(sep).map(c=>c.replace(/"/g,'').trim());
+      if (cols.length < 3) continue;
+      const valor = parseFloat(cols[2].replace(',','.'));
+      if (isNaN(valor)) continue;
+      const data = cols[0].length===10 ? cols[0] : null;
+      if (!data) continue;
+      items.push({ data, descricao: cols[1]||'Extrato', valor, tipo: valor>=0?'receita':'despesa' });
+    }
   }
 
   if (!items.length) {
@@ -4403,18 +4409,13 @@ async function processarExtratoAutoDoc(id, file) {
   let ok = 0, err = 0;
   for (const item of items) {
     try {
-      const observacao = `Importado via extrato bancário — ${file.name}` +
-        (item.banco ? ` | Banco: ${item.banco}` : '') +
-        (item.conta ? ` | Conta: ${item.conta}` : '') +
-        (item.trntype ? ` | Tipo: ${item.trntype}` : '');
-
       const body = {
         tenant_id:  APP.user.tenant_id,
         descricao:  item.descricao,
         valor:      Math.abs(item.valor),
         vencimento: item.data,
         status:     'pendente',
-        observacao: observacao,
+        observacao: `Importado via extrato bancário — ${file.name}`,
       };
       if (item.tipo === 'receita') await supa('POST', 'fin_receitas', { body });
       else                         await supa('POST', 'fin_despesas', { body });
@@ -4424,127 +4425,6 @@ async function processarExtratoAutoDoc(id, file) {
 
   adicionarFilaItem(id, file.name, ok>0?'ok':'erro',
     `${ok} lançamento(s) criado(s)${err?' · '+err+' erro(s)':''}`, null);
-}
-
-function parseCSVExtrato(text, fileName) {
-  const items = [];
-  const linhas = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-  
-  if (linhas.length === 0) return items;
-  
-  // Detectar separador mais comum
-  const separadores = [';', ',', '\t', '|'];
-  let melhorSep = ';';
-  let maiorCount = 0;
-  
-  for (const sep of separadores) {
-    const count = (linhas[0].match(new RegExp('\\' + sep, g)) || []).length;
-    if (count > maiorCount) {
-      maiorCount = count;
-      melhorSep = sep;
-    }
-  }
-  
-  // Detectar se primeira linha é cabeçalho
-  const primeiraLinha = linhas[0].toLowerCase();
-  const temCabecalho = ['data', 'valor', 'descricao', 'historico', 'date', 'amount', 'description']
-    .some(palavra => primeiraLinha.includes(palavra));
-  
-  const linhasDados = temCabecalho ? linhas.slice(1) : linhas;
-  
-  for (let i = 0; i < linhasDados.length; i++) {
-    try {
-      const linha = linhasDados[i];
-      const cols = linha.split(melhorSep).map(c => c.replace(/["']/g, '').trim());
-      
-      if (cols.length < 3) continue;
-      
-      let data, descricao, valor;
-      
-      // Estratégia 1: Procurar data no formato DD/MM/YYYY ou YYYY-MM-DD
-      let colData = -1;
-      let colValor = -1;
-      
-      for (let j = 0; j < cols.length; j++) {
-        // Detectar coluna de data
-        if (colData === -1 && isValidDateFormat(cols[j])) {
-          colData = j;
-        }
-        // Detectar coluna de valor (números com vírgula/ponto)
-        if (colValor === -1 && /^-?\d+([.,]\d+)?$/.test(cols[j].replace(/\./g, ''))) {
-          colValor = j;
-        }
-      }
-      
-      // Se não encontrou data/valor, tentar formato padrão
-      if (colData === -1 || colValor === -1) {
-        // Formato assumido: Data, Descrição, Valor
-        if (isValidDateFormat(cols[0]) && cols.length >= 3) {
-          colData = 0;
-          colValor = 2;
-        } else {
-          continue; // Pular linha inválida
-        }
-      }
-      
-      data = normalizarData(cols[colData]);
-      valor = parseFloat(cols[colValor].replace(/\./g, '').replace(',', '.'));
-      
-      // Descrição = todas as outras colunas concatenadas
-      descricao = cols
-        .filter((col, idx) => idx !== colData && idx !== colValor && col.length > 0)
-        .join(' ')
-        .substring(0, 100) || `Transação ${i + 1}`;
-      
-      if (!data || isNaN(valor)) continue;
-      
-      items.push({
-        data,
-        descricao: descricao,
-        valor,
-        tipo: valor >= 0 ? 'receita' : 'despesa',
-        banco: 'Importação CSV',
-        arquivo: fileName
-      });
-      
-    } catch (e) {
-      console.warn(`Erro ao processar linha ${i + 1}: ${e.message}`);
-      continue;
-    }
-  }
-  
-  return items;
-}
-
-function isValidDateFormat(str) {
-  if (!str || typeof str !== 'string') return false;
-  
-  // DD/MM/YYYY, DD-MM-YYYY, DD.MM.YYYY
-  const ddmmyyyy = /^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})$/.test(str);
-  // YYYY-MM-DD
-  const yyyymmdd = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.test(str);
-  
-  return ddmmyyyy || yyyymmdd;
-}
-
-function normalizarData(str) {
-  if (!str) return null;
-  
-  // DD/MM/YYYY → YYYY-MM-DD
-  const ddmmyyyy = str.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})$/);
-  if (ddmmyyyy) {
-    const [, day, month, year] = ddmmyyyy;
-    return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
-  }
-  
-  // YYYY-MM-DD (já normalizado)
-  const yyyymmdd = str.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
-  if (yyyymmdd) {
-    const [, year, month, day] = yyyymmdd;
-    return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
-  }
-  
-  return null;
 }
 
 
@@ -4747,13 +4627,12 @@ function renderImportarExtrato() {
   openModal('Importar Extrato Bancário', `
     <div style="font-size:12.5px;color:var(--text-2);line-height:1.6;margin-bottom:16px">
       Importe seu extrato bancário e gere lançamentos automaticamente.
-      <strong>Agora com detecção automática de bancos brasileiros!</strong>
+      Formatos suportados: <strong>OFX</strong> (padrão bancário) e <strong>CSV</strong>.
     </div>
     <div style="background:var(--surface-2);border-radius:9px;padding:12px 14px;border:1px solid var(--border);margin-bottom:14px;font-size:11.5px;color:var(--text-3)">
-      <strong style="color:var(--text-2)">Formatos suportados:</strong><br>
-      • <strong>OFX:</strong> Todos os bancos brasileiros (BB, Itaú, Bradesco, Santander, Nubank, etc.)<br>
-      • <strong>CSV/TXT:</strong> Formato: data;descrição;valor (detecção automática de separador)<br>
-      Exemplo: <code style="font-family:var(--mono);font-size:11px">01/04/2025;PIX Recebido João;-150,50</code>
+      <strong style="color:var(--text-2)">Formato CSV esperado:</strong><br>
+      <code style="font-family:var(--mono);font-size:11px">data;descricao;valor</code><br>
+      Ex: <code style="font-family:var(--mono);font-size:11px">2025-04-01;Honorário cliente;5000.00</code>
     </div>
     <label style="display:flex;align-items:center;gap:10px;padding:14px;background:var(--gold-lt);border:2px dashed var(--gold);border-radius:9px;cursor:pointer;font-size:13px;color:var(--gold);font-weight:600;justify-content:center">
       📂 Clique para selecionar o arquivo OFX ou CSV
@@ -4767,138 +4646,18 @@ function renderImportarExtrato() {
 
 function processarArquivoExtrato(input) {
   const file = input.files[0]; if (!file) return;
-  
-  document.getElementById('extrato-preview').innerHTML = `
-    <div style="margin-top:16px;padding:12px;text-align:center;color:var(--text-3)">
-      <div class="spinner" style="border:2px solid var(--surface-2);border-top:2px solid var(--gold);border-radius:50%;width:20px;height:20px;animation:spin 1s linear infinite;margin:0 auto 8px"></div>
-      Processando arquivo...
-    </div>
-    <style>@keyframes spin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}</style>
-  `;
-  
   const reader = new FileReader();
   reader.onload = e => {
-    try {
-      const text = e.target.result;
-      let items = [];
+    const text = e.target.result;
+    let items = [];
 
-      // Tentar OFX primeiro
-      if (file.name.toLowerCase().endsWith('.ofx') || text.includes('<OFX>') || text.includes('<STMTTRN>')) {
-        items = parseOFX(text);
-      } else {
-        // CSV aprimorado
-        items = parseCSVExtrato(text, file.name);
-      }
-
-      if (!items.length) {
-        document.getElementById('extrato-preview').innerHTML = `
-          <div style="margin-top:16px;padding:16px;background:var(--red-lt);border:1px solid rgba(192,57,43,.2);border-radius:8px;text-align:center">
-            <div style="font-size:16px;margin-bottom:6px">❌</div>
-            <div style="color:var(--red);font-size:12.5px;font-weight:600">Nenhuma transação encontrada</div>
-            <div style="color:var(--text-3);font-size:11px;margin-top:4px">Verifique o formato do arquivo</div>
-          </div>
-        `;
-        return;
-      }
-
-      // Mostrar preview melhorado
-      _extratoPreview = items;
-      mostrarPreviewExtrato(items, file);
-      
-    } catch (error) {
-      document.getElementById('extrato-preview').innerHTML = `
-        <div style="margin-top:16px;padding:16px;background:var(--red-lt);border:1px solid rgba(192,57,43,.2);border-radius:8px">
-          <div style="color:var(--red);font-size:12.5px;font-weight:600">Erro ao processar arquivo</div>
-          <div style="color:var(--text-3);font-size:11px;margin-top:4px">${error.message}</div>
-        </div>
-      `;
-    }
-  };
-  reader.readAsText(file, 'utf-8');
-}
-
-function mostrarPreviewExtrato(items, file) {
-  const totalReceitas = items.filter(i => i.valor > 0).reduce((s, i) => s + i.valor, 0);
-  const totalDespesas = items.filter(i => i.valor < 0).reduce((s, i) => s + Math.abs(i.valor), 0);
-  const banco = items[0]?.banco || 'Não identificado';
-  const conta = items[0]?.conta || '';
-  
-  document.getElementById('extrato-preview').innerHTML = `
-    <div style="margin-top:16px">
-      
-      <!-- Info do arquivo/banco -->
-      <div style="background:var(--surface-2);border-radius:10px;padding:14px;margin-bottom:14px;border:1px solid var(--border)">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-          <div>
-            <div style="font-size:13px;font-weight:700;color:var(--text)">${file.name}</div>
-            <div style="font-size:11px;color:var(--text-3)">${banco}${conta ? ` • Conta: ${conta}` : ''}</div>
-          </div>
-          <div style="text-align:right">
-            <div style="font-size:11px;color:var(--text-3)">Transações encontradas</div>
-            <div style="font-size:16px;font-weight:700;color:var(--gold)">${items.length}</div>
-          </div>
-        </div>
-        
-        <!-- KPIs -->
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-          <div style="background:var(--green-lt);border-radius:8px;padding:8px;text-align:center">
-            <div style="font-size:10px;color:var(--green);font-weight:700;text-transform:uppercase;margin-bottom:2px">Receitas</div>
-            <div style="font-size:13px;font-weight:700;color:var(--green);font-family:var(--mono)">${fmtMoeda(totalReceitas)}</div>
-          </div>
-          <div style="background:var(--red-lt);border-radius:8px;padding:8px;text-align:center">
-            <div style="font-size:10px;color:var(--red);font-weight:700;text-transform:uppercase;margin-bottom:2px">Despesas</div>
-            <div style="font-size:13px;font-weight:700;color:var(--red);font-family:var(--mono)">${fmtMoeda(totalDespesas)}</div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Preview das transações -->
-      <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;max-height:300px;overflow:auto">
-        <table style="width:100%;border-collapse:collapse">
-          <thead style="position:sticky;top:0;background:var(--surface-2);z-index:1">
-            <tr>
-              <th style="padding:8px 12px;text-align:left;font-size:10px;font-weight:700;color:var(--text-3);border-bottom:1px solid var(--border)">Data</th>
-              <th style="padding:8px 12px;text-align:left;font-size:10px;font-weight:700;color:var(--text-3);border-bottom:1px solid var(--border)">Descrição</th>
-              <th style="padding:8px 12px;text-align:right;font-size:10px;font-weight:700;color:var(--text-3);border-bottom:1px solid var(--border)">Valor</th>
-              <th style="padding:8px 12px;text-align:center;font-size:10px;font-weight:700;color:var(--text-3);border-bottom:1px solid var(--border)">Tipo</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${items.slice(0, 20).map(item => `
-              <tr style="border-bottom:1px solid var(--border)">
-                <td style="padding:6px 12px;font-family:var(--mono);font-size:11px;color:var(--text-2)">${fmtData(item.data)}</td>
-                <td style="padding:6px 12px;font-size:11.5px;color:var(--text);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${item.descricao}</td>
-                <td style="padding:6px 12px;text-align:right;font-family:var(--mono);font-size:12px;font-weight:600;color:${item.valor >= 0 ? 'var(--green)' : 'var(--red)'}">${fmtMoeda(Math.abs(item.valor))}</td>
-                <td style="padding:6px 12px;text-align:center">
-                  <span style="padding:2px 6px;border-radius:12px;font-size:9px;font-weight:700;text-transform:uppercase;${item.valor >= 0 ? 'background:var(--green-lt);color:var(--green)' : 'background:var(--red-lt);color:var(--red)'}">
-                    ${item.tipo}
-                  </span>
-                </td>
-              </tr>
-            `).join('')}
-            ${items.length > 20 ? `
-              <tr>
-                <td colspan="4" style="padding:8px 12px;text-align:center;color:var(--text-3);font-size:11px;font-style:italic">
-                  + ${items.length - 20} transações adicionais...
-                </td>
-              </tr>
-            ` : ''}
-          </tbody>
-        </table>
-      </div>
-
-      <!-- Informações adicionais -->
-      ${items[0]?.trntype ? `
-        <div style="margin-top:10px;font-size:10px;color:var(--text-3);padding:8px;background:var(--surface-2);border-radius:6px">
-          <strong>Tipos de transação detectados:</strong> ${[...new Set(items.map(i => i.trntype).filter(Boolean))].join(', ')}
-        </div>
-      ` : ''}
-    </div>
-  `;
-
-  // Mostrar botão de importar
-  document.getElementById('btn-importar-extrato').style.display = 'inline-flex';
-}
+    // Tentar OFX
+    if (file.name.toLowerCase().endsWith('.ofx') || text.includes('<OFX>') || text.includes('<STMTTRN>')) {
+      items = parseOFX(text);
+    } else {
+      // CSV
+      const linhas = text.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
+      for (const linha of linhas) {
         const sep = linha.includes(';') ? ';' : ',';
         const cols = linha.split(sep).map(c=>c.replace(/"/g,'').trim());
         if (cols.length < 3) continue;
@@ -4949,111 +4708,24 @@ function mostrarPreviewExtrato(items, file) {
   input.value = '';
 }
 
-// ── MAPEAMENTO BANCOS BRASILEIROS ─────────────────────────────
-const BANCOS_BRASIL = {
-  '001': { nome: 'Banco do Brasil', cor: '#FFD700' },
-  '237': { nome: 'Bradesco', cor: '#CC092F' },
-  '341': { nome: 'Itaú Unibanco', cor: '#EC7000' },
-  '033': { nome: 'Santander', cor: '#EB0000' },
-  '104': { nome: 'Caixa Econômica Federal', cor: '#0066B2' },
-  '260': { nome: 'Nu Pagamentos (Nubank)', cor: '#8A05BE' },
-  '212': { nome: 'Banco Original', cor: '#00A651' },
-  '077': { nome: 'Banco Inter', cor: '#FF6900' },
-  '290': { nome: 'PagSeguro', cor: '#00AEEF' },
-  '336': { nome: 'Banco C6', cor: '#000000' },
-  '756': { nome: 'Banco Cooperativo do Brasil (Sicoob)', cor: '#009639' },
-  '748': { nome: 'Sicredi', cor: '#1B4B99' },
-  '085': { nome: 'Banco Cooperativo Central Ailos', cor: '#0E4194' },
-  '070': { nome: 'Banco de Brasília (BRB)', cor: '#005AA0' },
-  '047': { nome: 'Banco do Estado de Sergipe (Banese)', cor: '#1A4B84' }
-};
-
 function parseOFX(text) {
   const items = [];
-  
-  // Extrair informações da instituição bancária
-  const getBankInfo = () => {
-    const getBankTag = (tag) => { const r = new RegExp('<'+tag+'>([^<\\r\\n]+)','i').exec(text); return r?r[1].trim():''; };
-    const bankId = getBankTag('BANKID') || getBankTag('FID');
-    const bankInfo = BANCOS_BRASIL[bankId] || { nome: bankId ? `Banco ${bankId}` : 'Banco não identificado', cor: '#666' };
-    const acctId = getBankTag('ACCTID');
-    const branchId = getBankTag('BRANCHID');
-    
-    return {
-      bankId,
-      bankName: bankInfo.nome,
-      account: acctId,
-      agency: branchId,
-      color: bankInfo.cor
-    };
-  };
-  
-  const bankInfo = getBankInfo();
-  
-  // Parser aprimorado das transações
   const regex = /<STMTTRN>([\s\S]*?)<\/STMTTRN>/g;
   let m;
   while ((m = regex.exec(text)) !== null) {
     const bloco = m[1];
-    const getTag = (tag) => { 
-      const r = new RegExp('<'+tag+'>([^<\\r\\n]+)','i').exec(bloco); 
-      return r ? r[1].trim() : ''; 
-    };
-    
+    const getTag = (tag) => { const r = new RegExp('<'+tag+'>([^<\\r\\n]+)','i').exec(bloco); return r?r[1].trim():''; };
     const dtpost = getTag('DTPOSTED');
     const trnamt = getTag('TRNAMT');
-    const trntype = getTag('TRNTYPE');
-    const fitid = getTag('FITID');
-    const checknum = getTag('CHECKNUM');
-    
-    // Múltiplas fontes para descrição
-    let memo = getTag('MEMO') || getTag('NAME') || getTag('PAYEE') || '';
-    
-    // Melhorar descrição baseado no tipo de transação
-    if (!memo || memo === '—') {
-      if (trntype === 'DEBIT') memo = 'Débito bancário';
-      else if (trntype === 'CREDIT') memo = 'Crédito bancário';
-      else if (trntype === 'PAYMENT') memo = 'Pagamento';
-      else if (trntype === 'TRANSFER') memo = 'Transferência';
-      else if (trntype === 'DEP') memo = 'Depósito';
-      else if (trntype === 'ATM') memo = 'Saque ATM';
-      else if (checknum) memo = `Cheque ${checknum}`;
-      else memo = 'Transação bancária';
-    }
-    
-    // Limpar descrição
-    memo = memo
-      .replace(/\s+/g, ' ')
-      .replace(/[^\w\sÀ-ÿ\-.,()]/g, ' ')
-      .trim()
-      .substring(0, 100);
-    
+    const memo   = getTag('MEMO') || getTag('NAME') || '—';
     if (!dtpost || !trnamt) continue;
-    
-    // Converter data OFX (YYYYMMDDHHMMSS ou YYYYMMDD) para ISO
-    const dateStr = dtpost.slice(0, 8);
-    const data = dateStr.length >= 8 ? 
-      `${dateStr.slice(0,4)}-${dateStr.slice(4,6)}-${dateStr.slice(6,8)}` : null;
-    
-    if (!data || !/^\d{4}-\d{2}-\d{2}$/.test(data)) continue;
-    
-    const valor = parseFloat(trnamt.replace(',', '.'));
+    // Converter data OFX (YYYYMMDD) para ISO
+    const data = dtpost.length>=8 ? `${dtpost.slice(0,4)}-${dtpost.slice(4,6)}-${dtpost.slice(6,8)}` : null;
+    if (!data) continue;
+    const valor = parseFloat(trnamt.replace(',','.'));
     if (isNaN(valor)) continue;
-    
-    items.push({ 
-      data, 
-      descricao: memo,
-      valor, 
-      tipo: valor >= 0 ? 'receita' : 'despesa',
-      banco: bankInfo.bankName,
-      conta: bankInfo.account,
-      agencia: bankInfo.agency,
-      trntype,
-      fitid,
-      checknum
-    });
+    items.push({ data, descricao: memo, valor, tipo: valor>=0?'receita':'despesa' });
   }
-  
   return items;
 }
 

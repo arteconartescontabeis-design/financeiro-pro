@@ -37,8 +37,8 @@
   --gold-glow:   0 0 20px rgba(26,82,118,.15);
 }
 
-/* Resto do CSS igual... */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
 body {
   font-family: var(--font);
   background: var(--bg);
@@ -48,13 +48,381 @@ body {
   min-height: 100vh;
   overflow-x: hidden;
 }
-/* ... resto do CSS mantido igual ... */
+
+/* ── SCROLLBAR ─────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-lt); border-radius: 99px; }
+
+/* ── AUTH ─────────────────────────────────────────────────── */
+#auth-screen { display: none; min-height: 100vh; align-items: center; justify-content: center; background: linear-gradient(135deg,#1a3a5c 0%,#1a5276 50%,#2e86c1 100%); position: relative; overflow: hidden; }
+#auth-screen::before {
+  content: '';
+  position: absolute;
+  top: -200px; left: 50%; transform: translateX(-50%);
+  width: 800px; height: 800px;
+  background: radial-gradient(circle, rgba(26,82,118,.06) 0%, transparent 70%);
+  pointer-events: none;
+}
+#auth-screen.visible { display: flex; }
+
+.auth-wrap { width: 400px; position: relative; z-index: 1; }
+
+.auth-brand {
+  display: flex; align-items: center; gap: 14px; margin-bottom: 36px; justify-content: center;
+}
+.auth-brand-mark {
+  width: 48px; height: 48px;
+  background: linear-gradient(135deg, var(--gold-dim), var(--gold));
+  border-radius: 14px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 20px; font-weight: 700; color: #ffffff;
+  letter-spacing: -1px; font-family: var(--mono);
+  box-shadow: 0 4px 20px rgba(26,82,118,.3);
+}
+.auth-brand-text h1 { font-size: 20px; font-weight: 700; letter-spacing: -.4px; color: #ffffff; }
+.auth-brand-text span { font-size: 11px; color: rgba(255,255,255,.7); letter-spacing: .04em; text-transform: uppercase; }
+
+.auth-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 32px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.35);
+}
+
+.auth-tabs { display: flex; gap: 3px; background: var(--bg); border-radius: 9px; padding: 3px; margin-bottom: 26px; }
+.auth-tab {
+  flex: 1; padding: 8px; border: none; border-radius: 7px;
+  background: transparent; font-family: var(--font); font-size: 12.5px; font-weight: 500;
+  color: var(--text-3); cursor: pointer; transition: var(--tr);
+}
+.auth-tab.active { background: var(--surface-2); color: var(--text); }
+
+.auth-form { display: block; }
+.form-field { margin-bottom: 20px; }
+.form-field label {
+  display: block; margin-bottom: 6px; font-size: 12px;
+  font-weight: 600; color: var(--text-2);
+}
+.form-field input {
+  width: 100%; padding: 12px; border: 1px solid var(--border);
+  border-radius: 8px; font-size: 13px; transition: var(--tr);
+  background: var(--surface);
+}
+.form-field input:focus {
+  outline: none; border-color: var(--gold);
+  box-shadow: 0 0 0 3px rgba(26,82,118,.1);
+}
+
+.auth-error { color: var(--red); font-size: 12px; margin: 10px 0; }
+
+.btn {
+  padding: 12px 24px; border: none; border-radius: 8px;
+  font-family: var(--font); font-size: 13px; font-weight: 600;
+  cursor: pointer; transition: var(--tr); text-decoration: none;
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+}
+.btn-gold { background: var(--gold); color: #ffffff; }
+.btn-gold:hover { background: var(--gold-dim); transform: translateY(-1px); }
+.btn-block { width: 100%; }
+
+/* ── APP LAYOUT ────────────────────────────────────────────── */
+#app-screen { display: none; }
+#app-screen.visible { display: block; }
+
+.app-layout { display: flex; min-height: 100vh; }
+
+.sidebar {
+  width: var(--sidebar-w); background: var(--surface); border-right: 1px solid var(--border);
+  position: fixed; left: 0; top: 0; height: 100vh; z-index: 100;
+  overflow-y: auto; transition: var(--tr);
+}
+
+.main-content {
+  flex: 1; margin-left: var(--sidebar-w); padding: 24px;
+  min-height: 100vh; background: var(--bg);
+}
+
+/* ── SIDEBAR ───────────────────────────────────────────────── */
+.sidebar-header {
+  padding: 20px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 12px;
+}
+.sidebar-logo {
+  width: 36px; height: 36px;
+  background: linear-gradient(135deg, var(--gold-dim), var(--gold));
+  border-radius: 10px; display: flex; align-items: center; justify-content: center;
+  color: #ffffff; font-weight: 700; font-size: 14px; font-family: var(--mono);
+}
+.sidebar-title { font-size: 16px; font-weight: 700; color: var(--text); }
+.sidebar-subtitle { font-size: 10px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.05em; }
+
+.sidebar-nav { padding: 20px 0; }
+.nav-section {
+  margin-bottom: 24px;
+}
+.nav-section-title {
+  font-size: 10px; font-weight: 700; color: var(--text-3);
+  text-transform: uppercase; letter-spacing: 0.06em;
+  padding: 0 20px 8px; margin-bottom: 8px;
+}
+
+.nav-item {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 20px; margin: 0 12px; border-radius: 8px;
+  color: var(--text-2); font-size: 13px; font-weight: 500;
+  cursor: pointer; transition: var(--tr); text-decoration: none;
+}
+.nav-item:hover { background: var(--surface-2); color: var(--text); }
+.nav-item.active {
+  background: var(--gold-lt); color: var(--gold-dim);
+  font-weight: 600; box-shadow: var(--gold-glow);
+}
+.nav-icon { width: 20px; text-align: center; font-size: 16px; }
+
+/* ── MAIN CONTENT ──────────────────────────────────────────── */
+.page-header {
+  margin-bottom: 24px;
+}
+.page-title {
+  font-size: 24px; font-weight: 700; color: var(--text);
+  margin-bottom: 8px;
+}
+.page-subtitle {
+  font-size: 14px; color: var(--text-2);
+}
+
+.content-card {
+  background: var(--surface); border-radius: var(--radius);
+  border: 1px solid var(--border); padding: 24px;
+  box-shadow: var(--shadow); margin-bottom: 24px;
+}
+
+/* ── DASHBOARD ─────────────────────────────────────────────── */
+.kpi-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 20px; margin-bottom: 24px;
+}
+
+.kpi-card {
+  background: var(--surface); border-radius: var(--radius);
+  border: 1px solid var(--border); padding: 20px;
+  box-shadow: var(--shadow);
+}
+.kpi-header {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 16px;
+}
+.kpi-title { font-size: 12px; font-weight: 600; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.05em; }
+.kpi-icon { width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 16px; }
+.kpi-value { font-size: 28px; font-weight: 700; margin-bottom: 8px; }
+.kpi-subtitle { font-size: 12px; color: var(--text-3); }
+
+/* ── FORMS ─────────────────────────────────────────────────── */
+.form-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 20px;
+}
+.form-group {
+  margin-bottom: 20px;
+}
+.form-label {
+  display: block; margin-bottom: 6px; font-size: 12px;
+  font-weight: 600; color: var(--text-2);
+}
+.form-input, .form-select {
+  width: 100%; padding: 12px; border: 1px solid var(--border);
+  border-radius: 8px; font-size: 13px; transition: var(--tr);
+  background: var(--surface);
+}
+.form-input:focus, .form-select:focus {
+  outline: none; border-color: var(--gold);
+  box-shadow: 0 0 0 3px rgba(26,82,118,.1);
+}
+
+/* ── TABLES ────────────────────────────────────────────────── */
+.table-container {
+  overflow-x: auto; border-radius: var(--radius);
+  border: 1px solid var(--border);
+}
+.data-table {
+  width: 100%; border-collapse: collapse;
+}
+.data-table th {
+  background: var(--surface-2); padding: 12px 16px;
+  text-align: left; font-size: 11px; font-weight: 700;
+  color: var(--text-3); text-transform: uppercase;
+  letter-spacing: 0.05em; border-bottom: 1px solid var(--border);
+}
+.data-table td {
+  padding: 16px; border-bottom: 1px solid var(--border);
+  font-size: 13px; color: var(--text);
+}
+.data-table tr:hover { background: var(--surface-2); }
+
+/* ── BADGES ────────────────────────────────────────────────── */
+.badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: 600;
+}
+.badge-green { background: var(--green-lt); color: var(--green); }
+.badge-red { background: var(--red-lt); color: var(--red); }
+.badge-amber { background: var(--amber-lt); color: var(--amber); }
+.badge-gold { background: var(--gold-lt); color: var(--gold-dim); }
+
+/* ── MODAL ─────────────────────────────────────────────────── */
+.modal-overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.6); z-index: 1000;
+  display: flex; align-items: center; justify-content: center;
+  opacity: 0; visibility: hidden; transition: var(--tr);
+}
+.modal-overlay.visible { opacity: 1; visibility: visible; }
+
+.modal {
+  background: var(--surface); border-radius: 16px;
+  box-shadow: var(--shadow-lg); max-width: 500px; width: 90%;
+  max-height: 90vh; overflow-y: auto;
+}
+.modal-header {
+  padding: 24px 24px 16px; border-bottom: 1px solid var(--border);
+}
+.modal-title {
+  font-size: 18px; font-weight: 700; color: var(--text);
+}
+.modal-body {
+  padding: 24px;
+}
+.modal-footer {
+  padding: 16px 24px; border-top: 1px solid var(--border);
+  display: flex; gap: 12px; justify-content: flex-end;
+}
+
+/* ── TOAST ─────────────────────────────────────────────────── */
+.toast {
+  position: fixed; top: 20px; right: 20px; z-index: 2000;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; padding: 16px 20px; box-shadow: var(--shadow-lg);
+  transform: translateX(400px); transition: var(--tr);
+}
+.toast.show { transform: translateX(0); }
+.toast-success { border-left: 4px solid var(--green); }
+.toast-error { border-left: 4px solid var(--red); }
+.toast-warning { border-left: 4px solid var(--amber); }
+
+/* ── RESPONSIVE ────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .sidebar {
+    transform: translateX(-100%);
+  }
+  .sidebar.open {
+    transform: translateX(0);
+  }
+  .main-content {
+    margin-left: 0;
+    padding: 16px;
+  }
+  .kpi-grid {
+    grid-template-columns: 1fr;
+  }
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── ONBOARDING ────────────────────────────────────────────── */
+#onboard-screen {
+  display: none; min-height: 100vh; align-items: center; justify-content: center;
+  background: linear-gradient(135deg,#1a3a5c 0%,#1a5276 50%,#2e86c1 100%);
+  position: relative; overflow: hidden;
+}
+#onboard-screen.visible { display: flex; }
+
+.onboard-container {
+  width: 500px; position: relative; z-index: 1;
+}
+
+.onboard-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 18px; padding: 40px; box-shadow: 0 20px 60px rgba(0,0,0,0.35);
+}
+
+.onboard-steps {
+  display: flex; justify-content: center; gap: 12px; margin-bottom: 32px;
+}
+.onboard-step-dot {
+  width: 12px; height: 12px; border-radius: 50%;
+  background: var(--border-lt); transition: var(--tr);
+}
+.onboard-step-dot.active { background: var(--gold); }
+.onboard-step-dot.done { background: var(--green); }
+
+.onboard-title {
+  font-size: 22px; font-weight: 700; color: var(--text);
+  margin-bottom: 8px; text-align: center;
+}
+.onboard-sub {
+  font-size: 14px; color: var(--text-2); margin-bottom: 24px;
+  text-align: center; line-height: 1.5;
+}
+
+.onboard-nav {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-top: 24px;
+}
+
+.btn-accent {
+  background: var(--gold); color: #ffffff; border: none;
+  padding: 12px 24px; border-radius: 8px; font-family: var(--font);
+  font-size: 13px; font-weight: 600; cursor: pointer; transition: var(--tr);
+}
+.btn-accent:hover { background: var(--gold-dim); transform: translateY(-1px); }
+
+.btn-outline {
+  background: transparent; color: var(--text-2); border: 1px solid var(--border);
+  padding: 12px 24px; border-radius: 8px; font-family: var(--font);
+  font-size: 13px; font-weight: 600; cursor: pointer; transition: var(--tr);
+}
+.btn-outline:hover { background: var(--surface-2); color: var(--text); }
+
+.categoria-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px; margin-bottom: 16px;
+}
+.categoria-chip {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px; border: 1px solid var(--border); border-radius: 8px;
+  cursor: pointer; transition: var(--tr); background: var(--surface);
+}
+.categoria-chip:hover { background: var(--surface-2); }
+.categoria-chip.selected {
+  background: var(--gold-lt); border-color: var(--gold);
+  color: var(--gold-dim);
+}
+
+.field {
+  margin-bottom: 20px;
+}
+.field label {
+  display: block; margin-bottom: 6px; font-size: 12px;
+  font-weight: 600; color: var(--text-2);
+}
+.field input, .field select {
+  width: 100%; padding: 12px; border: 1px solid var(--border);
+  border-radius: 8px; font-size: 13px; transition: var(--tr);
+  background: var(--surface);
+}
+.field input:focus, .field select:focus {
+  outline: none; border-color: var(--gold);
+  box-shadow: 0 0 0 3px rgba(26,82,118,.1);
+}
 </style>
 </head>
 <body>
 
-<!-- HTML estrutural mantido igual -->
-<div id="auth-screen" class="visible">
+<!-- Auth Screen -->
+<div id="auth-screen">
   <div class="auth-wrap">
     <div class="auth-brand">
       <div class="auth-brand-mark">F</div>
@@ -69,19 +437,137 @@ body {
         <button class="auth-tab" onclick="setTab('register')">Criar conta</button>
       </div>
       <div id="tab-login" class="auth-form">
-        <div class="form-field"><label>E-mail</label><input type="email" id="l-email" placeholder="seu@email.com"></div>
-        <div class="form-field"><label>Senha</label><input type="password" id="l-senha" placeholder="Sua senha"></div>
+        <div class="form-field">
+          <label>E-mail</label>
+          <input type="email" id="l-email" placeholder="seu@email.com">
+        </div>
+        <div class="form-field">
+          <label>Senha</label>
+          <input type="password" id="l-senha" placeholder="Sua senha">
+        </div>
         <div id="login-err" class="auth-error"></div>
         <button class="btn btn-gold btn-block" id="btn-login" onclick="doLogin()">Entrar</button>
       </div>
       <div id="tab-register" class="auth-form" style="display:none">
-        <div class="form-field"><label>Nome completo</label><input type="text" id="r-nome" placeholder="João Silva"></div>
-        <div class="form-field"><label>E-mail</label><input type="email" id="r-email" placeholder="seu@email.com"></div>
-        <div class="form-field"><label>Senha</label><input type="password" id="r-senha" placeholder="Mínimo 6 caracteres"></div>
+        <div class="form-field">
+          <label>Nome completo</label>
+          <input type="text" id="r-nome" placeholder="João Silva">
+        </div>
+        <div class="form-field">
+          <label>E-mail</label>
+          <input type="email" id="r-email" placeholder="seu@email.com">
+        </div>
+        <div class="form-field">
+          <label>Senha</label>
+          <input type="password" id="r-senha" placeholder="Mínimo 6 caracteres">
+        </div>
         <div id="register-err" class="auth-error"></div>
         <button class="btn btn-gold btn-block" id="btn-register" onclick="doRegister()">Criar conta</button>
       </div>
     </div>
+  </div>
+</div>
+
+<!-- Onboarding Screen -->
+<div id="onboard-screen">
+  <div class="onboard-container">
+    <div class="onboard-card">
+      <div class="onboard-steps">
+        <div class="onboard-step-dot active" id="dot-1"></div>
+        <div class="onboard-step-dot" id="dot-2"></div>
+        <div class="onboard-step-dot" id="dot-3"></div>
+        <div class="onboard-step-dot" id="dot-4"></div>
+      </div>
+      <div id="onboard-content"></div>
+    </div>
+  </div>
+</div>
+
+<!-- App Screen -->
+<div id="app-screen">
+  <div class="app-layout">
+    <nav class="sidebar">
+      <div class="sidebar-header">
+        <div class="sidebar-logo">F</div>
+        <div>
+          <div class="sidebar-title">Financeiro Pro</div>
+          <div class="sidebar-subtitle" id="empresa-nome">Artecon</div>
+        </div>
+      </div>
+      
+      <div class="sidebar-nav">
+        <div class="nav-section">
+          <div class="nav-section-title">Principal</div>
+          <a href="#" class="nav-item active" onclick="go('dashboard')">
+            <span class="nav-icon">📊</span>
+            Dashboard
+          </a>
+          <a href="#" class="nav-item" onclick="go('receber')">
+            <span class="nav-icon">💰</span>
+            A Receber
+          </a>
+          <a href="#" class="nav-item" onclick="go('pagar')">
+            <span class="nav-icon">📤</span>
+            A Pagar
+          </a>
+          <a href="#" class="nav-item" onclick="go('contas')">
+            <span class="nav-icon">🏦</span>
+            Caixa / Bancos
+          </a>
+        </div>
+
+        <div class="nav-section">
+          <div class="nav-section-title">Análises</div>
+          <a href="#" class="nav-item" onclick="go('fluxo')">
+            <span class="nav-icon">📈</span>
+            Fluxo de Caixa
+          </a>
+          <a href="#" class="nav-item" onclick="go('dre')">
+            <span class="nav-icon">📋</span>
+            DRE
+          </a>
+          <a href="#" class="nav-item" onclick="go('metas')">
+            <span class="nav-icon">🎯</span>
+            Metas
+          </a>
+        </div>
+
+        <div class="nav-section">
+          <div class="nav-section-title">Configurações</div>
+          <a href="#" class="nav-item" onclick="go('clientes')">
+            <span class="nav-icon">👥</span>
+            Clientes
+          </a>
+          <a href="#" class="nav-item" onclick="go('fornecedores')">
+            <span class="nav-icon">🏢</span>
+            Fornecedores
+          </a>
+          <a href="#" class="nav-item" onclick="go('categorias')">
+            <span class="nav-icon">🏷️</span>
+            Categorias
+          </a>
+          <a href="#" class="nav-item" onclick="go('configuracoes')">
+            <span class="nav-icon">⚙️</span>
+            Configurações
+          </a>
+        </div>
+      </div>
+    </nav>
+
+    <main class="main-content">
+      <div id="page-content"></div>
+    </main>
+  </div>
+</div>
+
+<!-- Modal -->
+<div id="modal-overlay" class="modal-overlay">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title" id="modal-title"></div>
+    </div>
+    <div class="modal-body" id="modal-body"></div>
+    <div class="modal-footer" id="modal-footer"></div>
   </div>
 </div>
 
@@ -124,8 +610,10 @@ async function supaAuth(method, path, body) {
 // ── FUNÇÃO CRÍTICA: SETAR TENANT_ID NO JWT ────────────────────
 async function setTenantIdInJWT(tenantId) {
   try {
+    console.log('🔧 Setando tenant_id no JWT:', tenantId);
+    
     // Atualizar user metadata com tenant_id
-    await fetch(`${SUPA_URL}/auth/v1/user`, {
+    const updateRes = await fetch(`${SUPA_URL}/auth/v1/user`, {
       method: 'PUT',
       headers: {
         'apikey': SUPA_KEY,
@@ -137,17 +625,25 @@ async function setTenantIdInJWT(tenantId) {
       })
     });
     
-    // Refresh token para pegar as claims atualizadas
-    const refreshRes = await fetch(`${SUPA_URL}/auth/v1/token?grant_type=refresh_token`, {
-      method: 'POST',
-      headers: { 'apikey': SUPA_KEY, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refresh_token: localStorage.getItem('supabase.auth.token')?.refresh_token })
-    });
-    
-    if (refreshRes.ok) {
-      const newTokenData = await refreshRes.json();
-      APP.token = newTokenData.access_token;
+    if (updateRes.ok) {
       console.log('✅ tenant_id setado no JWT:', tenantId);
+      
+      // Refresh token para pegar as claims atualizadas
+      const refreshToken = JSON.parse(localStorage.getItem('supabase.auth.token') || '{}').refresh_token;
+      if (refreshToken) {
+        const refreshRes = await fetch(`${SUPA_URL}/auth/v1/token?grant_type=refresh_token`, {
+          method: 'POST',
+          headers: { 'apikey': SUPA_KEY, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refresh_token: refreshToken })
+        });
+        
+        if (refreshRes.ok) {
+          const newTokenData = await refreshRes.json();
+          APP.token = newTokenData.access_token;
+          localStorage.setItem('supabase.auth.token', JSON.stringify(newTokenData));
+          console.log('✅ Token refreshed com tenant_id no JWT');
+        }
+      }
     }
   } catch(e) {
     console.error('❌ Erro ao setar tenant_id no JWT:', e);
@@ -193,6 +689,10 @@ async function doLogin() {
     const data = await supaAuth('POST', 'token?grant_type=password', { email, password: senha });
     if (!data.access_token) throw new Error(data.error_description || 'Credenciais inválidas.');
     APP.token = data.access_token;
+    
+    // Salvar token no localStorage para refresh
+    localStorage.setItem('supabase.auth.token', JSON.stringify(data));
+    
     await inicializar();
   } catch(e) {
     $id('login-err').textContent = e.message;
@@ -215,6 +715,10 @@ async function doRegister() {
     APP.token = data.access_token;
     APP.nomeTemp = nome;
     APP.emailTemp = email;
+    
+    // Salvar token no localStorage para refresh
+    localStorage.setItem('supabase.auth.token', JSON.stringify(data));
+    
     iniciarOnboarding();
   } catch(e) {
     $id('register-err').textContent = e.message;
@@ -224,39 +728,52 @@ async function doRegister() {
 
 function logout() {
   APP.token = null; APP.user = null; APP.tenant = null;
+  localStorage.removeItem('supabase.auth.token');
   $id('l-email').value = '';
   $id('l-senha').value = '';
   $id('btn-login').disabled = false; $id('btn-login').textContent = 'Entrar';
+  $id('app-screen').classList.remove('visible');
+  $id('onboard-screen').classList.remove('visible');
+  $id('auth-screen').classList.add('visible');
 }
 
 // ── INICIALIZAR CORRIGIDO COM RLS ─────────────────────────────
 async function inicializar() {
   try {
+    console.log('🔧 Inicializando sistema...');
+    
     // MUDANÇA CRÍTICA: Remover filtros manuais de tenant_id, confiar no RLS
     const usuarios = await supa('GET', 'fin_usuarios', { params: { select: '*', limit: 1 } });
     if (!usuarios || !usuarios.length) {
+      console.log('👤 Usuário não encontrado, iniciando onboarding...');
       APP.nomeTemp = APP.nomeTemp || 'Usuário';
       iniciarOnboarding();
       return;
     }
     APP.user = usuarios[0];
+    console.log('👤 Usuário carregado:', APP.user.nome, '| Tenant:', APP.user.tenant_id);
     
     // CRÍTICO: Setar tenant_id no JWT para RLS funcionar
     await setTenantIdInJWT(APP.user.tenant_id);
     
     const tenants = await supa('GET', 'fin_tenants', { params: { id: `eq.${APP.user.tenant_id}`, select: '*' } });
     APP.tenant = tenants[0];
+    console.log('🏢 Empresa carregada:', APP.tenant.nome);
+    
     await carregarDados();
     mostrarApp();
   } catch(e) {
+    console.error('❌ Erro ao inicializar:', e);
     toast('Erro ao carregar: ' + e.message, 'error');
   }
 }
 
 // ── CARREGAR DADOS CORRIGIDO COM RLS ──────────────────────────
 async function carregarDados() {
-  // MUDANÇA CRÍTICA: Remover filtros manuais de tenant_id, deixar RLS fazer o trabalho
   try {
+    console.log('📊 Carregando dados via RLS...');
+    
+    // MUDANÇA CRÍTICA: Remover filtros manuais de tenant_id, deixar RLS fazer o trabalho
     const [contas, cats, clis, fors, recs, desps, metas, recorr] = await Promise.all([
       supa('GET', 'fin_contas',        { params: { ativo: 'eq.true', select: '*' } }),
       supa('GET', 'fin_categorias',    { params: { ativo: 'eq.true', select: '*', order: 'nome.asc' } }),
@@ -267,10 +784,21 @@ async function carregarDados() {
       supa('GET', 'fin_metas',         { params: { select: '*', order: 'prazo.asc' } }).catch(()=>[]),
       supa('GET', 'fin_recorrencias',  { params: { select: '*', order: 'criado_em.asc' } }).catch(()=>[]),
     ]);
+    
     CONTAS = contas; CATEGORIAS = cats; CLIENTES = clis;
     FORNECEDORES = fors; RECEITAS = recs; DESPESAS = desps; 
     METAS = metas; RECORRENCIAS = recorr;
-    console.log('✅ Dados carregados via RLS:', { contas: contas.length, categorias: cats.length, receitas: recs.length, despesas: desps.length });
+    
+    console.log('✅ Dados carregados via RLS:', {
+      contas: contas.length,
+      categorias: cats.length,
+      clientes: clis.length,
+      fornecedores: fors.length,
+      receitas: recs.length,
+      despesas: desps.length,
+      metas: metas.length,
+      recorrencias: recorr.length
+    });
   } catch(e) {
     console.error('❌ Erro ao carregar dados via RLS:', e);
     toast('Erro ao carregar dados: ' + e.message, 'error');
@@ -291,17 +819,110 @@ const CATEGORIAS_PADRAO = [
   { nome:'Tecnologia',      tipo:'despesa', cor:'#5b7ae0', icone:'💻' },
   { nome:'Outros (despesa)',tipo:'despesa', cor:'#9ca3af', icone:'💸' },
 ];
+const SETORES = ['Contabilidade','Advocacia','Saúde','Educação','Comércio','Indústria','Tecnologia','Construção','Alimentação','Serviços Gerais','Outro'];
+
+function iniciarOnboarding() {
+  $id('auth-screen').classList.remove('visible');
+  $id('onboard-screen').classList.add('visible');
+  OB = { step: 1, empresa: '', setor: '', contaNome: 'Caixa', contaSaldo: 0, contaTipo: 'caixa', categoriasSel: [] };
+  renderOnboard();
+}
+
+function renderOnboard() {
+  for (let i = 1; i <= 4; i++) {
+    const dot = $id(`dot-${i}`);
+    dot.className = 'onboard-step-dot' + (i < OB.step ? ' done' : i === OB.step ? ' active' : '');
+  }
+  const steps = {
+    1: `<div class="onboard-title">Bem-vindo à Artecon</div>
+        <div class="onboard-sub">Vamos configurar sua empresa em 4 etapas rápidas para você começar a usar o sistema.</div>
+        <div class="field"><label>Nome da empresa</label><input type="text" id="ob-empresa" placeholder="Ex: Artecon Artes Contábeis" value="${OB.empresa}"></div>
+        <div class="field"><label>Setor de atuação</label><select id="ob-setor">${SETORES.map(s=>`<option value="${s}" ${OB.setor===s?'selected':''}>${s}</option>`).join('')}</select></div>
+        <div class="onboard-nav">
+          <span style="font-size:12px;color:var(--text-3)">1 de 4</span>
+          <button class="btn-accent" onclick="obNext1()">Próximo →</button>
+        </div>`,
+    2: `<div class="onboard-title">Primeira conta bancária</div>
+        <div class="onboard-sub">Qual conta quer cadastrar primeiro? Pode adicionar mais depois.</div>
+        <div class="field"><label>Nome da conta</label><input type="text" id="ob-conta-nome" placeholder="Ex: Caixa, Banco Itaú CC, Nubank PJ" value="${OB.contaNome}"></div>
+        <div class="field"><label>Tipo</label><select id="ob-conta-tipo">
+          <option value="caixa" ${OB.contaTipo==='caixa'?'selected':''}>Caixa físico</option>
+          <option value="corrente" ${OB.contaTipo==='corrente'?'selected':''}>Conta corrente</option>
+          <option value="poupanca" ${OB.contaTipo==='poupanca'?'selected':''}>Poupança</option>
+          <option value="cartao" ${OB.contaTipo==='cartao'?'selected':''}>Cartão</option>
+          <option value="investimento" ${OB.contaTipo==='investimento'?'selected':''}>Investimento</option>
+        </select></div>
+        <div class="field"><label>Saldo inicial (R$)</label><input type="number" id="ob-conta-saldo" placeholder="0,00" value="${OB.contaSaldo}" step="0.01"></div>
+        <div class="onboard-nav">
+          <button class="btn-outline" onclick="OB.step=1;renderOnboard()">← Voltar</button>
+          <button class="btn-accent" onclick="obNext2()">Próximo →</button>
+        </div>`,
+    3: `<div class="onboard-title">Categorias padrão</div>
+        <div class="onboard-sub">Selecione as categorias que fazem sentido para sua empresa. Você pode editar depois.</div>
+        <div class="categoria-grid" id="cat-grid">
+          ${CATEGORIAS_PADRAO.map((c,i) => `
+            <div class="categoria-chip ${OB.categoriasSel.includes(i)?'selected':''}" onclick="toggleCat(${i})">
+              <span>${c.icone}</span>
+              <span style="flex:1">${c.nome}</span>
+              <span style="font-size:10px;color:var(--text-3)">${c.tipo==='receita'?'↑':'↓'}</span>
+            </div>`).join('')}
+        </div>
+        <div class="onboard-nav" style="margin-top:16px">
+          <button class="btn-outline" onclick="OB.step=2;renderOnboard()">← Voltar</button>
+          <button class="btn-accent" onclick="obNext3()">Próximo →</button>
+        </div>`,
+    4: `<div class="onboard-title">Tudo pronto!</div>
+        <div class="onboard-sub">Revise as configurações antes de começar.</div>
+        <div style="background:var(--bg-2);border-radius:10px;padding:16px;margin-bottom:16px;border:1px solid var(--border)">
+          <div style="display:flex;flex-direction:column;gap:10px">
+            <div style="display:flex;justify-content:space-between"><span style="color:var(--text-3);font-size:12px">Empresa</span><strong>${OB.empresa}</strong></div>
+            <div style="display:flex;justify-content:space-between"><span style="color:var(--text-3);font-size:12px">Setor</span><strong>${OB.setor}</strong></div>
+            <div style="display:flex;justify-content:space-between"><span style="color:var(--text-3);font-size:12px">Conta inicial</span><strong>${OB.contaNome}</strong></div>
+            <div style="display:flex;justify-content:space-between"><span style="color:var(--text-3);font-size:12px">Saldo inicial</span><strong>${fmtMoeda(OB.contaSaldo)}</strong></div>
+            <div style="display:flex;justify-content:space-between"><span style="color:var(--text-3);font-size:12px">Categorias</span><strong>${OB.categoriasSel.length} selecionadas</strong></div>
+          </div>
+        </div>
+        <div class="onboard-nav">
+          <button class="btn-outline" onclick="OB.step=3;renderOnboard()">← Voltar</button>
+          <button class="btn-accent" id="btn-finalizar" onclick="finalizarOnboarding()">Começar →</button>
+        </div>`
+  };
+  $id('onboard-content').innerHTML = steps[OB.step] || '';
+}
+
+function obNext1() {
+  const empresa = ($id('ob-empresa')||{}).value?.trim();
+  const setor   = ($id('ob-setor')||{}).value;
+  if (!empresa) { toast('Informe o nome da empresa.', 'error'); return; }
+  OB.empresa = empresa; OB.setor = setor; OB.step = 2; renderOnboard();
+}
+function obNext2() {
+  OB.contaNome  = $id('ob-conta-nome').value.trim() || 'Caixa';
+  OB.contaTipo  = $id('ob-conta-tipo').value;
+  OB.contaSaldo = parseFloat($id('ob-conta-saldo').value) || 0;
+  OB.step = 3; renderOnboard();
+}
+function obNext3() { OB.step = 4; renderOnboard(); }
+
+function toggleCat(i) {
+  const idx = OB.categoriasSel.indexOf(i);
+  if (idx === -1) OB.categoriasSel.push(i); else OB.categoriasSel.splice(idx, 1);
+  document.querySelectorAll('.categoria-chip').forEach((el, j) => el.classList.toggle('selected', OB.categoriasSel.includes(j)));
+}
 
 async function finalizarOnboarding() {
   const btn = $id('btn-finalizar');
   btn.disabled = true; btn.textContent = 'Criando...';
   try {
+    console.log('🔧 Finalizando onboarding...');
+    
     // Criar tenant
     const tenants = await supa('POST', 'fin_tenants', { 
       body: { nome: OB.empresa, setor: OB.setor }, 
       returning: true 
     });
     const tenant = tenants[0];
+    console.log('🏢 Tenant criado:', tenant.id, '-', tenant.nome);
     
     // Pegar auth user info
     const authUser = await fetch(`${SUPA_URL}/auth/v1/user`, {
@@ -318,6 +939,7 @@ async function finalizarOnboarding() {
         perfil: 'admin' 
       } 
     });
+    console.log('👤 Usuário criado:', APP.nomeTemp);
     
     // CRÍTICO: Setar tenant_id no JWT antes de continuar
     await setTenantIdInJWT(tenant.id);
@@ -331,12 +953,14 @@ async function finalizarOnboarding() {
         saldo_atual: OB.contaSaldo 
       } 
     });
+    console.log('🏦 Conta criada:', OB.contaNome);
     
     const cats = OB.categoriasSel.length > 0 ? OB.categoriasSel.map(i => CATEGORIAS_PADRAO[i]) : CATEGORIAS_PADRAO;
     if (cats.length > 0) {
       await supa('POST', 'fin_categorias', { 
         body: cats.map(c => ({ ...c, padrao: true })) // tenant_id será adicionado automaticamente pelo RLS
       });
+      console.log('🏷️ Categorias criadas:', cats.length);
     }
     
     // Recarregar dados do usuário
@@ -347,9 +971,50 @@ async function finalizarOnboarding() {
     await carregarDados();
     mostrarApp();
   } catch(e) {
+    console.error('❌ Erro no onboarding:', e);
     toast('Erro: ' + e.message, 'error');
     btn.disabled = false; btn.textContent = 'Começar →';
   }
+}
+
+// ── NAVEGAÇÃO ─────────────────────────────────────────────────
+const PAGES = {
+  dashboard:    { title: 'Dashboard',       render: renderDashboard },
+  receber:      { title: 'A Receber',       render: renderReceber },
+  pagar:        { title: 'A Pagar',         render: renderPagar },
+  contas:       { title: 'Caixa / Bancos',  render: renderContas },
+  fluxo:        { title: 'Fluxo de Caixa',  render: renderFluxo },
+  dre:          { title: 'DRE',             render: renderDRE },
+  metas:        { title: 'Metas',           render: renderMetas },
+  clientes:     { title: 'Clientes',        render: renderClientes },
+  fornecedores: { title: 'Fornecedores',    render: renderFornecedores },
+  categorias:   { title: 'Categorias',      render: renderCategorias },
+  configuracoes:{ title: 'Configurações',   render: renderConfiguracoes },
+};
+
+function go(page) {
+  if (!PAGES[page]) return;
+  
+  // Atualizar nav ativo
+  document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+  document.querySelector(`[onclick="go('${page}')"]`)?.classList.add('active');
+  
+  APP.page = page;
+  PAGES[page].render();
+}
+
+function mostrarApp() {
+  $id('auth-screen').classList.remove('visible');
+  $id('onboard-screen').classList.remove('visible');
+  $id('app-screen').classList.add('visible');
+  
+  // Atualizar nome da empresa
+  $id('empresa-nome').textContent = APP.tenant?.nome || 'Empresa';
+  
+  // Renderizar página inicial
+  go('dashboard');
+  
+  console.log('✅ Sistema carregado para:', APP.user.nome, '| Empresa:', APP.tenant.nome);
 }
 
 // ── FUNÇÃO DE TESTE RLS ───────────────────────────────────────
@@ -372,11 +1037,11 @@ async function testarRLS() {
     
     // Teste 2: Tentar inserir sem tenant_id manual
     console.log('📊 Teste 2: Inserir categoria sem tenant_id manual...');
-    await supa('POST', 'fin_categorias', {
+    const novaCategoria = await supa('POST', 'fin_categorias', {
       body: { nome: 'Teste RLS', tipo: 'receita', cor: '#ff0000', icone: '🧪' },
       returning: true
     });
-    console.log('✅ Inserção via RLS funcionou');
+    console.log('✅ Inserção via RLS funcionou:', novaCategoria[0]);
     
     // Teste 3: Verificar se foi criado com tenant_id correto
     const testeCats = await supa('GET', 'fin_categorias', { 
@@ -399,17 +1064,340 @@ async function testarRLS() {
   }
 }
 
+// ── RENDERS BÁSICOS ───────────────────────────────────────────
+function renderDashboard() {
+  $id('page-content').innerHTML = `
+    <div class="page-header">
+      <div class="page-title">Dashboard</div>
+      <div class="page-subtitle">Visão geral das suas finanças</div>
+    </div>
+    
+    <div class="kpi-grid">
+      <div class="kpi-card">
+        <div class="kpi-header">
+          <div class="kpi-title">Receitas do Mês</div>
+          <div class="kpi-icon" style="background: var(--green-lt); color: var(--green);">💰</div>
+        </div>
+        <div class="kpi-value" style="color: var(--green);">R$ 0,00</div>
+        <div class="kpi-subtitle">+0% vs mês anterior</div>
+      </div>
+      
+      <div class="kpi-card">
+        <div class="kpi-header">
+          <div class="kpi-title">Despesas do Mês</div>
+          <div class="kpi-icon" style="background: var(--red-lt); color: var(--red);">📤</div>
+        </div>
+        <div class="kpi-value" style="color: var(--red);">R$ 0,00</div>
+        <div class="kpi-subtitle">+0% vs mês anterior</div>
+      </div>
+      
+      <div class="kpi-card">
+        <div class="kpi-header">
+          <div class="kpi-title">Saldo Total</div>
+          <div class="kpi-icon" style="background: var(--gold-lt); color: var(--gold);">🏦</div>
+        </div>
+        <div class="kpi-value" style="color: var(--gold);">R$ ${fmtMoeda(CONTAS.reduce((sum, c) => sum + (c.saldo_atual || 0), 0))}</div>
+        <div class="kpi-subtitle">${CONTAS.length} conta(s)</div>
+      </div>
+      
+      <div class="kpi-card">
+        <div class="kpi-header">
+          <div class="kpi-title">A Receber</div>
+          <div class="kpi-icon" style="background: var(--amber-lt); color: var(--amber);">⏰</div>
+        </div>
+        <div class="kpi-value" style="color: var(--amber);">R$ 0,00</div>
+        <div class="kpi-subtitle">${RECEITAS.filter(r => r.status === 'pendente').length} pendente(s)</div>
+      </div>
+    </div>
+    
+    <div class="content-card">
+      <h3 style="margin-bottom: 16px; display: flex; align-items: center; gap: 8px;">
+        🧪 <span>Teste do Sistema RLS</span>
+      </h3>
+      <p style="margin-bottom: 16px; color: var(--text-2); font-size: 14px;">
+        Clique no botão abaixo para testar se o Row Level Security está funcionando corretamente.
+        O teste será exibido no console do navegador (F12).
+      </p>
+      <button class="btn btn-gold" onclick="testarRLS()">🧪 Executar Teste RLS</button>
+    </div>
+  `;
+}
+
+function renderReceber() {
+  $id('page-content').innerHTML = `
+    <div class="page-header">
+      <div class="page-title">A Receber</div>
+      <div class="page-subtitle">Controle de receitas e recebimentos</div>
+    </div>
+    <div class="content-card">
+      <p>Em desenvolvimento... 🚧</p>
+    </div>
+  `;
+}
+
+function renderPagar() {
+  $id('page-content').innerHTML = `
+    <div class="page-header">
+      <div class="page-title">A Pagar</div>
+      <div class="page-subtitle">Controle de despesas e pagamentos</div>
+    </div>
+    <div class="content-card">
+      <p>Em desenvolvimento... 🚧</p>
+    </div>
+  `;
+}
+
+function renderContas() {
+  $id('page-content').innerHTML = `
+    <div class="page-header">
+      <div class="page-title">Caixa / Bancos</div>
+      <div class="page-subtitle">Gestão de contas e saldos</div>
+    </div>
+    <div class="content-card">
+      <div class="table-container">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Conta</th>
+              <th>Tipo</th>
+              <th>Saldo Inicial</th>
+              <th>Saldo Atual</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${CONTAS.map(conta => `
+              <tr>
+                <td><strong>${conta.nome}</strong></td>
+                <td><span class="badge badge-gold">${conta.tipo}</span></td>
+                <td>${fmtMoeda(conta.saldo_inicial || 0)}</td>
+                <td><strong>${fmtMoeda(conta.saldo_atual || 0)}</strong></td>
+                <td><span class="badge badge-green">Ativa</span></td>
+              </tr>
+            `).join('')}
+            ${CONTAS.length === 0 ? '<tr><td colspan="5" style="text-align:center;color:var(--text-3)">Nenhuma conta cadastrada</td></tr>' : ''}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+function renderFluxo() {
+  $id('page-content').innerHTML = `
+    <div class="page-header">
+      <div class="page-title">Fluxo de Caixa</div>
+      <div class="page-subtitle">Análise do movimento financeiro</div>
+    </div>
+    <div class="content-card">
+      <p>Em desenvolvimento... 🚧</p>
+    </div>
+  `;
+}
+
+function renderDRE() {
+  $id('page-content').innerHTML = `
+    <div class="page-header">
+      <div class="page-title">DRE</div>
+      <div class="page-subtitle">Demonstrativo do Resultado do Exercício</div>
+    </div>
+    <div class="content-card">
+      <p>Em desenvolvimento... 🚧</p>
+    </div>
+  `;
+}
+
+function renderMetas() {
+  $id('page-content').innerHTML = `
+    <div class="page-header">
+      <div class="page-title">Metas</div>
+      <div class="page-subtitle">Objetivos financeiros</div>
+    </div>
+    <div class="content-card">
+      <p>Em desenvolvimento... 🚧</p>
+    </div>
+  `;
+}
+
+function renderClientes() {
+  $id('page-content').innerHTML = `
+    <div class="page-header">
+      <div class="page-title">Clientes</div>
+      <div class="page-subtitle">Cadastro de clientes</div>
+    </div>
+    <div class="content-card">
+      <div class="table-container">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Nome</th>
+              <th>E-mail</th>
+              <th>Telefone</th>
+              <th>Documento</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${CLIENTES.map(cliente => `
+              <tr>
+                <td><strong>${cliente.nome}</strong></td>
+                <td>${cliente.email || '—'}</td>
+                <td>${cliente.telefone || '—'}</td>
+                <td>${cliente.documento || '—'}</td>
+                <td><span class="badge badge-green">Ativo</span></td>
+              </tr>
+            `).join('')}
+            ${CLIENTES.length === 0 ? '<tr><td colspan="5" style="text-align:center;color:var(--text-3)">Nenhum cliente cadastrado</td></tr>' : ''}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+function renderFornecedores() {
+  $id('page-content').innerHTML = `
+    <div class="page-header">
+      <div class="page-title">Fornecedores</div>
+      <div class="page-subtitle">Cadastro de fornecedores</div>
+    </div>
+    <div class="content-card">
+      <div class="table-container">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Nome</th>
+              <th>E-mail</th>
+              <th>Telefone</th>
+              <th>Documento</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${FORNECEDORES.map(fornecedor => `
+              <tr>
+                <td><strong>${fornecedor.nome}</strong></td>
+                <td>${fornecedor.email || '—'}</td>
+                <td>${fornecedor.telefone || '—'}</td>
+                <td>${fornecedor.documento || '—'}</td>
+                <td><span class="badge badge-green">Ativo</span></td>
+              </tr>
+            `).join('')}
+            ${FORNECEDORES.length === 0 ? '<tr><td colspan="5" style="text-align:center;color:var(--text-3)">Nenhum fornecedor cadastrado</td></tr>' : ''}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+function renderCategorias() {
+  $id('page-content').innerHTML = `
+    <div class="page-header">
+      <div class="page-title">Categorias</div>
+      <div class="page-subtitle">Classificação de receitas e despesas</div>
+    </div>
+    <div class="content-card">
+      <div class="table-container">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Nome</th>
+              <th>Tipo</th>
+              <th>Cor</th>
+              <th>Ícone</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${CATEGORIAS.map(cat => `
+              <tr>
+                <td><strong>${cat.nome}</strong></td>
+                <td><span class="badge ${cat.tipo === 'receita' ? 'badge-green' : 'badge-red'}">${cat.tipo}</span></td>
+                <td><div style="width:20px;height:20px;border-radius:4px;background:${cat.cor}"></div></td>
+                <td style="font-size:18px">${cat.icone}</td>
+                <td><span class="badge badge-green">Ativa</span></td>
+              </tr>
+            `).join('')}
+            ${CATEGORIAS.length === 0 ? '<tr><td colspan="5" style="text-align:center;color:var(--text-3)">Nenhuma categoria cadastrada</td></tr>' : ''}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+function renderConfiguracoes() {
+  $id('page-content').innerHTML = `
+    <div class="page-header">
+      <div class="page-title">Configurações</div>
+      <div class="page-subtitle">Configurações da empresa e usuário</div>
+    </div>
+    
+    <div class="content-card">
+      <h3 style="margin-bottom: 16px;">👤 Meu Perfil</h3>
+      <div class="form-grid">
+        <div class="form-group">
+          <label class="form-label">Nome</label>
+          <input class="form-input" type="text" value="${APP.user?.nome || ''}" readonly>
+        </div>
+        <div class="form-group">
+          <label class="form-label">E-mail</label>
+          <input class="form-input" type="email" value="${APP.user?.email || ''}" readonly>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Perfil</label>
+          <input class="form-input" type="text" value="${APP.user?.perfil || ''}" readonly>
+        </div>
+      </div>
+    </div>
+    
+    <div class="content-card">
+      <h3 style="margin-bottom: 16px;">🏢 Empresa</h3>
+      <div class="form-grid">
+        <div class="form-group">
+          <label class="form-label">Nome da empresa</label>
+          <input class="form-input" type="text" value="${APP.tenant?.nome || ''}" readonly>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Setor</label>
+          <input class="form-input" type="text" value="${APP.tenant?.setor || ''}" readonly>
+        </div>
+      </div>
+    </div>
+    
+    <div class="content-card">
+      <h3 style="margin-bottom: 16px;">🔐 Segurança</h3>
+      <button class="btn btn-gold" onclick="logout()">Sair do sistema</button>
+    </div>
+  `;
+}
+
+// ── UTILS ─────────────────────────────────────────────────────
+function fmtMoeda(valor) {
+  return new Intl.NumberFormat('pt-BR', {
+    style: 'currency',
+    currency: 'BRL'
+  }).format(valor || 0);
+}
+
+function today() {
+  return new Date().toISOString().split('T')[0];
+}
+
 // Adicionar função de teste ao escopo global para acesso via console
 window.testarRLS = testarRLS;
 
-function mostrarApp() {
-  $id('auth-screen').classList.remove('visible');
-  console.log('✅ Sistema carregado para:', APP.user.nome, '| Empresa:', APP.tenant.nome);
+// ── MODAL ─────────────────────────────────────────────────────
+function openModal(title, body, footer) {
+  $id('modal-title').innerHTML = title;
+  $id('modal-body').innerHTML = body;
+  $id('modal-footer').innerHTML = footer || '<button class="btn btn-outline" onclick="closeModal()">Fechar</button>';
+  $id('modal-overlay').classList.add('visible');
 }
 
-function iniciarOnboarding() {
-  $id('auth-screen').classList.remove('visible');
-  console.log('🔧 Iniciando onboarding...');
+function closeModal() {
+  $id('modal-overlay').classList.remove('visible');
 }
 
 // ── INIT ──────────────────────────────────────────────────────

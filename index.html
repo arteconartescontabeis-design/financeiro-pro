@@ -6678,26 +6678,49 @@ function updateProcessStep(stepId, status) {
 
 async function parseDocument(file) {
   const text = await file.text();
+  console.log('📄 Conteúdo do arquivo:', text.substring(0, 200)); // Debug
+  
   const lines = text.split('\n').filter(line => line.trim());
   const transactions = [];
   
+  // Patterns melhorados para bancos brasileiros
   const patterns = [
-    /(\d{2}\/\d{2}\/\d{4})\s+(.+?)\s+([-+]?\d+[.,]\d{2})/g,
-    /(\d{2}\/\d{2})\s+(.+?)\s+([-+]?\d+[.,]\d{2})/g,
-    /^(\d{2}\/\d{2}\/\d{4}),(.+?),([-+]?\d+[.,]\d{2})$/gm
+    // CSV: data,descricao,valor (com ou sem +/-)
+    /(\d{1,2}\/\d{1,2}\/\d{4}),(.+?),([-+]?\d+[.,]\d{2})/g,
+    // CSV sem aspas: data,descricao,valor
+    /^(\d{1,2}\/\d{1,2}\/\d{4}),([^,]+),([+-]?\d+[.,]\d{2})$/gm,
+    // Espaçado: DD/MM/YYYY DESCRIÇÃO VALOR
+    /(\d{1,2}\/\d{1,2}\/\d{4})\s+(.+?)\s+([-+]?\d+[.,]\d{2})/g,
+    // DD/MM sem ano
+    /(\d{1,2}\/\d{1,2})\s+(.+?)\s+([-+]?\d+[.,]\d{2})/g,
+    // Tab separated
+    /(\d{1,2}\/\d{1,2}\/\d{4})\t(.+?)\t([-+]?\d+[.,]\d{2})/g
   ];
   
   for (const pattern of patterns) {
     let match;
+    pattern.lastIndex = 0; // Reset pattern
+    
     while ((match = pattern.exec(text)) !== null) {
       const [_, dateStr, description, amount] = match;
       
+      // Processar data
       let processedDate = dateStr;
-      if (dateStr.length === 5) {
+      if (dateStr.length === 5) { // DD/MM
         processedDate = `${dateStr}/${new Date().getFullYear()}`;
       }
       
-      const valor = parseFloat(amount.replace(',', '.').replace(/[^\d.-]/g, ''));
+      // Converter valor - aceitar vírgula e ponto
+      let valor = parseFloat(amount.replace(',', '.').replace(/[^\d.-]/g, ''));
+      
+      // Se não tem sinal, detectar por contexto
+      if (valor > 0 && !amount.includes('+') && !amount.includes('-')) {
+        // Analisar descrição para detectar se é débito ou crédito
+        const desc = description.toLowerCase();
+        if (desc.includes('pagamento') || desc.includes('taxa') || desc.includes('tarifa') || desc.includes('débito')) {
+          valor = -Math.abs(valor);
+        }
+      }
       
       if (!isNaN(valor) && Math.abs(valor) > 0.01) {
         transactions.push({
@@ -6708,13 +6731,73 @@ async function parseDocument(file) {
         });
       }
     }
+    
+    // Se encontrou transações com este pattern, parar
+    if (transactions.length > 0) {
+      console.log(`✅ Pattern funcionou: encontradas ${transactions.length} transações`);
+      break;
+    }
+  }
+  
+  // Se ainda não encontrou, tentar linha por linha
+  if (transactions.length === 0) {
+    console.log('🔍 Tentando parser linha por linha...');
+    
+    for (let line of lines) {
+      line = line.trim();
+      if (!line) continue;
+      
+      // Tentar separar por vírgula, ponto e vírgula, ou tab
+      const separators = [',', ';', '\t'];
+      
+      for (const sep of separators) {
+        const parts = line.split(sep).map(p => p.trim());
+        
+        if (parts.length >= 3) {
+          const [datePart, descPart, valuePart] = parts;
+          
+          // Validar se primeira parte parece data
+          if (/\d{1,2}\/\d{1,2}(\/\d{4})?/.test(datePart)) {
+            // Validar se última parte parece valor
+            const cleanValue = valuePart.replace(/[^\d.,-]/g, '');
+            if (/\d+[.,]\d{2}/.test(cleanValue)) {
+              
+              let valor = parseFloat(cleanValue.replace(',', '.'));
+              let processedDate = datePart;
+              
+              if (datePart.length === 5) {
+                processedDate = `${datePart}/${new Date().getFullYear()}`;
+              }
+              
+              // Detectar sinal por contexto se não explícito
+              if (valor > 0) {
+                const desc = descPart.toLowerCase();
+                if (desc.includes('pagamento') || desc.includes('taxa') || desc.includes('débito')) {
+                  valor = -valor;
+                }
+              }
+              
+              transactions.push({
+                data: processedDate,
+                descricao: descPart.trim(),
+                valor: valor,
+                tipo: valor > 0 ? 'receita' : 'despesa'
+              });
+            }
+          }
+        }
+      }
+      
+      if (transactions.length > 0) break;
+    }
   }
   
   if (transactions.length === 0) {
-    throw new Error('Nenhuma transação encontrada no documento. Verifique o formato.');
+    console.error('❌ Nenhuma transação encontrada. Conteúdo:', text);
+    throw new Error('Nenhuma transação encontrada no documento. Verifique se o formato é: DATA,DESCRIÇÃO,VALOR (exemplo: 15/03/2024,PIX RECEBIDO,1000.50)');
   }
   
-  console.log(`📊 ${transactions.length} transações extraídas do documento`);
+  console.log(`📊 ${transactions.length} transações extraídas:`, transactions);
   return transactions;
 }
 

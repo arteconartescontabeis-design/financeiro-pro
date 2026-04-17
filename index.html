@@ -7151,7 +7151,7 @@ Para cada transação, extraia:
 - Descrição da transação
 - Valor (positivo para créditos, negativo para débitos)
 
-Retorne APENAS um JSON válido com o array de transações:
+Retorne SOMENTE o objeto JSON abaixo, sem nenhum texto antes ou depois, sem explicações, sem comentários, sem markdown. Comece a resposta com { e termine com }. Formato:
 
 {
   "transactions": [
@@ -7187,10 +7187,11 @@ IMPORTANTE:
     const content = result.content?.[0]?.text || '';
     console.log('🔍 Resposta OCR:', content.substring(0, 200));
 
-    const cleanContent = content.replace(/```json\n?|\n?```/g, '').trim();
-    const parsed = JSON.parse(cleanContent);
+    if (!content) throw new Error('Claude retornou resposta vazia no OCR.');
 
-    if (parsed.transactions && parsed.transactions.length > 0) {
+    const parsed = extractJSON(content);
+
+    if (parsed && Array.isArray(parsed.transactions) && parsed.transactions.length > 0) {
       console.log('✅ OCR extraiu', parsed.transactions.length, 'transações');
       return parsed.transactions.map(t => ({
         data: t.data,
@@ -7199,6 +7200,7 @@ IMPORTANTE:
         tipo: t.valor > 0 ? 'receita' : 'despesa'
       }));
     }
+    console.error('❌ Estrutura OCR inesperada. Resposta:', content.slice(0, 500));
     throw new Error('Nenhuma transação encontrada no PDF.');
 
   } catch (error) {

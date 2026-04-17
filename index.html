@@ -797,6 +797,48 @@ function esc(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]);
 }
 
+// ── EXTRAÇÃO DE JSON TOLERANTE ─────────────────────────────────
+// Modelos LLM às vezes retornam JSON cercado de texto explicativo, code fences,
+// ou múltiplos blocos. Esta função extrai o primeiro JSON válido de qualquer string.
+function extractJSON(text) {
+  if (!text || typeof text !== 'string') {
+    throw new Error('Resposta vazia ou inválida.');
+  }
+  // 1) Remove code fences ```json ... ``` ou ``` ... ```
+  let cleaned = text.replace(/```(?:json)?\s*\n?/gi, '').replace(/\n?```/g, '').trim();
+  // 2) Tenta parse direto
+  try { return JSON.parse(cleaned); } catch(_) {}
+  // 3) Acha o primeiro { ou [ e o fechamento correspondente balanceado
+  const firstBrace = cleaned.search(/[\{\[]/);
+  if (firstBrace === -1) {
+    throw new Error(`Resposta não contém JSON: "${text.slice(0, 150)}"`);
+  }
+  const opener = cleaned[firstBrace];
+  const closer = opener === '{' ? '}' : ']';
+  let depth = 0, inString = false, escape = false, end = -1;
+  for (let i = firstBrace; i < cleaned.length; i++) {
+    const ch = cleaned[i];
+    if (escape) { escape = false; continue; }
+    if (ch === '\\' && inString) { escape = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (ch === opener) depth++;
+    else if (ch === closer) {
+      depth--;
+      if (depth === 0) { end = i; break; }
+    }
+  }
+  if (end === -1) {
+    throw new Error(`JSON incompleto na resposta: "${cleaned.slice(firstBrace, firstBrace+200)}..."`);
+  }
+  const candidate = cleaned.slice(firstBrace, end + 1);
+  try {
+    return JSON.parse(candidate);
+  } catch(e) {
+    throw new Error(`JSON inválido: ${e.message}. Trecho: "${candidate.slice(0, 200)}"`);
+  }
+}
+
 // ── CLAUDE API UNIFICADA ─────────────────────────────────────
 // SEMPRE usa a Edge Function 'claude-proxy' do Supabase — NUNCA expõe a chave via proxies CORS públicos.
 // A Edge Function recebe apiKey, model, messages, max_tokens e encaminha para api.anthropic.com.
@@ -7496,7 +7538,7 @@ ${transactions.map((t, i) => `${i+1}. ${t.data} - ${t.descricao} - R$ ${Math.abs
    CFOP: ${t.nfe_cfop || 'N/A'}
    Natureza: ${t.nfe_natureza || 'N/A'}`).join('\n')}
 
-Responda APENAS em JSON válido:
+Responda SOMENTE com o objeto JSON abaixo, sem nenhum texto antes ou depois, sem explicações, sem comentários, sem markdown. Comece a resposta com { e termine com }. Formato:
 {
   "transactions": [
     {
@@ -7519,7 +7561,7 @@ Analise estas ${transactions.length} transações bancárias brasileiras e para 
 Transações:
 ${transactions.map((t, i) => `${i+1}. ${t.data} - ${t.descricao} - ${t.tipo} - R$ ${Math.abs(t.valor).toFixed(2)}`).join('\n')}
 
-Responda APENAS em JSON válido:
+Responda SOMENTE com o objeto JSON abaixo, sem nenhum texto antes ou depois, sem explicações, sem comentários, sem markdown. Comece a resposta com { e termine com }. Formato:
 {
   "transactions": [
     {
@@ -7541,8 +7583,12 @@ Responda APENAS em JSON válido:
       messages: [{ role: 'user', content: prompt }],
     });
     const content = result.content?.[0]?.text || '';
-    const cleanContent = content.replace(/```json\n?|\n?```/g, '').trim();
-    const parsed = JSON.parse(cleanContent);
+    if (!content) throw new Error('Claude retornou resposta vazia.');
+    const parsed = extractJSON(content);
+    if (!parsed || !Array.isArray(parsed.transactions)) {
+      console.error('❌ Estrutura inesperada. Resposta:', content.slice(0, 500));
+      throw new Error(`Resposta sem campo "transactions". Recebido: ${JSON.stringify(parsed).slice(0, 200)}`);
+    }
     console.log('✅ Claude analisou', parsed.transactions.length, 'transações');
     return parsed.transactions;
   } catch (e) {

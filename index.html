@@ -6702,10 +6702,129 @@ function updateProcessStep(stepId, status) {
 
 async function parseDocument(file) {
   const text = await file.text();
-  console.log('🔍 ARQUIVO COMPLETO:', text);
+  console.log('🔍 ARQUIVO COMPLETO:', text.substring(0, 300));
   console.log('🔍 TAMANHO:', text.length, 'bytes');
   console.log('🔍 TIPO:', file.type);
   console.log('🔍 NOME:', file.name);
+  
+  const transactions = [];
+  
+  // Detectar tipo de arquivo
+  if (text.includes('OFXHEADER') || text.includes('<OFX>')) {
+    console.log('🏦 Detectado arquivo OFX - processando...');
+    return parseOFXDocument(text);
+  } else {
+    console.log('📊 Detectado arquivo CSV - processando...');
+    return parseCSVDocument(text);
+  }
+}
+
+async function parseOFXDocument(text) {
+  console.log('🏦 Iniciando parse OFX...');
+  const transactions = [];
+  
+  // Patterns para extrair transações do OFX
+  const transactionPattern = /<STMTTRN>([\s\S]*?)<\/STMTTRN>/g;
+  
+  let match;
+  while ((match = transactionPattern.exec(text)) !== null) {
+    const transactionBlock = match[1];
+    console.log('🔍 Bloco transação encontrado:', transactionBlock.substring(0, 100));
+    
+    // Extrair campos da transação
+    const dtPosted = extractOFXField(transactionBlock, 'DTPOSTED');
+    const trnAmt = extractOFXField(transactionBlock, 'TRNAMT');
+    const memo = extractOFXField(transactionBlock, 'MEMO') || extractOFXField(transactionBlock, 'NAME') || 'Transação';
+    const trnType = extractOFXField(transactionBlock, 'TRNTYPE');
+    
+    console.log('🔍 Campos extraídos:', { dtPosted, trnAmt, memo, trnType });
+    
+    if (dtPosted && trnAmt) {
+      // Converter data YYYYMMDD para DD/MM/YYYY
+      let formattedDate = dtPosted;
+      if (dtPosted.length >= 8) {
+        const year = dtPosted.substring(0, 4);
+        const month = dtPosted.substring(4, 6);
+        const day = dtPosted.substring(6, 8);
+        formattedDate = `${day}/${month}/${year}`;
+      }
+      
+      // Converter valor
+      const valor = parseFloat(trnAmt);
+      
+      if (!isNaN(valor) && Math.abs(valor) > 0.01) {
+        const transaction = {
+          data: formattedDate,
+          descricao: memo.trim(),
+          valor: valor,
+          tipo: valor > 0 ? 'receita' : 'despesa'
+        };
+        
+        console.log('✅ Transação OFX criada:', transaction);
+        transactions.push(transaction);
+      }
+    }
+  }
+  
+  // Se não encontrou pelo pattern principal, tentar outro approach
+  if (transactions.length === 0) {
+    console.log('🔍 Tentando parser OFX alternativo...');
+    
+    // Buscar por campos individuais
+    const dtMatches = [...text.matchAll(/<DTPOSTED>(\d{8})/g)];
+    const amtMatches = [...text.matchAll(/<TRNAMT>([-]?\d+\.?\d*)/g)];
+    const memoMatches = [...text.matchAll(/<MEMO>([^<]+)/g)];
+    
+    console.log('🔍 Matches encontrados:', {
+      dates: dtMatches.length,
+      amounts: amtMatches.length,
+      memos: memoMatches.length
+    });
+    
+    const minLength = Math.min(dtMatches.length, amtMatches.length);
+    
+    for (let i = 0; i < minLength; i++) {
+      const dtPosted = dtMatches[i][1];
+      const trnAmt = amtMatches[i][1];
+      const memo = memoMatches[i] ? memoMatches[i][1] : `Transação ${i + 1}`;
+      
+      // Converter data
+      const year = dtPosted.substring(0, 4);
+      const month = dtPosted.substring(4, 6);
+      const day = dtPosted.substring(6, 8);
+      const formattedDate = `${day}/${month}/${year}`;
+      
+      // Converter valor
+      const valor = parseFloat(trnAmt);
+      
+      if (!isNaN(valor)) {
+        transactions.push({
+          data: formattedDate,
+          descricao: memo.trim(),
+          valor: valor,
+          tipo: valor > 0 ? 'receita' : 'despesa'
+        });
+      }
+    }
+  }
+  
+  console.log('🏦 Total de transações OFX:', transactions.length);
+  
+  if (transactions.length === 0) {
+    throw new Error('Nenhuma transação encontrada no arquivo OFX. Verifique se o arquivo contém dados de transações.');
+  }
+  
+  return transactions;
+}
+
+function extractOFXField(block, fieldName) {
+  const pattern = new RegExp(`<${fieldName}>([^<]+)`, 'i');
+  const match = block.match(pattern);
+  return match ? match[1].trim() : null;
+}
+
+async function parseCSVDocument(text) {
+  console.log('📊 Iniciando parse CSV...');
   
   const lines = text.split(/\r?\n/).filter(line => line.trim());
   console.log('🔍 LINHAS ENCONTRADAS:', lines.length);
@@ -6713,14 +6832,13 @@ async function parseDocument(file) {
   
   const transactions = [];
   
-  // Parser SUPER simples - linha por linha
+  // Parser CSV como antes
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
     if (!line) continue;
     
     console.log(`🔍 Processando linha ${i+1}:`, line);
     
-    // Tentar split por vírgula primeiro
     let parts = line.split(',').map(p => p.trim());
     console.log('🔍 Parts (vírgula):', parts);
     
@@ -6731,18 +6849,15 @@ async function parseDocument(file) {
       
       console.log('🔍 Data:', datePart, '| Desc:', descPart, '| Valor:', valuePart);
       
-      // Validar data (formato DD/MM/YYYY ou DD/MM)
       const dateMatch = datePart.match(/^(\d{1,2})\/(\d{1,2})(\/(\d{4}))?$/);
       if (!dateMatch) {
         console.log('❌ Data inválida:', datePart);
         continue;
       }
       
-      // Extrair valor numérico
       let cleanValue = valuePart.replace(/[^\d.,-]/g, '');
       console.log('🔍 Valor limpo:', cleanValue);
       
-      // Converter para número
       let valor = 0;
       if (cleanValue.includes(',')) {
         valor = parseFloat(cleanValue.replace(',', '.'));
@@ -6757,26 +6872,21 @@ async function parseDocument(file) {
         continue;
       }
       
-      // Detectar sinal (se valor original tinha - no início, é negativo)
       if (valuePart.trim().startsWith('-')) {
         valor = -Math.abs(valor);
       } else if (!valuePart.trim().startsWith('+')) {
-        // Se não tem sinal, detectar por descrição
         const desc = descPart.toLowerCase();
         if (desc.includes('pagamento') || desc.includes('taxa') || desc.includes('débito') || desc.includes('saque')) {
           valor = -Math.abs(valor);
         } else {
-          valor = Math.abs(valor); // Positivo por padrão
+          valor = Math.abs(valor);
         }
       }
       
-      // Formar data completa
       let fullDate = datePart;
       if (dateMatch[4]) {
-        // Já tem ano
         fullDate = datePart;
       } else {
-        // Adicionar ano atual
         fullDate = `${datePart}/${new Date().getFullYear()}`;
       }
       
@@ -6787,15 +6897,14 @@ async function parseDocument(file) {
         tipo: valor > 0 ? 'receita' : 'despesa'
       };
       
-      console.log('✅ Transação criada:', transaction);
+      console.log('✅ Transação CSV criada:', transaction);
       transactions.push(transaction);
     } else {
       console.log('❌ Linha não tem 3 partes:', parts.length);
     }
   }
   
-  console.log('📊 TOTAL DE TRANSAÇÕES:', transactions.length);
-  console.log('📊 TRANSAÇÕES FINAIS:', transactions);
+  console.log('📊 TOTAL DE TRANSAÇÕES CSV:', transactions.length);
   
   if (transactions.length === 0) {
     throw new Error(`Nenhuma transação encontrada. 

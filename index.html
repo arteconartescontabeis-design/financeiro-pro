@@ -6727,21 +6727,43 @@ async function parsePDFDocument(file) {
   try {
     // Ler conteúdo do PDF como texto
     const text = await file.text();
-    console.log('📄 Conteúdo extraído (primeiros 500 chars):', text.substring(0, 500));
+    console.log('📄 PDF lido com sucesso! Tamanho:', text.length);
+    console.log('📄 Primeiros 1000 caracteres:', text.substring(0, 1000));
+    console.log('📄 Últimos 500 caracteres:', text.substring(text.length - 500));
     
     const transactions = [];
-    
-    // Se é um PDF, mas o sistema conseguiu extrair texto, processar
-    // Isso acontece com PDFs que têm texto embarcado (como este do Sicredi)
-    
     const lines = text.split(/[\n\r]+/).filter(line => line.trim());
     console.log('📄 Total de linhas no PDF:', lines.length);
     
-    // Patterns específicos para extratos bancários brasileiros
+    // DEBUG: Mostrar as primeiras 20 linhas para entender a estrutura
+    console.log('📄 === PRIMEIRAS 20 LINHAS ===');
+    for (let i = 0; i < Math.min(20, lines.length); i++) {
+      console.log(`Linha ${i+1}:`, JSON.stringify(lines[i]));
+    }
+    
+    // DEBUG: Procurar linhas que contém datas
+    console.log('📄 === LINHAS COM DATAS ===');
+    const dateLines = lines.filter(line => /\d{2}\/\d{2}\/\d{4}/.test(line));
+    console.log('📄 Linhas com datas encontradas:', dateLines.length);
+    dateLines.slice(0, 10).forEach((line, i) => {
+      console.log(`Data ${i+1}:`, JSON.stringify(line));
+    });
+    
+    // DEBUG: Procurar linhas que contém valores monetários
+    console.log('📄 === LINHAS COM VALORES ===');
+    const valueLines = lines.filter(line => /[-]?\d+[.,]\d{2}/.test(line));
+    console.log('📄 Linhas com valores encontradas:', valueLines.length);
+    valueLines.slice(0, 10).forEach((line, i) => {
+      console.log(`Valor ${i+1}:`, JSON.stringify(line));
+    });
+    
+    // Tentar patterns mais simples primeiro
+    console.log('📄 === TESTANDO PATTERNS ===');
+    
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i].trim();
       
-      // Skip linhas que não são transações
+      // Skip linhas óbvias de cabeçalho
       if (!line || 
           line.includes('Associado:') || 
           line.includes('Conta:') ||
@@ -6750,178 +6772,115 @@ async function parsePDFDocument(file) {
           line.includes('SALDO ANTERIOR') ||
           line.includes('Saldo da conta') ||
           line.includes('Sicredi') ||
-          line.length < 10) {
+          line.length < 15) {
         continue;
       }
       
-      console.log(`📄 Analisando linha ${i+1}:`, line);
+      // Só processar linhas que têm data E valor
+      if (!(/\d{2}\/\d{2}\/\d{4}/.test(line) && /[-]?\d+[.,]\d{2}/.test(line))) {
+        continue;
+      }
       
-      // Pattern para extrato Sicredi: DD/MM/AAAA DESCRIÇÃO DOCUMENTO VALOR SALDO
-      const patterns = [
-        // Pattern principal: data + descrição + valor + saldo (formato Sicredi)
-        /^(\d{2}\/\d{2}\/\d{4})\s+(.+?)\s+([-]?\d+[.,]\d{2})\s+([-]?\d+[.,]\d{2})$/,
-        // Pattern alternativo: data + descrição + documento + valor + saldo
-        /^(\d{2}\/\d{2}\/\d{4})\s+(.+?)\s+(\w+\d+)\s+([-]?\d+[.,]\d{2})\s+([-]?\d+[.,]\d{2})$/,
-        // Pattern mais flexível
-        /^(\d{2}\/\d{2}\/\d{4})\s+(.+?)\s+([-]?\d+[.,]\d{2})\s*$/,
-        // Pattern com múltiplos espaços
-        /(\d{2}\/\d{2}\/\d{4})\s+(.+?)\s+([-]?\d+[.,]\d{2})(?:\s+[-]?\d+[.,]\d{2})?/
-      ];
+      console.log(`📄 PROCESSANDO linha ${i+1}:`, JSON.stringify(line));
       
-      let matched = false;
+      // Pattern super simples: qualquer linha com data e valor
+      const dateMatch = line.match(/(\d{2}\/\d{2}\/\d{4})/);
+      const valueMatches = line.match(/([-]?\d+[.,]\d{2})/g);
       
-      for (const pattern of patterns) {
-        const match = line.match(pattern);
+      if (dateMatch && valueMatches) {
+        console.log('📄 Data encontrada:', dateMatch[1]);
+        console.log('📄 Valores encontrados:', valueMatches);
         
-        if (match) {
-          console.log('📄 Match encontrado:', match);
+        const date = dateMatch[1];
+        
+        // Pegar o primeiro valor (geralmente o movimento, não o saldo)
+        const amount = valueMatches[0];
+        
+        // Extrair descrição: tudo entre a data e o primeiro valor
+        const dateIndex = line.indexOf(date);
+        const amountIndex = line.indexOf(amount);
+        
+        if (dateIndex < amountIndex) {
+          const descStart = dateIndex + date.length;
+          const descEnd = amountIndex;
+          let description = line.substring(descStart, descEnd).trim();
           
-          let date, description, amount;
+          // Remover códigos de documento da descrição
+          description = description.replace(/\s+(COB\d+|PIX_\w+|DAS|COTA|PIXCOBRAN)\s*$/i, '').trim();
           
-          if (match.length === 4) {
-            // 3 grupos: data, descrição, valor
-            [, date, description, amount] = match;
-          } else if (match.length === 5) {
-            // 4 grupos: data, descrição, valor, saldo OU data, descrição, doc, valor
-            [, date, description, amount] = match;
-            // Se o terceiro grupo parece um documento, pular
-            if (/^[A-Z]+\d+$/.test(match[3])) {
-              amount = match[4];
-            }
-          } else if (match.length === 6) {
-            // 5 grupos: data, descrição, documento, valor, saldo
-            [, date, description, , amount] = match;
-          }
+          console.log('📄 Descrição extraída:', JSON.stringify(description));
           
-          if (date && description && amount) {
-            // Limpar descrição (remover documento se misturado)
-            description = description.replace(/\s+(COB\d+|PIX_\w+|DAS|COTA)\s*$/, '').trim();
-            
-            // Converter valor
+          if (description && description.length > 2) {
             let valor = parseFloat(amount.replace(',', '.').replace(/[^\d.-]/g, ''));
             
+            console.log('📄 Valor convertido:', valor);
+            
             if (!isNaN(valor) && Math.abs(valor) > 0.01) {
-              // Detectar tipo por descrição ou sinal
-              if (amount.startsWith('-') || valor < 0) {
-                valor = -Math.abs(valor);
-              } else {
-                // Analisar descrição para detectar se deve ser negativo
+              // Detectar sinal por descrição se o valor não tem sinal explícito
+              if (!amount.startsWith('-') && valor > 0) {
                 const desc = description.toLowerCase();
                 if (desc.includes('tarifa') || 
                     desc.includes('pagamento') || 
                     desc.includes('debito') ||
-                    desc.includes('manutencao') ||
-                    desc.includes('taxa')) {
+                    desc.includes('manutencao')) {
                   valor = -Math.abs(valor);
-                } else {
-                  valor = Math.abs(valor);
+                  console.log('📄 Valor convertido para negativo por contexto:', valor);
                 }
               }
               
               const transaction = {
                 data: date,
-                descricao: description.trim(),
+                descricao: description,
                 valor: valor,
                 tipo: valor > 0 ? 'receita' : 'despesa'
               };
               
-              console.log('✅ Transação PDF criada:', transaction);
+              console.log('✅ TRANSAÇÃO CRIADA:', transaction);
               transactions.push(transaction);
-              matched = true;
-              break;
+            } else {
+              console.log('❌ Valor inválido:', valor);
             }
+          } else {
+            console.log('❌ Descrição muito curta:', JSON.stringify(description));
           }
+        } else {
+          console.log('❌ Data depois do valor - linha malformada');
         }
-      }
-      
-      if (!matched) {
-        // Tentar extração mais agressiva para linhas complexas
-        const dateMatch = line.match(/(\d{2}\/\d{2}\/\d{4})/);
-        const valueMatches = line.match(/([-]?\d+[.,]\d{2})/g);
-        
-        if (dateMatch && valueMatches && valueMatches.length >= 1) {
-          const date = dateMatch[1];
-          // Pegar o primeiro valor que parece ser o movimento (não o saldo)
-          const amount = valueMatches[0];
-          
-          // Extrair descrição (tudo entre a data e o primeiro valor)
-          const descStart = line.indexOf(date) + date.length;
-          const descEnd = line.indexOf(amount);
-          const description = line.substring(descStart, descEnd).trim();
-          
-          if (description && description.length > 3) {
-            let valor = parseFloat(amount.replace(',', '.').replace(/[^\d.-]/g, ''));
-            
-            if (!isNaN(valor) && Math.abs(valor) > 0.01) {
-              // Detectar sinal por descrição
-              const desc = description.toLowerCase();
-              if (desc.includes('tarifa') || desc.includes('pagamento') || desc.includes('debito')) {
-                valor = -Math.abs(valor);
-              }
-              
-              transactions.push({
-                data: date,
-                descricao: description.trim(),
-                valor: valor,
-                tipo: valor > 0 ? 'receita' : 'despesa'
-              });
-              
-              console.log('✅ Transação PDF (fallback) criada:', transactions[transactions.length - 1]);
-            }
-          }
-        }
+      } else {
+        console.log('❌ Não encontrou data ou valor na linha');
       }
     }
     
-    console.log('📄 Total de transações extraídas do PDF:', transactions.length);
+    console.log('📄 === RESULTADO FINAL ===');
+    console.log('📄 Total de transações extraídas:', transactions.length);
+    transactions.forEach((t, i) => console.log(`Trans ${i+1}:`, t));
     
     if (transactions.length === 0) {
+      console.log('❌ NENHUMA TRANSAÇÃO ENCONTRADA');
+      console.log('📄 DEBUG: Primeiras linhas que contém datas:');
+      dateLines.slice(0, 5).forEach(line => console.log('  ->', JSON.stringify(line)));
+      
       throw new Error(`PDF processado mas nenhuma transação encontrada.
 
-DIAGNÓSTICO:
-- PDF foi lido com sucesso
-- Encontradas ${lines.length} linhas
-- Nenhum pattern de extrato reconhecido
+DIAGNÓSTICO DETALHADO:
+- PDF lido: ${text.length} caracteres
+- Linhas encontradas: ${lines.length}
+- Linhas com datas: ${dateLines.length}
+- Linhas com valores: ${valueLines.length}
 
-POSSÍVEIS CAUSAS:
-- Formato de extrato não reconhecido
-- PDF pode estar corrompido
-- Transações em formato não padrão
+PRIMEIRA LINHA COM DATA:
+${dateLines[0] || 'Nenhuma'}
 
-SOLUÇÃO:
-- Exporte o extrato como CSV/OFX do seu banco
-- Ou converta manualmente para formato CSV`);
+POSSÍVEL SOLUÇÃO:
+O parser pode precisar de ajuste para este formato específico.
+Use o CSV que funcionou ou me mande mais detalhes do debug no console.`);
     }
     
     return transactions;
     
   } catch (error) {
     console.error('❌ Erro ao processar PDF:', error);
-    
-    if (error.message.includes('transações extraídas')) {
-      throw error; // Re-throw nossa mensagem customizada
-    }
-    
-    throw new Error(`PDF não pôde ser processado automaticamente.
-
-ERRO TÉCNICO: ${error.message}
-
-SOLUÇÕES:
-
-1. 📊 EXPORT DO BANCO (RECOMENDADO):
-   - Internet banking → Extratos → Export CSV/OFX
-   - Formato mais confiável e preciso
-
-2. 🔄 CONVERSÃO MANUAL:
-   - Copie as transações do PDF
-   - Cole no Excel/Google Sheets  
-   - Salve como CSV: data,descrição,valor
-
-3. 📱 FORMATO CSV SIMPLES:
-15/03/2024,PIX RECEBIDO,1000.50
-16/03/2024,PAGAMENTO,-500.00
-
-Este formato funcionará 100%! 📊`);
+    throw error;
   }
 }
 

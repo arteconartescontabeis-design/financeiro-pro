@@ -786,6 +786,49 @@ tbody td { padding: 11px 16px; font-size: 13px; }
 const SUPA_URL = 'https://vuwgxndahrzinfdlapxz.supabase.co';
 const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ1d2d4bmRhaHJ6aW5mZGxhcHh6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ3NTA0ODgsImV4cCI6MjA5MDMyNjQ4OH0.9DaPGHIxt0CO-pjYPBwsHaoSqDN35CwVU0lJUyTXQIQ';
 
+// Chave do localStorage UNIFICADA para a API key do Claude (antes estava dividida em duas chaves: 'claude_api_key' e 'artecon_claude_key')
+const CLAUDE_KEY_LS = 'artecon_claude_key';
+
+// Modelo Claude padrão (atualizado — 'claude-3-sonnet-20240229' está descontinuado)
+const CLAUDE_MODEL_DEFAULT = 'claude-haiku-4-5-20251001';
+
+// ── ESCAPE HTML — usado em todo template literal com dado do banco para evitar XSS ──
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]);
+}
+
+// ── CLAUDE API UNIFICADA ─────────────────────────────────────
+// SEMPRE usa a Edge Function 'claude-proxy' do Supabase — NUNCA expõe a chave via proxies CORS públicos.
+// A Edge Function recebe apiKey, model, messages, max_tokens e encaminha para api.anthropic.com.
+async function callClaudeAPI({ model, max_tokens, messages }) {
+  const apiKey = getClaudeApiKey();
+  if (!apiKey) throw new Error('Chave da Claude API não configurada. Vá em Configurações → Claude API.');
+
+  const response = await fetch(`${SUPA_URL}/functions/v1/claude-proxy`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${APP.token}`,
+      'apikey': SUPA_KEY,
+    },
+    body: JSON.stringify({
+      apiKey,
+      model: model || CLAUDE_MODEL_DEFAULT,
+      max_tokens: max_tokens || 1024,
+      messages,
+    }),
+  });
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Claude API (${response.status}): ${errText.slice(0,200)}`);
+  }
+  const result = await response.json();
+  if (result.error) throw new Error('Claude API: ' + (result.error.message || JSON.stringify(result.error)));
+  return result;
+}
+
+
 // ── ESTADO ────────────────────────────────────────────────────
 const APP = { token: null, user: null, tenant: null, page: 'dashboard' };
 let CONTAS = [], CATEGORIAS = [], CLIENTES = [], FORNECEDORES = [], RECEITAS = [], DESPESAS = [], METAS = [], RECORRENCIAS = [], IMPOSTOS = [], ANEXOS = [];
@@ -821,7 +864,7 @@ async function supaAuth(method, path, body) {
 async function setTenantIdInJWT(tenantId) {
   try {
     console.log('🔧 Setando tenant_id no JWT:', tenantId);
-    
+
     // Atualizar user metadata com tenant_id
     const updateRes = await fetch(`${SUPA_URL}/auth/v1/user`, {
       method: 'PUT',
@@ -834,29 +877,41 @@ async function setTenantIdInJWT(tenantId) {
         data: { tenant_id: tenantId }
       })
     });
-    
-    if (updateRes.ok) {
-      console.log('✅ tenant_id setado no JWT:', tenantId);
-      
-      // Refresh token para pegar as claims atualizadas
-      const refreshToken = JSON.parse(localStorage.getItem('supabase.auth.token') || '{}').refresh_token;
-      if (refreshToken) {
-        const refreshRes = await fetch(`${SUPA_URL}/auth/v1/token?grant_type=refresh_token`, {
-          method: 'POST',
-          headers: { 'apikey': SUPA_KEY, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ refresh_token: refreshToken })
-        });
-        
-        if (refreshRes.ok) {
-          const newTokenData = await refreshRes.json();
-          APP.token = newTokenData.access_token;
-          localStorage.setItem('supabase.auth.token', JSON.stringify(newTokenData));
-          console.log('✅ Token refreshed com tenant_id no JWT');
-        }
-      }
+
+    if (!updateRes.ok) {
+      const errText = await updateRes.text();
+      throw new Error(`Falha ao atualizar metadata (${updateRes.status}): ${errText.slice(0,200)}`);
     }
+    console.log('✅ tenant_id setado no JWT:', tenantId);
+
+    // Refresh token para pegar as claims atualizadas
+    const refreshToken = JSON.parse(localStorage.getItem('supabase.auth.token') || '{}').refresh_token;
+    if (!refreshToken) {
+      throw new Error('Refresh token não encontrado no localStorage.');
+    }
+
+    const refreshRes = await fetch(`${SUPA_URL}/auth/v1/token?grant_type=refresh_token`, {
+      method: 'POST',
+      headers: { 'apikey': SUPA_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: refreshToken })
+    });
+
+    if (!refreshRes.ok) {
+      const errText = await refreshRes.text();
+      throw new Error(`Falha ao refresh do token (${refreshRes.status}): ${errText.slice(0,200)}`);
+    }
+
+    const newTokenData = await refreshRes.json();
+    if (!newTokenData.access_token) {
+      throw new Error('Resposta do refresh não contém access_token.');
+    }
+    APP.token = newTokenData.access_token;
+    localStorage.setItem('supabase.auth.token', JSON.stringify(newTokenData));
+    console.log('✅ Token refreshed com tenant_id no JWT');
   } catch(e) {
     console.error('❌ Erro ao setar tenant_id no JWT:', e);
+    // Propaga — o caller precisa decidir o que fazer (caso crítico no onboarding)
+    throw e;
   }
 }
 
@@ -939,6 +994,14 @@ async function doRegister() {
 async function doLogout() {
   APP.token = null; APP.user = null; APP.tenant = null;
   CONTAS = []; CATEGORIAS = []; CLIENTES = []; FORNECEDORES = []; RECEITAS = []; DESPESAS = [];
+  METAS = []; RECORRENCIAS = []; IMPOSTOS = []; ANEXOS = [];
+  // Limpar todas as chaves sensíveis do localStorage
+  try {
+    localStorage.removeItem('supabase.auth.token');
+    // Não removemos CLAUDE_KEY_LS aqui por padrão — é preferência do usuário por dispositivo.
+    // Se quiser limpar tudo, descomente a linha abaixo:
+    // localStorage.removeItem(CLAUDE_KEY_LS);
+  } catch(_) {}
   $id('app').classList.remove('visible');
   $id('auth-screen').classList.add('visible');
   $id('l-senha').value = '';
@@ -948,17 +1011,27 @@ async function doLogout() {
 // ── INICIALIZAR ───────────────────────────────────────────────
 async function inicializar() {
   try {
-    const usuarios = await supa('GET', 'fin_usuarios', { params: { select: '*', limit: 1 } });
+    // Obter auth_id do JWT
+    const authUser = await fetch(`${SUPA_URL}/auth/v1/user`, {
+      headers: { apikey: SUPA_KEY, Authorization: `Bearer ${APP.token}` }
+    }).then(r => r.json());
+    if (!authUser?.id) {
+      throw new Error('Sessão inválida. Faça login novamente.');
+    }
+
+    // Buscar fin_usuarios filtrando por auth_id — NUNCA pegar o primeiro qualquer
+    const usuarios = await supa('GET', 'fin_usuarios', { params: { auth_id: `eq.${authUser.id}`, select: '*', limit: 1 } });
     if (!usuarios || !usuarios.length) {
       APP.nomeTemp = APP.nomeTemp || 'Usuário';
+      APP.emailTemp = authUser.email;
       iniciarOnboarding();
       return;
     }
     APP.user = usuarios[0];
-    
+
     // CRÍTICO: Setar tenant_id no JWT para RLS funcionar
     await setTenantIdInJWT(APP.user.tenant_id);
-    
+
     const tenants = await supa('GET', 'fin_tenants', { params: { id: `eq.${APP.user.tenant_id}`, select: '*' } });
     APP.tenant = tenants[0];
     await carregarDados();
@@ -983,9 +1056,9 @@ async function carregarDados() {
   CONTAS = contas; CATEGORIAS = cats; CLIENTES = clis;
   FORNECEDORES = fors; RECEITAS = recs; DESPESAS = desps;
   METAS = metas || []; RECORRENCIAS = recorr || [];
-  // Impostos carregado separado (tabela pode não existir)
-  try { IMPOSTOS = await supa('GET', 'fin_impostos', { params: { tenant_id: `eq.${tid}`, select: '*', order: 'vencimento.desc', limit: 200 } }); } catch(_) { IMPOSTOS = []; }
-  try { ANEXOS = await supa('GET', 'fin_anexos', { params: { tenant_id: `eq.${tid}`, select: '*', order: 'criado_em.desc' } }); } catch(_) { ANEXOS = []; }
+  // Impostos/anexos carregados separado (tabelas podem não existir) — RLS faz o filtro por tenant
+  try { IMPOSTOS = await supa('GET', 'fin_impostos', { params: { select: '*', order: 'vencimento.desc', limit: 200 } }); } catch(e) { console.warn('fin_impostos indisponível:', e.message); IMPOSTOS = []; }
+  try { ANEXOS   = await supa('GET', 'fin_anexos',   { params: { select: '*', order: 'criado_em.desc' } }); } catch(e) { console.warn('fin_anexos indisponível:', e.message);   ANEXOS   = []; }
 }
 
 function mostrarApp() {
@@ -1036,15 +1109,15 @@ function renderOnboard() {
   const steps = {
     1: `<div class="onboard-title">Bem-vindo à Artecon</div>
         <div class="onboard-sub">Vamos configurar sua empresa em 4 etapas rápidas para você começar a usar o sistema.</div>
-        <div class="field"><label>Nome da empresa</label><input type="text" id="ob-empresa" placeholder="Ex: Artecon Artes Contábeis" value="${OB.empresa}"></div>
-        <div class="field"><label>Setor de atuação</label><select id="ob-setor">${SETORES.map(s=>`<option value="${s}" ${OB.setor===s?'selected':''}>${s}</option>`).join('')}</select></div>
+        <div class="field"><label>Nome da empresa</label><input type="text" id="ob-empresa" placeholder="Ex: Artecon Artes Contábeis" value="${esc(OB.empresa)}"></div>
+        <div class="field"><label>Setor de atuação</label><select id="ob-setor">${SETORES.map(s=>`<option value="${esc(s)}" ${OB.setor===s?'selected':''}>${esc(s)}</option>`).join('')}</select></div>
         <div class="onboard-nav">
           <span style="font-size:12px;color:var(--text-3)">1 de 4</span>
           <button class="btn-accent" onclick="obNext1()">Próximo →</button>
         </div>`,
     2: `<div class="onboard-title">Primeira conta bancária</div>
         <div class="onboard-sub">Qual conta quer cadastrar primeiro? Pode adicionar mais depois.</div>
-        <div class="field"><label>Nome da conta</label><input type="text" id="ob-conta-nome" placeholder="Ex: Caixa, Banco Itaú CC, Nubank PJ" value="${OB.contaNome}"></div>
+        <div class="field"><label>Nome da conta</label><input type="text" id="ob-conta-nome" placeholder="Ex: Caixa, Banco Itaú CC, Nubank PJ" value="${esc(OB.contaNome)}"></div>
         <div class="field"><label>Tipo</label><select id="ob-conta-tipo">
           <option value="caixa" ${OB.contaTipo==='caixa'?'selected':''}>Caixa físico</option>
           <option value="corrente" ${OB.contaTipo==='corrente'?'selected':''}>Conta corrente</option>
@@ -1075,9 +1148,9 @@ function renderOnboard() {
         <div class="onboard-sub">Revise as configurações antes de começar.</div>
         <div style="background:var(--bg-2);border-radius:10px;padding:16px;margin-bottom:16px;border:1px solid var(--border)">
           <div style="display:flex;flex-direction:column;gap:10px">
-            <div style="display:flex;justify-content:space-between"><span style="color:var(--text-3);font-size:12px">Empresa</span><strong>${OB.empresa}</strong></div>
-            <div style="display:flex;justify-content:space-between"><span style="color:var(--text-3);font-size:12px">Setor</span><strong>${OB.setor}</strong></div>
-            <div style="display:flex;justify-content:space-between"><span style="color:var(--text-3);font-size:12px">Conta inicial</span><strong>${OB.contaNome}</strong></div>
+            <div style="display:flex;justify-content:space-between"><span style="color:var(--text-3);font-size:12px">Empresa</span><strong>${esc(OB.empresa)}</strong></div>
+            <div style="display:flex;justify-content:space-between"><span style="color:var(--text-3);font-size:12px">Setor</span><strong>${esc(OB.setor)}</strong></div>
+            <div style="display:flex;justify-content:space-between"><span style="color:var(--text-3);font-size:12px">Conta inicial</span><strong>${esc(OB.contaNome)}</strong></div>
             <div style="display:flex;justify-content:space-between"><span style="color:var(--text-3);font-size:12px">Saldo inicial</span><strong>${fmtMoeda(OB.contaSaldo)}</strong></div>
             <div style="display:flex;justify-content:space-between"><span style="color:var(--text-3);font-size:12px">Categorias</span><strong>${OB.categoriasSel.length} selecionadas</strong></div>
           </div>
@@ -1112,26 +1185,48 @@ function toggleCat(i) {
 async function finalizarOnboarding() {
   const btn = $id('btn-finalizar');
   btn.disabled = true; btn.textContent = 'Criando...';
+  let tenantIdCriado = null;
   try {
+    // 1) Criar tenant
     const tenants = await supa('POST', 'fin_tenants', { body: { nome: OB.empresa, setor: OB.setor }, returning: true });
     const tenant = tenants[0];
+    tenantIdCriado = tenant.id;
+
+    // 2) CRÍTICO: setar tenant_id no JWT ANTES de qualquer INSERT que dependa de RLS
+    await setTenantIdInJWT(tenant.id);
+
+    // 3) Após o refresh do token, buscar auth_id (com token novo que já tem o tenant_id)
     const authUser = await fetch(`${SUPA_URL}/auth/v1/user`, {
       headers: { apikey: SUPA_KEY, Authorization: `Bearer ${APP.token}` }
     }).then(r => r.json());
+    if (!authUser?.id) throw new Error('Não foi possível obter auth_id.');
+
+    // 4) Criar usuário vinculado ao tenant
     await supa('POST', 'fin_usuarios', { body: { tenant_id: tenant.id, auth_id: authUser.id, nome: APP.nomeTemp, email: authUser.email, perfil: 'admin' } });
-    
-    // CRÍTICO: Setar tenant_id no JWT antes de continuar
-    await setTenantIdInJWT(tenant.id);
-    
+
+    // 5) Conta inicial
     await supa('POST', 'fin_contas', { body: { tenant_id: tenant.id, nome: OB.contaNome, tipo: OB.contaTipo, saldo_inicial: OB.contaSaldo, saldo_atual: OB.contaSaldo } });
+
+    // 6) Categorias selecionadas
     const cats = OB.categoriasSel.length > 0 ? OB.categoriasSel.map(i => CATEGORIAS_PADRAO[i]) : CATEGORIAS_PADRAO;
     if (cats.length > 0) await supa('POST', 'fin_categorias', { body: cats.map(c => ({ tenant_id: tenant.id, ...c, padrao: true })) });
-    const usuarios = await supa('GET', 'fin_usuarios', { params: { select: '*', limit: 1 } });
+
+    // 7) Recarregar usuário filtrando por auth_id (evita bug #3)
+    const usuarios = await supa('GET', 'fin_usuarios', { params: { auth_id: `eq.${authUser.id}`, select: '*', limit: 1 } });
     APP.user = usuarios[0];
     APP.tenant = tenant;
     await carregarDados();
     mostrarApp();
   } catch(e) {
+    // Rollback: se o tenant foi criado mas falhou depois, deletar pra não deixar órfão
+    if (tenantIdCriado) {
+      try {
+        await supa('DELETE', 'fin_tenants', { params: { id: `eq.${tenantIdCriado}` } });
+        console.warn('Tenant órfão removido no rollback:', tenantIdCriado);
+      } catch(delErr) {
+        console.error('Falha ao fazer rollback do tenant:', delErr);
+      }
+    }
     toast('Erro: ' + e.message, 'error');
     btn.disabled = false; btn.textContent = 'Começar →';
   }
@@ -1179,8 +1274,22 @@ function go(page) {
 }
 
 // ── HELPERS ───────────────────────────────────────────────────
-const fmtMoeda = v => 'R$\u202f' + parseFloat(v||0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
-const fmtData  = d => d ? new Date(d+'T12:00:00').toLocaleDateString('pt-BR') : '—';
+const fmtMoeda = v => 'R$\u202f' + (parseFloat(v)||0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
+const fmtData  = d => {
+  if (!d) return '—';
+  try {
+    // Se já for objeto Date
+    if (d instanceof Date) return isNaN(d.getTime()) ? '—' : d.toLocaleDateString('pt-BR');
+    // String: tenta YYYY-MM-DD primeiro
+    const s = String(d);
+    if (/^\d{4}-\d{2}-\d{2}/.test(s)) {
+      const dt = new Date(s.slice(0,10)+'T12:00:00');
+      return isNaN(dt.getTime()) ? '—' : dt.toLocaleDateString('pt-BR');
+    }
+    const dt = new Date(s);
+    return isNaN(dt.getTime()) ? '—' : dt.toLocaleDateString('pt-BR');
+  } catch(_) { return '—'; }
+};
 const today    = () => new Date().toISOString().slice(0,10);
 const getNome  = (arr, id) => (arr.find(x => x.id === id)||{}).nome || '—';
 
@@ -1311,9 +1420,11 @@ function renderDashboard() {
   const maxD=Math.max(...topD.map(([,v])=>v),1);
 
   // ── Últimos lançamentos ───────────────────────────────────
+  // RECEITAS/DESPESAS vêm ordenados desc por vencimento (ver carregarDados) —
+  // então os MAIS recentes estão no início. Ordenamos novamente por criado_em||vencimento desc pra garantir.
   const ults=[
-    ...RECEITAS.slice(-8).map(r=>({...r,_t:'rec'})),
-    ...DESPESAS.slice(-8).map(d=>({...d,_t:'dep'})),
+    ...RECEITAS.map(r=>({...r,_t:'rec'})),
+    ...DESPESAS.map(d=>({...d,_t:'dep'})),
   ].sort((a,b)=>(b.criado_em||b.vencimento||'').localeCompare(a.criado_em||a.vencimento||'')).slice(0,7);
 
   // ── Próximos vencimentos (7 dias) ─────────────────────────
@@ -1592,9 +1703,9 @@ function renderDashboard() {
                 onclick="go('${l._t==='rec'?'receber':'pagar'}')"
                 onmouseover="this.style.background='var(--surface-2)'" onmouseout="this.style.background=''">
                 <td style="padding:9px 16px;font-size:12.5px;font-weight:500;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)">
-                  <span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:${l._t==='rec'?'var(--green)':'var(--red)'};margin-right:8px;flex-shrink:0;vertical-align:middle"></span>${l.descricao}
+                  <span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:${l._t==='rec'?'var(--green)':'var(--red)'};margin-right:8px;flex-shrink:0;vertical-align:middle"></span>${esc(l.descricao)}
                 </td>
-                <td style="padding:9px 16px;font-size:11px;color:var(--text-3)">${(CATEGORIAS.find(x=>x.id===l.categoria_id)||{}).nome||'—'}</td>
+                <td style="padding:9px 16px;font-size:11px;color:var(--text-3)">${esc((CATEGORIAS.find(x=>x.id===l.categoria_id)||{}).nome||'—')}</td>
                 <td style="padding:9px 16px;font-size:11px;font-family:var(--mono);color:var(--text-2)">${fmtData(l.vencimento)}</td>
                 <td style="padding:9px 16px;font-size:12px;font-family:var(--mono);font-weight:700;text-align:right;color:${l._t==='rec'?'var(--green)':'var(--red)'}">${fmtMoeda(l.valor)}</td>
                 <td style="padding:9px 16px;text-align:center">${badgeStatus(l.status)}</td>
@@ -1720,12 +1831,17 @@ function paginaBar(total, pag, pagKey, renderFn) {
 // ── EXPORTAR CSV ───────────────────────────────────────────────
 function exportarCSV(dados, nome) {
   if (!dados.length) { toast('Sem dados para exportar.', 'warn'); return; }
-  const cols = Object.keys(dados[0]).filter(k => !['id','tenant_id','auth_id','criado_em','ativo'].includes(k));
-  const header = cols.join(';');
-  const rows   = dados.map(r => cols.map(c => {
-    const v = r[c] ?? '';
-    return String(v).includes(';') ? '"'+v+'"' : v;
-  }).join(';'));
+  // Superset de colunas (fix #82): cobre todos os objetos, não só o primeiro
+  const excluidas = new Set(['id','tenant_id','auth_id','criado_em','ativo']);
+  const cols = [...new Set(dados.flatMap(Object.keys))].filter(k => !excluidas.has(k));
+  // Escape padrão RFC 4180
+  const escCampo = (v) => {
+    const s = v == null ? '' : String(v);
+    if (/[;",\n\r]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+    return s;
+  };
+  const header = cols.map(escCampo).join(';');
+  const rows   = dados.map(r => cols.map(c => escCampo(r[c])).join(';'));
   const csv = [header, ...rows].join('\n');
   const blob = new Blob(['\uFEFF'+csv], {type:'text/csv;charset=utf-8'});
   const url  = URL.createObjectURL(blob);
@@ -1844,9 +1960,9 @@ function renderReceber() {
             const vencHoje = r.vencimento === hoje;
             const vencAtras = r.status==='pendente' && r.vencimento < hoje;
             return `<tr style="${vencAtras?'background:rgba(224,92,92,.04)':''}">
-              <td style="font-weight:500;color:var(--text);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.descricao}</td>
-              <td style="color:var(--text-2)">${getNome(CLIENTES, r.cliente_id)}</td>
-              <td style="color:var(--text-3)">${getNome(CATEGORIAS, r.categoria_id)}</td>
+              <td style="font-weight:500;color:var(--text);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.descricao)}</td>
+              <td style="color:var(--text-2)">${esc(getNome(CLIENTES, r.cliente_id))}</td>
+              <td style="color:var(--text-3)">${esc(getNome(CATEGORIAS, r.categoria_id))}</td>
               <td style="font-family:var(--mono);font-size:12px;color:${vencAtras?'var(--red)':vencHoje?'var(--amber)':'var(--text-2)'};font-weight:${vencAtras||vencHoje?700:400}">${fmtData(r.vencimento)}${vencHoje?' · hoje':''}</td>
               <td style="font-family:var(--mono);font-weight:700;color:var(--green)">${fmtMoeda(r.valor)}</td>
               <td>${badgeStatus(r.status)}</td>
@@ -1894,7 +2010,7 @@ async function salvarReceita() {
   const desc  = $id('nr-desc').value.trim();
   const valor = parseFloat($id('nr-valor').value);
   const venc  = $id('nr-venc').value;
-  if (!desc || !valor || !venc) { toast('Preencha os campos obrigatórios.', 'error'); return; }
+  if (!desc || isNaN(valor) || valor < 0 || !venc) { toast('Preencha os campos obrigatórios com valor válido.', 'error'); return; }
   try {
     await supa('POST', 'fin_receitas', { body: {
       tenant_id:    APP.user.tenant_id,
@@ -1917,6 +2033,12 @@ async function baixarReceita(id, e) {
     await supa('PATCH', 'fin_receitas', { params: { id: `eq.${id}` }, body: { status: 'recebido', recebido_em: today() } });
     if (r.conta_id) {
       await supa('POST', 'fin_movimentacoes', { body: { tenant_id: APP.user.tenant_id, conta_id: r.conta_id, tipo: 'entrada', valor: r.valor, data: today(), descricao: r.descricao, receita_id: id } });
+      // Atualiza saldo_atual da conta manualmente (idealmente há trigger no Postgres — aqui é fallback client-side)
+      const conta = CONTAS.find(c => c.id === r.conta_id);
+      if (conta) {
+        const novoSaldo = (parseFloat(conta.saldo_atual)||0) + (parseFloat(r.valor)||0);
+        await supa('PATCH', 'fin_contas', { params: { id: `eq.${r.conta_id}` }, body: { saldo_atual: novoSaldo } });
+      }
     }
     toast('Receita baixada!', 'success');
     await carregarDados(); renderReceber();
@@ -1928,9 +2050,9 @@ function editarReceita(id, e) {
   const r = RECEITAS.find(x => x.id === id); if (!r) return;
   openModal('Editar Receita', `
     <div class="form-grid">
-      <div class="form-field full"><label class="form-label">Descrição *</label><input class="form-input" id="er-desc" value="${r.descricao||''}"></div>
-      <div class="form-field"><label class="form-label">Valor (R$) *</label><input class="form-input" type="number" id="er-valor" value="${r.valor||''}" step="0.01"></div>
-      <div class="form-field"><label class="form-label">Vencimento *</label><input class="form-input" type="date" id="er-venc" value="${r.vencimento||''}"></div>
+      <div class="form-field full"><label class="form-label">Descrição *</label><input class="form-input" id="er-desc" value="${esc(r.descricao)}"></div>
+      <div class="form-field"><label class="form-label">Valor (R$) *</label><input class="form-input" type="number" id="er-valor" value="${esc(r.valor)}" step="0.01"></div>
+      <div class="form-field"><label class="form-label">Vencimento *</label><input class="form-input" type="date" id="er-venc" value="${esc(r.vencimento)}"></div>
       <div class="form-field"><label class="form-label">Status</label><select class="form-select" id="er-status">
         <option value="pendente"  ${r.status==='pendente'?'selected':''}>Pendente</option>
         <option value="recebido"  ${r.status==='recebido'?'selected':''}>Recebido</option>
@@ -1948,7 +2070,7 @@ function editarReceita(id, e) {
         <option value="">— Nenhuma —</option>
         ${CONTAS.map(c=>`<option value="${c.id}" ${r.conta_id===c.id?'selected':''}>${c.nome}</option>`).join('')}
       </select></div>
-      <div class="form-field full"><label class="form-label">Observação</label><input class="form-input" id="er-obs" value="${r.observacao||''}"></div>
+      <div class="form-field full"><label class="form-label">Observação</label><input class="form-input" id="er-obs" value="${esc(r.observacao)}"></div>
     </div>
     <div id="widget-anexos-${id}">${htmlWidgetAnexos('receita', id)}</div>`,
     `<button class="btn btn-outline" onclick="closeModal()">Cancelar</button>
@@ -2055,9 +2177,9 @@ function renderPagar() {
             const vencHoje  = d.vencimento === hoje;
             const vencAtras = d.status==='pendente' && d.vencimento < hoje;
             return `<tr style="${vencAtras?'background:rgba(224,92,92,.04)':''}">
-              <td style="font-weight:500;color:var(--text);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d.descricao}</td>
-              <td style="color:var(--text-2)">${getNome(FORNECEDORES, d.fornecedor_id)}</td>
-              <td style="color:var(--text-3)">${getNome(CATEGORIAS, d.categoria_id)}</td>
+              <td style="font-weight:500;color:var(--text);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(d.descricao)}</td>
+              <td style="color:var(--text-2)">${esc(getNome(FORNECEDORES, d.fornecedor_id))}</td>
+              <td style="color:var(--text-3)">${esc(getNome(CATEGORIAS, d.categoria_id))}</td>
               <td style="font-family:var(--mono);font-size:12px;color:${vencAtras?'var(--red)':vencHoje?'var(--amber)':'var(--text-2)'};font-weight:${vencAtras||vencHoje?700:400}">${fmtData(d.vencimento)}${vencHoje?' · hoje':''}</td>
               <td style="font-family:var(--mono);font-weight:700;color:var(--red)">${fmtMoeda(d.valor)}</td>
               <td>${badgeStatus(d.status)}</td>
@@ -2105,7 +2227,7 @@ async function salvarDespesa() {
   const desc  = $id('nd-desc').value.trim();
   const valor = parseFloat($id('nd-valor').value);
   const venc  = $id('nd-venc').value;
-  if (!desc || !valor || !venc) { toast('Preencha os campos obrigatórios.', 'error'); return; }
+  if (!desc || isNaN(valor) || valor < 0 || !venc) { toast('Preencha os campos obrigatórios com valor válido.', 'error'); return; }
   try {
     await supa('POST', 'fin_despesas', { body: {
       tenant_id:     APP.user.tenant_id,
@@ -2128,6 +2250,12 @@ async function baixarDespesa(id, e) {
     await supa('PATCH', 'fin_despesas', { params: { id: `eq.${id}` }, body: { status: 'pago', pago_em: today() } });
     if (d.conta_id) {
       await supa('POST', 'fin_movimentacoes', { body: { tenant_id: APP.user.tenant_id, conta_id: d.conta_id, tipo: 'saida', valor: d.valor, data: today(), descricao: d.descricao, despesa_id: id } });
+      // Atualiza saldo_atual da conta manualmente (fallback client-side se não houver trigger no Postgres)
+      const conta = CONTAS.find(c => c.id === d.conta_id);
+      if (conta) {
+        const novoSaldo = (parseFloat(conta.saldo_atual)||0) - (parseFloat(d.valor)||0);
+        await supa('PATCH', 'fin_contas', { params: { id: `eq.${d.conta_id}` }, body: { saldo_atual: novoSaldo } });
+      }
     }
     toast('Despesa baixada!', 'success');
     await carregarDados(); renderPagar();
@@ -2139,9 +2267,9 @@ function editarDespesa(id, e) {
   const d = DESPESAS.find(x => x.id === id); if (!d) return;
   openModal('Editar Despesa', `
     <div class="form-grid">
-      <div class="form-field full"><label class="form-label">Descrição *</label><input class="form-input" id="ed-desc" value="${d.descricao||''}"></div>
-      <div class="form-field"><label class="form-label">Valor (R$) *</label><input class="form-input" type="number" id="ed-valor" value="${d.valor||''}" step="0.01"></div>
-      <div class="form-field"><label class="form-label">Vencimento *</label><input class="form-input" type="date" id="ed-venc" value="${d.vencimento||''}"></div>
+      <div class="form-field full"><label class="form-label">Descrição *</label><input class="form-input" id="ed-desc" value="${esc(d.descricao)}"></div>
+      <div class="form-field"><label class="form-label">Valor (R$) *</label><input class="form-input" type="number" id="ed-valor" value="${esc(d.valor)}" step="0.01"></div>
+      <div class="form-field"><label class="form-label">Vencimento *</label><input class="form-input" type="date" id="ed-venc" value="${esc(d.vencimento)}"></div>
       <div class="form-field"><label class="form-label">Status</label><select class="form-select" id="ed-status">
         <option value="pendente"  ${d.status==='pendente'?'selected':''}>Pendente</option>
         <option value="pago"      ${d.status==='pago'?'selected':''}>Pago</option>
@@ -2159,7 +2287,7 @@ function editarDespesa(id, e) {
         <option value="">— Nenhuma —</option>
         ${CONTAS.map(c=>`<option value="${c.id}" ${d.conta_id===c.id?'selected':''}>${c.nome}</option>`).join('')}
       </select></div>
-      <div class="form-field full"><label class="form-label">Observação</label><input class="form-input" id="ed-obs" value="${d.observacao||''}"></div>
+      <div class="form-field full"><label class="form-label">Observação</label><input class="form-input" id="ed-obs" value="${esc(d.observacao)}"></div>
     </div>
     <div id="widget-anexos-${id}">${htmlWidgetAnexos('despesa', id)}</div>`,
     `<button class="btn btn-outline" onclick="closeModal()">Cancelar</button>
@@ -2199,7 +2327,7 @@ async function excluirDespesa(id, e) {
 // ── CONTAS ────────────────────────────────────────────────────
 function renderContas() {
   $id('topbar-actions').innerHTML = `<button class="btn btn-gold btn-sm" onclick="modalNovaConta()">+ Nova Conta</button>`;
-  const saldoTotal = CONTAS.reduce((s,c) => s + parseFloat(c.saldo_atual), 0);
+  const saldoTotal = CONTAS.reduce((s,c) => s + (parseFloat(c.saldo_atual)||0), 0);
   $id('page-content').innerHTML = `
   <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr)">
     <div class="kpi-card k-gold"><div class="kpi-label">Saldo Total</div><div class="kpi-value" style="color:var(--gold)">${fmtMoeda(saldoTotal)}</div><div class="kpi-sub">${CONTAS.length} conta(s)</div></div>
@@ -2268,7 +2396,7 @@ function editarConta(id) {
   const c = CONTAS.find(x => x.id === id); if (!c) return;
   openModal('Editar Conta', `
     <div class="form-grid">
-      <div class="form-field full"><label class="form-label">Nome *</label><input class="form-input" id="ect-nome" value="${c.nome||''}"></div>
+      <div class="form-field full"><label class="form-label">Nome *</label><input class="form-input" id="ect-nome" value="${esc(c.nome)}"></div>
       <div class="form-field"><label class="form-label">Tipo</label><select class="form-select" id="ect-tipo">
         <option value="corrente" ${c.tipo==='corrente'?'selected':''}>Conta corrente</option>
         <option value="poupanca" ${c.tipo==='poupanca'?'selected':''}>Poupança</option>
@@ -2277,8 +2405,8 @@ function editarConta(id) {
         <option value="investimento" ${c.tipo==='investimento'?'selected':''}>Investimento</option>
         <option value="outro"    ${c.tipo==='outro'?'selected':''}>Outro</option>
       </select></div>
-      <div class="form-field"><label class="form-label">Banco</label><input class="form-input" id="ect-banco" value="${c.banco||''}"></div>
-      <div class="form-field"><label class="form-label">Saldo atual (R$)</label><input class="form-input" type="number" id="ect-saldo" value="${c.saldo_atual||0}" step="0.01"></div>
+      <div class="form-field"><label class="form-label">Banco</label><input class="form-input" id="ect-banco" value="${esc(c.banco)}"></div>
+      <div class="form-field"><label class="form-label">Saldo atual (R$)</label><input class="form-input" type="number" id="ect-saldo" value="${esc(c.saldo_atual||0)}" step="0.01"></div>
     </div>`,
     `<button class="btn btn-outline" onclick="closeModal()">Cancelar</button>
      <button class="btn btn-gold" onclick="salvarEdicaoConta('${id}')">Salvar</button>`
@@ -2288,12 +2416,31 @@ function editarConta(id) {
 async function salvarEdicaoConta(id) {
   const nome = $id('ect-nome').value.trim();
   if (!nome) { toast('Informe o nome.', 'error'); return; }
+  const novoSaldo = parseFloat($id('ect-saldo').value)||0;
+  const contaAntes = CONTAS.find(c => c.id === id);
+  const saldoAntes = contaAntes ? (parseFloat(contaAntes.saldo_atual)||0) : 0;
+  const delta = novoSaldo - saldoAntes;
   try {
     await supa('PATCH', 'fin_contas', { params: { id: `eq.${id}` }, body: {
       nome, tipo: $id('ect-tipo').value,
       banco: $id('ect-banco').value||null,
-      saldo_atual: parseFloat($id('ect-saldo').value)||0,
+      saldo_atual: novoSaldo,
     }});
+    // Se o saldo mudou, registra o ajuste em fin_movimentacoes para manter o histórico rastreável
+    if (Math.abs(delta) > 0.001) {
+      try {
+        await supa('POST', 'fin_movimentacoes', { body: {
+          tenant_id: APP.user.tenant_id,
+          conta_id: id,
+          tipo: delta > 0 ? 'entrada' : 'saida',
+          valor: Math.abs(delta),
+          data: today(),
+          descricao: 'Ajuste manual de saldo',
+        }});
+      } catch(movErr) {
+        console.warn('Não foi possível registrar movimentação de ajuste:', movErr.message);
+      }
+    }
     closeModal(); toast('Conta atualizada!', 'success');
     await carregarDados(); renderContas();
   } catch(e) { toast('Erro: ' + e.message, 'error'); }
@@ -2619,10 +2766,10 @@ function editarCliente(id) {
   const c = CLIENTES.find(x => x.id === id); if (!c) return;
   openModal('Editar Cliente', `
     <div class="form-grid">
-      <div class="form-field full"><label class="form-label">Nome *</label><input class="form-input" id="ecli-nome" value="${c.nome||''}"></div>
-      <div class="form-field"><label class="form-label">CPF / CNPJ</label><input class="form-input" id="ecli-doc" value="${c.cpf_cnpj||''}"></div>
-      <div class="form-field"><label class="form-label">E-mail</label><input class="form-input" type="email" id="ecli-email" value="${c.email||''}"></div>
-      <div class="form-field full"><label class="form-label">Telefone</label><input class="form-input" id="ecli-tel" value="${c.telefone||''}"></div>
+      <div class="form-field full"><label class="form-label">Nome *</label><input class="form-input" id="ecli-nome" value="${esc(c.nome)}"></div>
+      <div class="form-field"><label class="form-label">CPF / CNPJ</label><input class="form-input" id="ecli-doc" value="${esc(c.cpf_cnpj)}"></div>
+      <div class="form-field"><label class="form-label">E-mail</label><input class="form-input" type="email" id="ecli-email" value="${esc(c.email)}"></div>
+      <div class="form-field full"><label class="form-label">Telefone</label><input class="form-input" id="ecli-tel" value="${esc(c.telefone)}"></div>
     </div>`,
     `<button class="btn btn-outline" onclick="closeModal()">Cancelar</button>
      <button class="btn btn-gold" onclick="salvarEdicaoCliente('${id}')">Salvar</button>`
@@ -2741,10 +2888,10 @@ function editarFornecedor(id) {
   const x = FORNECEDORES.find(f => f.id === id); if (!x) return;
   openModal('Editar Fornecedor', `
     <div class="form-grid">
-      <div class="form-field full"><label class="form-label">Nome *</label><input class="form-input" id="efor-nome" value="${x.nome||''}"></div>
-      <div class="form-field"><label class="form-label">CPF / CNPJ</label><input class="form-input" id="efor-doc" value="${x.cpf_cnpj||''}"></div>
-      <div class="form-field"><label class="form-label">E-mail</label><input class="form-input" type="email" id="efor-email" value="${x.email||''}"></div>
-      <div class="form-field full"><label class="form-label">Telefone</label><input class="form-input" id="efor-tel" value="${x.telefone||''}"></div>
+      <div class="form-field full"><label class="form-label">Nome *</label><input class="form-input" id="efor-nome" value="${esc(x.nome)}"></div>
+      <div class="form-field"><label class="form-label">CPF / CNPJ</label><input class="form-input" id="efor-doc" value="${esc(x.cpf_cnpj)}"></div>
+      <div class="form-field"><label class="form-label">E-mail</label><input class="form-input" type="email" id="efor-email" value="${esc(x.email)}"></div>
+      <div class="form-field full"><label class="form-label">Telefone</label><input class="form-input" id="efor-tel" value="${esc(x.telefone)}"></div>
     </div>`,
     `<button class="btn btn-outline" onclick="closeModal()">Cancelar</button>
      <button class="btn btn-gold" onclick="salvarEdicaoFornecedor('${id}')">Salvar</button>`
@@ -2917,7 +3064,7 @@ function removerApiKey() {
 }
 
 function getClaudeApiKey() {
-  return localStorage.getItem('artecon_claude_key') || '';
+  return localStorage.getItem(CLAUDE_KEY_LS) || '';
 }
 
 // ── METAS ─────────────────────────────────────────────────────
@@ -2974,8 +3121,20 @@ function calcularProgressoMeta(meta) {
 
 function statusMeta(meta, atual) {
   const alvo   = parseFloat(meta.valor_alvo);
-  const pct    = alvo > 0 ? (atual / alvo) * 100 : 0;
   const hoje   = today();
+
+  // Para metas de LIMITE de despesa, quanto MENOS gastou, melhor.
+  if (meta.tipo === 'despesa_mes') {
+    if (alvo <= 0) return { label:'Sem limite', cor:'var(--text-3)', badge:'badge-gray' };
+    const pctLim = (atual / alvo) * 100;
+    if (pctLim >= 100)  return { label: 'Limite excedido',  cor: 'var(--red)',   badge: 'badge-red' };
+    if (pctLim >= 85)   return { label: 'Próximo do limite',cor: 'var(--amber)', badge: 'badge-amber' };
+    if (pctLim >= 60)   return { label: 'Em uso',            cor: 'var(--gold)',  badge: 'badge-gold' };
+    return               { label: 'Dentro do limite',         cor: 'var(--green)', badge: 'badge-green' };
+  }
+
+  // Demais metas: quanto mais próximo do alvo, melhor.
+  const pct    = alvo > 0 ? (atual / alvo) * 100 : 0;
   const vencida = meta.prazo && meta.prazo < hoje && pct < 100;
 
   if (pct >= 100)  return { label: 'Atingida',   cor: 'var(--green)', badge: 'badge-green' };
@@ -3032,7 +3191,7 @@ function renderMetas() {
           const alvo  = parseFloat(m.valor_alvo);
           const pct   = Math.min(100, alvo > 0 ? Math.round((atual/alvo)*100) : 0);
           const st    = statusMeta(m, atual);
-          const diasRestantes = m.prazo ? Math.ceil((new Date(m.prazo+' 12:00:00') - new Date()) / 86400000) : null;
+          const diasRestantes = m.prazo ? Math.ceil((new Date(m.prazo+'T12:00:00') - new Date()) / 86400000) : null;
           return `
           <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:20px;box-shadow:var(--shadow);position:relative;overflow:hidden">
             <!-- Linha de cor no topo -->
@@ -3261,7 +3420,8 @@ function datasRecorrencia(rec) {
   }
 
   let limite = 0;
-  while (cur <= hoje && limite < 120) {
+  const LIMITE_MAX = 500;
+  while (cur <= hoje && limite < LIMITE_MAX) {
     limite++;
     if (!fim || cur <= fim) {
       datas.push(cur.toISOString().slice(0,10));
@@ -3273,6 +3433,9 @@ function datasRecorrencia(rec) {
     if (rec.frequencia === 'semanal')   { prox.setDate(prox.getDate()+7); }
     if (rec.frequencia === 'anual')     { prox.setFullYear(prox.getFullYear()+1); if (rec.dia_venc) prox.setDate(Math.min(rec.dia_venc, new Date(prox.getFullYear(),prox.getMonth()+1,0).getDate())); }
     cur = prox;
+  }
+  if (limite >= LIMITE_MAX) {
+    console.warn(`[datasRecorrencia] Limite de ${LIMITE_MAX} iterações atingido para recorrência ${rec.id}. Datas após este ponto não foram geradas.`);
   }
   return datas;
 }
@@ -3296,10 +3459,13 @@ function proximaData(rec) {
 
 // Geração automática silenciosa ao entrar no app
 async function gerarRecorrenciasPendentes() {
-  if (!RECORRENCIAS.length) return;
-  const tid  = APP.user.tenant_id;
-  const hoje = today();
-  let gerou  = false;
+  if (window._gerandoRec) return; // lock contra execuções paralelas
+  window._gerandoRec = true;
+  try {
+    if (!RECORRENCIAS.length) return;
+    const tid  = APP.user.tenant_id;
+    const hoje = today();
+    let gerou  = false;
 
   for (const rec of RECORRENCIAS) {
     if (!rec.ativo) continue;
@@ -3330,22 +3496,23 @@ async function gerarRecorrenciasPendentes() {
           body.fornecedor_id = rec.fornecedor_id || null;
           await supa('POST', 'fin_despesas', { body });
         }
+        // Atualiza ultima_geracao imediatamente após sucesso — evita duplicatas se o próximo item falhar
+        await supa('PATCH', 'fin_recorrencias', {
+          params: { id: `eq.${rec.id}` },
+          body:   { ultima_geracao: data }
+        }).catch(()=>{});
         gerou = true;
       } catch(_) {}
     }
-
-    // Atualiza ultima_geracao
-    const maxData = novas[novas.length - 1];
-    await supa('PATCH', 'fin_recorrencias', {
-      params: { id: `eq.${rec.id}` },
-      body:   { ultima_geracao: maxData }
-    }).catch(()=>{});
   }
 
   if (gerou) {
     await carregarDados();
     if (APP.page === 'receber' || APP.page === 'pagar') go(APP.page);
     toast('Lançamentos recorrentes gerados!', 'success');
+  }
+  } finally {
+    window._gerandoRec = false;
   }
 }
 
@@ -3797,7 +3964,7 @@ function renderConciliacao() {
     const delta = 2; // tolerância R$2
     const match = todos.find(l =>
       Math.abs(Math.abs(l._valor) - Math.abs(ext.valor)) <= delta &&
-      Math.abs(new Date(l.vencimento+' 12:00:00') - new Date(ext.data+' 12:00:00')) <= 3*86400000
+      Math.abs(new Date(l.vencimento+'T12:00:00') - new Date(ext.data+'T12:00:00')) <= 3*86400000
     );
     return match || null;
   }
@@ -3807,7 +3974,7 @@ function renderConciliacao() {
   const naoExtrato   = todos.filter(l => !_concItems.some(i => {
     const delta=2;
     return Math.abs(Math.abs(l._valor)-Math.abs(i.valor))<=delta &&
-           Math.abs(new Date(l.vencimento+' 12:00:00')-new Date(i.data+' 12:00:00'))<=3*86400000;
+           Math.abs(new Date(l.vencimento+'T12:00:00')-new Date(i.data+'T12:00:00'))<=3*86400000;
   }));
 
   const saldoExtrato = _concItems.reduce((s,i)=>s+i.valor,0);
@@ -3923,14 +4090,20 @@ function importarExtrato(input) {
       const cols = linha.split(sep).map(c => c.replace(/"/g,'').trim());
       if (cols.length < 3) continue;
       const [col0, col1, col2] = cols;
-      // Ignora cabeçalho
-      if (isNaN(parseFloat(col2.replace(',','.'))) ) continue;
-      const data = col0.length===10 ? col0 : null;
+      const valor = parseFloat(col2.replace(/\./g,'').replace(',','.'));
+      if (isNaN(valor)) continue; // pula cabeçalho
+      // Aceita YYYY-MM-DD ou DD/MM/YYYY
+      let data = null;
+      if (/^\d{4}-\d{2}-\d{2}$/.test(col0)) data = col0;
+      else if (/^\d{2}\/\d{2}\/\d{4}$/.test(col0)) {
+        const [d,m,y] = col0.split('/');
+        data = `${y}-${m}-${d}`;
+      }
       if (!data) continue;
       items.push({
         data,
         descricao: col1 || '—',
-        valor: parseFloat(col2.replace(',','.')) || 0,
+        valor,
       });
     }
     if (!items.length) { toast('Nenhum item encontrado no CSV. Verifique o formato.', 'error'); return; }
@@ -4573,16 +4746,39 @@ async function processarXMLAutoDoc(id, file) {
     const dhEmi = get('dhEmi','dEmi');
     const data  = dhEmi ? dhEmi.slice(0,10) : today();
     const vNF   = parseFloat(get('vNF')) || 0;
-    const xNome = get('xNome');
+    const xNomeEmit = get('xNome'); // emitente (primeiro xNome)
     const CNPJ  = get('CNPJ');
     const tpNF  = get('tpNF');
 
     if (!vNF) { adicionarFilaItem(id, file.name, 'erro', 'NF-e: valor não encontrado.', null); return; }
 
+    // tpNF: 0 = Entrada (despesa), 1 = Saída (receita)
     const tipo = tpNF === '0' ? 'despesa' : 'receita';
-    const desc = `NF-e nº ${nNF} — ${xNome}`;
+
+    // Contraparte: se é receita (saída), a contraparte é o DESTINATÁRIO; se despesa (entrada), é o EMITENTE
+    let contraparte = xNomeEmit;
+    if (tipo === 'receita') {
+      const destEl = doc.querySelector('dest xNome');
+      if (destEl?.textContent?.trim()) contraparte = destEl.textContent.trim();
+    }
+    const desc = `NF-e nº ${nNF} — ${contraparte}`;
 
     const body = { tenant_id: APP.user.tenant_id, descricao: desc, valor: vNF, vencimento: data, status: 'pendente', observacao: `CNPJ: ${CNPJ} | Importado via NF-e XML` };
+
+    // Verificar duplicado também em NFe (mesma lógica do NFSe)
+    const tabelaNFe = tipo === 'receita' ? 'fin_receitas' : 'fin_despesas';
+    const existentesNFe = await supa('GET', tabelaNFe, { params: {
+      descricao: `eq.${desc}`,
+      valor: `eq.${vNF}`,
+      select: 'id',
+      limit: 1,
+    }}).catch(()=>[]);
+    if (existentesNFe?.length) {
+      adicionarFilaItem(id, file.name, 'erro',
+        `Duplicado detectado — "${desc}" (${fmtMoeda(vNF)}) já existe. Importação cancelada.`, null);
+      return;
+    }
+
     let refId;
     try {
       if (tipo === 'receita') { const r = await supa('POST', 'fin_receitas', { body, returning: true }); refId = r[0]?.id; }
@@ -4617,9 +4813,16 @@ async function processarExtratoAutoDoc(id, file) {
       const sep  = linha.includes(';') ? ';' : ',';
       const cols = linha.split(sep).map(c=>c.replace(/"/g,'').trim());
       if (cols.length < 3) continue;
-      const valor = parseFloat(cols[2].replace(',','.'));
-      if (isNaN(valor)) continue;
-      const data = cols[0].length===10 ? cols[0] : null;
+      const valor = parseFloat(cols[2].replace(/\./g,'').replace(',','.'));
+      if (isNaN(valor)) continue; // pula cabeçalho automaticamente
+      // Aceita YYYY-MM-DD ou DD/MM/YYYY
+      let data = null;
+      const raw = cols[0];
+      if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) data = raw;
+      else if (/^\d{2}\/\d{2}\/\d{4}$/.test(raw)) {
+        const [d,m,y] = raw.split('/');
+        data = `${y}-${m}-${d}`;
+      }
       if (!data) continue;
       items.push({ data, descricao: cols[1]||'Extrato', valor, tipo: valor>=0?'receita':'despesa' });
     }
@@ -4662,6 +4865,12 @@ async function processarPDFAutoDoc(id, file) {
     return;
   }
 
+  // Verificar tamanho ANTES de carregar base64 (evita OOM em celulares fracos)
+  if (file.size > 5 * 1024 * 1024) {
+    adicionarFilaItem(id, file.name, 'erro', 'PDF muito grande. Máximo 5MB para leitura por IA.', null);
+    return;
+  }
+
   adicionarFilaItem(id, file.name, 'processando', 'Enviando PDF para a IA...', null);
 
   // Converter PDF para base64
@@ -4674,16 +4883,9 @@ async function processarPDFAutoDoc(id, file) {
 
   // Extrair texto do PDF no browser primeiro (evita enviar base64 enorme)
   // Usa abordagem de enviar o PDF em chunks via FormData
-  let dados;
   let dadosLista = [];
   try {
     const proxyUrl = `${SUPA_URL}/functions/v1/claude-proxy`;
-
-    // Verificar tamanho - PDFs grandes precisam ser limitados
-    if (file.size > 5 * 1024 * 1024) {
-      adicionarFilaItem(id, file.name, 'erro', 'PDF muito grande. Máximo 5MB para leitura por IA.', null);
-      return;
-    }
 
     const response = await fetch(proxyUrl, {
       method: 'POST',
@@ -4717,10 +4919,6 @@ async function processarPDFAutoDoc(id, file) {
       throw new Error(`Claude API: ${response.status} — ${err.slice(0,200)}`);
     }
 
-    if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`Proxy ${response.status}: ${errText.slice(0,200)}`);
-    }
     const result = await response.json();
     const text   = result.content?.[0]?.text || result.error?.message || '';
     if (result.error) throw new Error('Claude API: ' + result.error.message);
@@ -5335,18 +5533,23 @@ function pdfHeader(titulo, periodo) {
   const empresa = APP.tenant?.nome || 'Artecon';
   const setor   = APP.tenant?.setor || '';
   const agora   = new Date().toLocaleString('pt-BR');
+  // Marca: usa até 2 letras iniciais das palavras do nome do tenant (fallback: primeira letra)
+  const palavras = empresa.split(/\s+/).filter(Boolean);
+  const marca = palavras.length >= 2
+    ? (palavras[0][0] + palavras[1][0]).toUpperCase()
+    : (empresa[0] || '?').toUpperCase();
   return `
     <div class="rpt-header">
       <div class="rpt-brand">
-        <div class="rpt-mark">AC</div>
+        <div class="rpt-mark">${esc(marca)}</div>
         <div class="rpt-brand-text">
-          <h1>${empresa}</h1>
-          <p>${setor || 'Artes Contábeis'}</p>
+          <h1>${esc(empresa)}</h1>
+          <p>${esc(setor || 'Artes Contábeis')}</p>
         </div>
       </div>
       <div class="rpt-meta">
-        <strong>${titulo}</strong><br>
-        ${periodo}<br>
+        <strong>${esc(titulo)}</strong><br>
+        ${esc(periodo)}<br>
         Gerado em ${agora}<br>
         Financeiro Pro · Artecon
       </div>
@@ -5415,7 +5618,7 @@ function gerarPdfDRE() {
       <thead><tr><th>Categoria</th><th style="text-align:right">Valor</th><th style="text-align:right">% da Receita</th></tr></thead>
       <tbody>
         ${Object.entries(catRec).sort((a,b)=>b[1]-a[1]).map(([c,v])=>`
-          <tr class="sub-row"><td>${c}</td><td style="text-align:right;font-family:'DM Mono';color:#16804a">${fmtMoeda(v)}</td><td style="text-align:right;color:#888">${Math.round(v/totalRec*100)}%</td></tr>
+          <tr class="sub-row"><td>${esc(c)}</td><td style="text-align:right;font-family:'DM Mono';color:#16804a">${fmtMoeda(v)}</td><td style="text-align:right;color:#888">${totalRec>0?Math.round(v/totalRec*100):0}%</td></tr>
         `).join('')}
         <tr class="total-row highlight-green"><td>Total Receitas</td><td style="text-align:right;font-family:'DM Mono'">${fmtMoeda(totalRec)}</td><td style="text-align:right">100%</td></tr>
       </tbody>
@@ -5426,7 +5629,7 @@ function gerarPdfDRE() {
       <thead><tr><th>Categoria</th><th style="text-align:right">Valor</th><th style="text-align:right">% da Receita</th></tr></thead>
       <tbody>
         ${Object.entries(catDesp).sort((a,b)=>b[1]-a[1]).map(([c,v])=>`
-          <tr class="sub-row"><td>${c}</td><td style="text-align:right;font-family:'DM Mono';color:#c0392b">${fmtMoeda(v)}</td><td style="text-align:right;color:#888">${totalRec>0?Math.round(v/totalRec*100):0}%</td></tr>
+          <tr class="sub-row"><td>${esc(c)}</td><td style="text-align:right;font-family:'DM Mono';color:#c0392b">${fmtMoeda(v)}</td><td style="text-align:right;color:#888">${totalRec>0?Math.round(v/totalRec*100):0}%</td></tr>
         `).join('')}
         <tr class="total-row highlight-red"><td>Total Despesas</td><td style="text-align:right;font-family:'DM Mono'">${fmtMoeda(totalDesp)}</td><td style="text-align:right">${totalRec>0?Math.round(totalDesp/totalRec*100):0}%</td></tr>
       </tbody>
@@ -5544,7 +5747,7 @@ function gerarPdfMetas() {
           const alvo  = parseFloat(m.valor_alvo);
           const pct   = Math.min(100, alvo>0 ? Math.round((atual/alvo)*100) : 0);
           const st    = statusMeta(m, atual);
-          const diasR = m.prazo ? Math.ceil((new Date(m.prazo+' 12:00:00')-new Date())/86400000) : null;
+          const diasR = m.prazo ? Math.ceil((new Date(m.prazo+'T12:00:00')-new Date())/86400000) : null;
           const corHex = m.cor || '#c9a84c';
           return `
           <div class="prog-wrap" style="background:#fafaf8;border:1px solid #e8e6e0;border-radius:8px;padding:14px;margin-bottom:10px;border-left:3px solid ${corHex}">
@@ -5789,7 +5992,7 @@ function renderNotifPanel() {
       <div style="display:flex;align-items:flex-start;gap:10px">
         <span style="font-size:16px;flex-shrink:0">${n.ico}</span>
         <div style="flex:1;min-width:0">
-          <div style="font-size:12px;color:var(--text);line-height:1.4;${lida?'':'font-weight:500'}">${n.txt}</div>
+          <div style="font-size:12px;color:var(--text);line-height:1.4;${lida?'':'font-weight:500'}">${esc(n.txt)}</div>
           <div style="display:flex;justify-content:space-between;margin-top:3px">
             <span style="font-size:10.5px;font-family:var(--mono);color:${n.tipo==='red'?'var(--red)':'var(--amber)'};font-weight:700">${n.valor}</span>
             <span style="font-size:10px;color:var(--text-3)">${fmtData(n.data)}</span>
@@ -5800,16 +6003,19 @@ function renderNotifPanel() {
     </div>`;
   }).join('');
 
-  // Marca todas como lidas após visualizar
-  const ids = notifs.map(n=>n.id);
-  localStorage.setItem(NOTIF_KEY(), JSON.stringify(ids));
-  if ($id('notif-badge')) $id('notif-badge').style.display = 'none';
+  // NÃO marcamos automaticamente como lidas ao exibir — só quando o usuário clicar numa notificação
+  // (ver marcarLida) ou fechar o painel via botão. O badge é atualizado no atualizarBadgeNotif.
 }
 
 function marcarLida(id) {
-  const lidas = JSON.parse(localStorage.getItem(NOTIF_KEY())||'[]');
+  const notifsAtivas = gerarNotificacoes();
+  const idsAtivos = new Set(notifsAtivas.map(n => n.id));
+  // Ao marcar como lida, aproveitamos para expurgar ids de notificações que já não existem
+  const lidasAntigas = JSON.parse(localStorage.getItem(NOTIF_KEY())||'[]');
+  const lidas = lidasAntigas.filter(x => idsAtivos.has(x));
   if (!lidas.includes(id)) lidas.push(id);
   localStorage.setItem(NOTIF_KEY(), JSON.stringify(lidas));
+  atualizarBadgeNotif();
 }
 
 function limparNotificacoes() {
@@ -6039,7 +6245,12 @@ async function verificarSuperadmin() {
       // Carrega seletor de empresas
       await carregarSeletorEmpresas();
     }
-  } catch(_) {}
+    // Se res for [], o usuário simplesmente não é superadmin — sem ação.
+  } catch(e) {
+    // Diferença de contexto: erros reais (RLS, tabela não existe, rede) ficam em console.error;
+    // "não é superadmin" cai em res=[] sem exception.
+    console.error('Erro ao verificar superadmin:', e.message);
+  }
 }
 
 async function carregarSeletorEmpresas() {
@@ -6064,35 +6275,22 @@ async function carregarSeletorEmpresas() {
 
 async function trocarEmpresaSA(tenantId) {
   if (!tenantId || tenantId === APP.user.tenant_id) {
-    // Voltar para empresa própria
+    // Voltar para empresa própria — reset para o tenant_id real do usuário
     await carregarDados();
     go(APP.page || 'dashboard');
     toast('Visualizando: ' + (APP.tenant?.nome||'Minha empresa'), 'success');
     return;
   }
 
-  try {
-    // Carregar dados da empresa selecionada
-    const tenants = await supa('GET', 'fin_tenants', {
-      params: { id: `eq.${tenantId}`, select: '*', limit: 1 }
-    });
-    if (!tenants?.length) { toast('Empresa não encontrada.', 'error'); return; }
-
-    // Temporariamente trocar o tenant_id do usuário para carregar dados
-    const tenantOriginal = APP.user.tenant_id;
-    APP.user = { ...APP.user, tenant_id: tenantId };
-    APP.tenant = tenants[0];
-
-    // Atualizar sidebar
-    $id('sb-tenant').textContent = APP.tenant.nome;
-    $id('sb-setor').textContent  = APP.tenant.setor || '—';
-
-    await carregarDados();
-    go('dashboard');
-    toast(`Visualizando: ${APP.tenant.nome}`, 'success');
-  } catch(e) {
-    toast('Erro ao trocar empresa: ' + e.message, 'error');
-  }
+  // ⚠️ FEATURE DESABILITADA TEMPORARIAMENTE
+  // Trocar o tenant_id em memória NÃO muda o JWT — e a RLS usa o JWT pra filtrar.
+  // Resultado: a troca parecia funcionar mas carregava dados da empresa original.
+  // Para implementar corretamente, é preciso uma Edge Function que retorne um JWT
+  // com o tenant_id alvo (ver relatório de bugs #42).
+  toast('Função de visualização cruzada temporariamente indisponível. Use "Gerenciar" → abrir a empresa diretamente.', 'warn', 5000);
+  // Reset do select para o tenant próprio
+  const sel = $id('sa-empresa-select');
+  if (sel) sel.value = APP.user.tenant_id;
 }
 
 async function abrirSuperadmin() {
@@ -6274,10 +6472,23 @@ async function cadastrarEmpresaSA() {
 }
 
 // ── Modal Criar Usuário numa Empresa ──────────────────────────
+function gerarSenhaAleatoria() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
+  let s = '';
+  const len = 12;
+  const cryptoArr = (typeof crypto !== 'undefined' && crypto.getRandomValues) ? crypto.getRandomValues(new Uint32Array(len)) : null;
+  for (let i = 0; i < len; i++) {
+    const r = cryptoArr ? cryptoArr[i] : Math.floor(Math.random()*0xffffffff);
+    s += chars[r % chars.length];
+  }
+  return s;
+}
+
 function modalCriarUsuarioEmpresa(tenantId, nomeEmpresa) {
-  openModal(`Criar Acesso — ${nomeEmpresa}`, `
+  const senhaGerada = gerarSenhaAleatoria();
+  openModal(`Criar Acesso — ${esc(nomeEmpresa)}`, `
     <div style="font-size:12.5px;color:var(--text-2);margin-bottom:16px;line-height:1.6;background:var(--bg-2);padding:12px;border-radius:9px;border:1px solid var(--border)">
-      Crie o login de acesso para um usuário desta empresa. As credenciais serão geradas automaticamente.
+      Crie o login de acesso para um usuário desta empresa. As credenciais serão geradas automaticamente — altere a senha se quiser.
     </div>
     <div class="form-grid">
       <div class="form-field full"><label class="form-label">Nome completo *</label><input class="form-input" id="sa-usr-nome" placeholder="Nome do usuário"></div>
@@ -6289,15 +6500,16 @@ function modalCriarUsuarioEmpresa(tenantId, nomeEmpresa) {
         </select>
       </div>
       <div class="form-field"><label class="form-label">Senha *</label>
-        <input class="form-input" type="text" id="sa-usr-senha" value="Artecon@2025" placeholder="Mínimo 6 caracteres">
+        <input class="form-input" type="text" id="sa-usr-senha" value="${esc(senhaGerada)}" placeholder="Mínimo 6 caracteres">
       </div>
     </div>`,
     `<button class="btn btn-outline" onclick="closeModal()">Cancelar</button>
-     <button class="btn btn-gold" onclick="criarUsuarioEmpresaSA('${tenantId}','${nomeEmpresa.replace(/'/g,"\\'")}')">Criar Acesso</button>`
+     <button class="btn btn-gold" onclick="criarUsuarioEmpresaSA('${tenantId}')">Criar Acesso</button>`
   );
 }
 
-async function criarUsuarioEmpresaSA(tenantId, nomeEmpresa) {
+async function criarUsuarioEmpresaSA(tenantId) {
+  const nomeEmpresa = (SA.tenants.find(t => t.id === tenantId) || {}).nome || 'Empresa';
   const nome   = $id('sa-usr-nome')?.value?.trim();
   const email  = $id('sa-usr-email')?.value?.trim();
   const senha  = $id('sa-usr-senha')?.value?.trim();
@@ -6329,8 +6541,8 @@ async function criarUsuarioEmpresaSA(tenantId, nomeEmpresa) {
     openModal('✅ Acesso Criado com Sucesso!', `
       <div style="text-align:center;padding:8px 0">
         <div style="font-size:36px;margin-bottom:12px">🎉</div>
-        <div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:6px">${nome}</div>
-        <div style="font-size:12px;color:var(--text-3);margin-bottom:20px">${nomeEmpresa}</div>
+        <div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:6px">${esc(nome)}</div>
+        <div style="font-size:12px;color:var(--text-3);margin-bottom:20px">${esc(nomeEmpresa)}</div>
         <div style="background:var(--surface-2);border-radius:10px;padding:16px;text-align:left;border:1px solid var(--border)">
           <div style="font-size:10.5px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px">Dados de acesso para entregar ao cliente</div>
           <div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--border)">
@@ -6339,15 +6551,15 @@ async function criarUsuarioEmpresaSA(tenantId, nomeEmpresa) {
           </div>
           <div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--border)">
             <span style="font-size:12px;color:var(--text-3)">E-mail</span>
-            <strong style="font-size:13px;color:var(--text)">${email}</strong>
+            <strong style="font-size:13px;color:var(--text)">${esc(email)}</strong>
           </div>
           <div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--border)">
             <span style="font-size:12px;color:var(--text-3)">Senha</span>
-            <strong style="font-size:14px;color:var(--text);font-family:var(--mono)">${senha}</strong>
+            <strong style="font-size:14px;color:var(--text);font-family:var(--mono)">${esc(senha)}</strong>
           </div>
           <div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0">
             <span style="font-size:12px;color:var(--text-3)">Perfil</span>
-            <span class="badge badge-gold">${perfil}</span>
+            <span class="badge badge-gold">${esc(perfil)}</span>
           </div>
         </div>
         <div style="margin-top:12px;font-size:11.5px;color:var(--text-3)">⚠ Recomende que o cliente troque a senha no primeiro acesso.</div>
@@ -6382,19 +6594,20 @@ function modalGerenciarEmpresa(tenantId) {
           </div>`).join('')}
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button onclick="modalCriarUsuarioEmpresa('${tenantId}','${t.nome?.replace(/'/g,"\'")}')" class="btn btn-gold btn-sm">+ Adicionar usuário</button>
-        <button onclick="excluirEmpresaSA('${tenantId}','${t.nome?.replace(/'/g,"\'")||''}')" class="btn btn-sm" style="background:var(--red-lt);color:var(--red);border:1px solid rgba(192,57,43,.2)">Excluir empresa</button>
+        <button onclick="modalCriarUsuarioEmpresa('${tenantId}')" class="btn btn-gold btn-sm">+ Adicionar usuário</button>
+        <button onclick="excluirEmpresaSA('${tenantId}')" class="btn btn-sm" style="background:var(--red-lt);color:var(--red);border:1px solid rgba(192,57,43,.2)">Excluir empresa</button>
       </div>
     </div>`,
     `<button class="btn btn-outline" onclick="closeModal()">Fechar</button>`
   );
 }
 
-function excluirEmpresaSA(tenantId, nome) {
+function excluirEmpresaSA(tenantId) {
+  const nome = (SA.tenants.find(t => t.id === tenantId) || {}).nome || 'Empresa';
   openModal('🔐 Confirmar Exclusão de Empresa', `
     <div style="text-align:center;padding:8px 0">
       <div style="font-size:36px;margin-bottom:12px">⚠️</div>
-      <div style="font-size:14px;font-weight:700;color:var(--red);margin-bottom:8px">Excluir "${nome}"?</div>
+      <div style="font-size:14px;font-weight:700;color:var(--red);margin-bottom:8px">Excluir "${esc(nome)}"?</div>
       <div style="font-size:12.5px;color:var(--text-2);margin-bottom:20px;line-height:1.6">
         Todos os dados desta empresa serão <strong>permanentemente apagados</strong>.<br>
         Esta ação é <strong>irreversível</strong>.
@@ -6405,15 +6618,16 @@ function excluirEmpresaSA(tenantId, nome) {
       </div>
     </div>`,
     `<button class="btn btn-outline" onclick="closeModal()">Cancelar</button>
-     <button class="btn btn-sm" style="background:var(--red);color:#fff;border:none;padding:9px 18px;border-radius:9px;font-family:var(--font);font-size:13px;font-weight:700;cursor:pointer" onclick="confirmarExcluirEmpresaSA('${tenantId}','${nome.replace(/'/g,"\'")}')">Excluir definitivamente</button>`
+     <button class="btn btn-sm" style="background:var(--red);color:#fff;border:none;padding:9px 18px;border-radius:9px;font-family:var(--font);font-size:13px;font-weight:700;cursor:pointer" onclick="confirmarExcluirEmpresaSA('${tenantId}')">Excluir definitivamente</button>`
   );
 }
 
-async function confirmarExcluirEmpresaSA(tenantId, nome) {
+async function confirmarExcluirEmpresaSA(tenantId) {
+  const nome = (SA.tenants.find(t => t.id === tenantId) || {}).nome || 'Empresa';
   const senha = $id('sa-del-senha')?.value?.trim();
   if (!senha) { toast('Digite sua senha para confirmar.', 'error'); return; }
 
-  // Verificar senha fazendo login
+  // Verificar senha fazendo login (fluxo atual — não ideal, mas funcional)
   try {
     const res = await fetch(`${SUPA_URL}/auth/v1/token?grant_type=password`, {
       method: 'POST',
@@ -6422,6 +6636,7 @@ async function confirmarExcluirEmpresaSA(tenantId, nome) {
     });
     const data = await res.json();
     if (!data.access_token) throw new Error('Senha incorreta.');
+    // NÃO substituímos APP.token para evitar invalidar a sessão ativa em curso
   } catch(e) {
     toast('Senha incorreta. Exclusão cancelada.', 'error');
     return;
@@ -6612,7 +6827,7 @@ function saveClaudeKey() {
   }
   
   DOC_AI.claude_key = key;
-  localStorage.setItem('claude_api_key', key);
+  localStorage.setItem(CLAUDE_KEY_LS, key);
   
   if (key) {
     $id('api-status').textContent = 'IA Ativa';
@@ -6626,15 +6841,19 @@ function saveClaudeKey() {
 }
 
 function loadClaudeKey() {
-  const savedKey = localStorage.getItem('claude_api_key');
+  const savedKey = localStorage.getItem(CLAUDE_KEY_LS);
   if (savedKey) {
     DOC_AI.claude_key = savedKey;
-    $id('claude-api-key').value = savedKey;
-    $id('api-status').textContent = 'IA Ativa';
-    $id('api-status').className = 'badge badge-green';
+    if ($id('claude-api-key')) $id('claude-api-key').value = savedKey;
+    if ($id('api-status')) {
+      $id('api-status').textContent = 'IA Ativa';
+      $id('api-status').className = 'badge badge-green';
+    }
   } else {
-    $id('api-status').textContent = 'IA Automática';
-    $id('api-status').className = 'badge badge-amber';
+    if ($id('api-status')) {
+      $id('api-status').textContent = 'IA Automática';
+      $id('api-status').className = 'badge badge-amber';
+    }
   }
 }
 
@@ -6862,17 +7081,26 @@ Use o CSV que funcionou ou me mande mais detalhes do debug no console.`);
   return transactions;
 }
 
+// Helper: converte ArrayBuffer pra base64 em chunks (evita "Maximum call stack size exceeded" em PDFs grandes)
+function arrayBufferToBase64Chunked(buf) {
+  const bytes = new Uint8Array(buf);
+  let bin = '';
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(bin);
+}
+
 async function performOCRWithClaude(file) {
-  console.log('🔍 Iniciando OCR com Claude API...');
-  
+  console.log('🔍 Iniciando OCR com Claude API (via Edge Function)...');
+
   try {
-    // Converter arquivo para base64
+    // Converter arquivo para base64 em chunks (seguro para PDFs grandes)
     const arrayBuffer = await file.arrayBuffer();
-    const base64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
-    
+    const base64 = arrayBufferToBase64Chunked(arrayBuffer);
     console.log('🔍 PDF convertido para base64:', base64.length, 'caracteres');
-    
-    // Prompt para OCR de extrato bancário
+
     const ocrPrompt = `
 Analise este PDF de extrato bancário e extraia TODAS as transações.
 
@@ -6899,109 +7127,52 @@ IMPORTANTE:
 - Ignore saldos, use apenas os valores de movimentação
 `;
 
-    // Lista de proxies para tentar
-    const corsProxies = [
-      'https://corsproxy.io/?',
-      'https://api.allorigins.win/raw?url='
-    ];
-
-    for (const proxyUrl of corsProxies) {
-      try {
-        console.log('🔍 Tentando OCR via:', proxyUrl);
-        
-        const apiUrl = proxyUrl.includes('allorigins') 
-          ? `${proxyUrl}${encodeURIComponent('https://api.anthropic.com/v1/messages')}`
-          : `${proxyUrl}https://api.anthropic.com/v1/messages`;
-
-        const response = await fetch(apiUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-api-key': DOC_AI.claude_key,
-            'anthropic-version': '2023-06-01'
+    // Usa callClaudeAPI — a Edge Function encaminha com type='document' correto para PDFs
+    const result = await callClaudeAPI({
+      max_tokens: 4000,
+      messages: [{
+        role: 'user',
+        content: [
+          {
+            type: 'document',
+            source: { type: 'base64', media_type: 'application/pdf', data: base64 }
           },
-          body: JSON.stringify({
-            model: 'claude-3-sonnet-20240229',
-            max_tokens: 4000,
-            messages: [{
-              role: 'user',
-              content: [
-                {
-                  type: 'text',
-                  text: ocrPrompt
-                },
-                {
-                  type: 'image',
-                  source: {
-                    type: 'base64',
-                    media_type: 'application/pdf',
-                    data: base64
-                  }
-                }
-              ]
-            }]
-          })
-        });
+          { type: 'text', text: ocrPrompt }
+        ]
+      }]
+    });
 
-        if (!response.ok) {
-          console.log('❌ OCR falhou neste proxy, tentando próximo...');
-          continue;
-        }
+    const content = result.content?.[0]?.text || '';
+    console.log('🔍 Resposta OCR:', content.substring(0, 200));
 
-        const data = await response.json();
-        const content = data.content[0].text;
-        
-        console.log('🔍 Resposta OCR:', content.substring(0, 200));
-        
-        try {
-          const cleanContent = content.replace(/```json\n?|\n?```/g, '').trim();
-          const parsed = JSON.parse(cleanContent);
-          
-          if (parsed.transactions && parsed.transactions.length > 0) {
-            console.log('✅ OCR extraiu', parsed.transactions.length, 'transações');
-            
-            // Converter para formato padrão
-            return parsed.transactions.map(t => ({
-              data: t.data,
-              descricao: t.descricao,
-              valor: t.valor,
-              tipo: t.valor > 0 ? 'receita' : 'despesa'
-            }));
-          }
-        } catch (parseError) {
-          console.error('❌ Erro no parse OCR:', parseError);
-          continue;
-        }
-        
-      } catch (fetchError) {
-        console.error('❌ Erro no fetch OCR:', fetchError);
-        continue;
-      }
+    const cleanContent = content.replace(/```json\n?|\n?```/g, '').trim();
+    const parsed = JSON.parse(cleanContent);
+
+    if (parsed.transactions && parsed.transactions.length > 0) {
+      console.log('✅ OCR extraiu', parsed.transactions.length, 'transações');
+      return parsed.transactions.map(t => ({
+        data: t.data,
+        descricao: t.descricao,
+        valor: t.valor,
+        tipo: t.valor > 0 ? 'receita' : 'despesa'
+      }));
     }
-    
-    // Se chegou aqui, OCR falhou
-    throw new Error(`OCR com Claude API falhou.
+    throw new Error('Nenhuma transação encontrada no PDF.');
+
+  } catch (error) {
+    console.error('❌ Erro no OCR:', error);
+    throw new Error(`OCR com Claude API falhou: ${error.message}
 
 ALTERNATIVAS:
 
 1. 📊 CONVERTA PARA CSV:
    - SmallPDF.com → PDF to Excel → Save CSV
    - Google Sheets → Import PDF → Download CSV
-   
-2. 📋 CÓPIA MANUAL:
-   - Abra PDF no navegador
-   - Copie transações
-   - Cole em planilha → Save CSV
 
-3. 🔧 VERIFIQUE API:
-   - Claude API key: ${DOC_AI.claude_key?.substring(0, 15)}...
-   - Proxies CORS podem estar bloqueados
+2. 📋 CÓPIA MANUAL:
+   - Abra PDF no navegador, copie transações, cole em planilha → Save CSV
 
 CSV funciona 100% - recomendo usar!`);
-    
-  } catch (error) {
-    console.error('❌ Erro no OCR:', error);
-    throw error;
   }
 }
 
@@ -7301,14 +7472,13 @@ Conteúdo: ${text.substring(0, 100)}...`);
 
 async function analyzeWithClaude(transactions) {
   console.log('🧠 Iniciando análise com Claude API...');
-  
+
   const categoriasDisponiveis = CATEGORIAS.map(c => `${c.nome} (${c.tipo})`).join(', ');
-  
+
   // Detectar se é NFe para prompt específico
   const isNFe = transactions.some(t => t.nfe_numero || t.descricao?.includes('NFe'));
-  
+
   let prompt;
-  
   if (isNFe) {
     prompt = `
 Analise estas notas fiscais brasileiras (NFe) e para cada uma, sugira:
@@ -7363,81 +7533,22 @@ Responda APENAS em JSON válido:
     `.trim();
   }
 
-  console.log('🧠 Tentando diferentes métodos para contornar CORS...');
-
-  // Lista de proxies CORS para tentar
-  const corsProxies = [
-    'https://corsproxy.io/?',
-    'https://cors-anywhere.herokuapp.com/',
-    'https://api.allorigins.win/raw?url='
-  ];
-
-  for (let i = 0; i < corsProxies.length; i++) {
-    const proxyUrl = corsProxies[i];
-    console.log(`🔄 Tentativa ${i + 1}: ${proxyUrl}`);
-
-    try {
-      const apiUrl = proxyUrl.includes('allorigins') 
-        ? `${proxyUrl}${encodeURIComponent('https://api.anthropic.com/v1/messages')}`
-        : `${proxyUrl}https://api.anthropic.com/v1/messages`;
-
-      const response = await fetch(apiUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': DOC_AI.claude_key,
-          'anthropic-version': '2023-06-01',
-          ...(proxyUrl.includes('allorigins') && {
-            'X-Requested-With': 'XMLHttpRequest'
-          })
-        },
-        body: JSON.stringify({
-          model: 'claude-3-sonnet-20240229',
-          max_tokens: 4000,
-          messages: [{ role: 'user', content: prompt }]
-        })
-      });
-
-      console.log(`🧠 Resposta proxy ${i + 1} - Status:`, response.status);
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error(`❌ Erro proxy ${i + 1}:`, errorText);
-        continue; // Tentar próximo proxy
-      }
-
-      const data = await response.json();
-      const content = data.content[0].text;
-      
-      try {
-        const cleanContent = content.replace(/```json\n?|\n?```/g, '').trim();
-        const parsed = JSON.parse(cleanContent);
-        
-        console.log('✅ Claude funcionou via proxy', i + 1, '- analisou', parsed.transactions.length, 'transações');
-        return parsed.transactions;
-      } catch (parseError) {
-        console.error(`❌ Parse error proxy ${i + 1}:`, parseError);
-        continue; // Tentar próximo proxy
-      }
-      
-    } catch (fetchError) {
-      console.error(`❌ Fetch error proxy ${i + 1}:`, fetchError);
-      continue; // Tentar próximo proxy
-    }
+  // SEGURANÇA: usa a Edge Function (callClaudeAPI), NUNCA proxies CORS públicos.
+  // A Edge Function mantém a chave em secret e redireciona para api.anthropic.com.
+  try {
+    const result = await callClaudeAPI({
+      max_tokens: 4000,
+      messages: [{ role: 'user', content: prompt }],
+    });
+    const content = result.content?.[0]?.text || '';
+    const cleanContent = content.replace(/```json\n?|\n?```/g, '').trim();
+    const parsed = JSON.parse(cleanContent);
+    console.log('✅ Claude analisou', parsed.transactions.length, 'transações');
+    return parsed.transactions;
+  } catch (e) {
+    console.error('❌ Erro na análise com Claude:', e);
+    throw new Error('Falha ao analisar com IA: ' + e.message);
   }
-
-  // Se chegou aqui, todos os proxies falharam
-  throw new Error(`Todos os métodos CORS falharam. Usando categorização automática.
-
-MÉTODOS TENTADOS:
-1. corsproxy.io - ${corsProxies[0]}
-2. cors-anywhere - ${corsProxies[1]}  
-3. allorigins - ${corsProxies[2]}
-
-SOLUÇÃO DEFINITIVA:
-Configure um proxy server próprio ou use o modo automático (que já funciona muito bem).
-
-API key: ${DOC_AI.claude_key?.substring(0, 15)}...`);
 }
 
 async function categorizeTransactions(analyzed, rawTransactions) {
@@ -7641,57 +7752,76 @@ async function importTransactions() {
     toast('Nenhuma transação para importar.', 'error');
     return;
   }
-  
+
   try {
     console.log('💾 Iniciando importação de', DOC_AI.parsedData.length, 'transações...');
-    
-    const receitas = DOC_AI.parsedData.filter(t => t.valor > 0).map(t => ({
-      descricao: t.descricao,
-      valor: t.valor,
-      vencimento: converterData(t.data),
-      categoria: t.categoria,
-      cliente: t.cliente_fornecedor || null,
-      status: 'pago',
-      observacoes: `Importado via IA - Confiança: ${t.confianca}%`
-    }));
-    
-    const despesas = DOC_AI.parsedData.filter(t => t.valor < 0).map(t => ({
-      descricao: t.descricao,
-      valor: Math.abs(t.valor),
-      vencimento: converterData(t.data),
-      categoria: t.categoria,
-      fornecedor: t.cliente_fornecedor || null,
-      status: 'pago',
-      observacoes: `Importado via IA - Confiança: ${t.confianca}%`
-    }));
-    
-    let insertCount = 0;
-    
-    if (receitas.length > 0) {
-      await supa('POST', 'fin_receitas', { body: receitas });
-      insertCount += receitas.length;
-      console.log('✅', receitas.length, 'receitas importadas');
+
+    // Helper: tenta achar cliente/fornecedor pelo nome (case-insensitive)
+    function acharId(lista, nome) {
+      if (!nome) return null;
+      const n = String(nome).trim().toLowerCase();
+      if (!n || n === '—') return null;
+      return (lista.find(x => (x.nome||'').trim().toLowerCase() === n) || {}).id || null;
     }
-    
-    if (despesas.length > 0) {
-      await supa('POST', 'fin_despesas', { body: despesas });
-      insertCount += despesas.length;
-      console.log('✅', despesas.length, 'despesas importadas');
+    function acharCategoriaId(nome, tipo) {
+      if (!nome) return null;
+      const n = String(nome).trim().toLowerCase();
+      return (CATEGORIAS.find(c => (c.nome||'').trim().toLowerCase() === n && (c.tipo === tipo || c.tipo === 'ambos')) || {}).id || null;
     }
-    
+
+    let insertCount = 0, errCount = 0;
+
+    // Insere um por um com tratamento individual — não perde o lote inteiro por causa de um ruim
+    for (const t of DOC_AI.parsedData) {
+      try {
+        const dataISO = converterData(t.data);
+        const isReceita = t.valor > 0;
+        const catId = acharCategoriaId(t.categoria, isReceita ? 'receita' : 'despesa');
+        const body = {
+          tenant_id:    APP.user.tenant_id,
+          descricao:    t.descricao,
+          valor:        Math.abs(t.valor),
+          vencimento:   dataISO,
+          categoria_id: catId || t.categoria_id || null,
+          status:       'pago',
+          observacao:   `Importado via IA - Confiança: ${t.confianca}%`,
+        };
+        if (isReceita) {
+          body.cliente_id  = acharId(CLIENTES, t.cliente_fornecedor);
+          body.recebido_em = dataISO;
+          await supa('POST', 'fin_receitas', { body });
+        } else {
+          body.fornecedor_id = acharId(FORNECEDORES, t.cliente_fornecedor);
+          body.pago_em       = dataISO;
+          await supa('POST', 'fin_despesas', { body });
+        }
+        insertCount++;
+      } catch(itemErr) {
+        console.error('❌ Item falhou:', t, itemErr);
+        errCount++;
+      }
+    }
+
     await carregarDados();
-    
-    toast(`✅ ${insertCount} transações importadas com sucesso!`, 'success');
-    
+
+    if (insertCount > 0) {
+      toast(`✅ ${insertCount} transação(ões) importada(s)${errCount?' · '+errCount+' falha(s)':''}!`, 'success');
+    } else {
+      toast(`❌ Nenhuma transação importada (${errCount} erro(s)). Verifique o console.`, 'error');
+      return;
+    }
+
     DOC_AI.parsedData = [];
     DOC_AI.currentFile = null;
-    $id('file-info').style.display = 'none';
-    $id('results-card').style.display = 'none';
-    $id('file-input').value = '';
-    
-    if (receitas.length > 0) go('receber');
-    else if (despesas.length > 0) go('pagar');
-    
+    if ($id('file-info')) $id('file-info').style.display = 'none';
+    if ($id('results-card')) $id('results-card').style.display = 'none';
+    if ($id('file-input')) $id('file-input').value = '';
+
+    // Decide página de destino pelo maioria
+    const temReceitas = DOC_AI.parsedData?.some?.(t => t.valor > 0);
+    if (temReceitas) go('receber');
+    else go('pagar');
+
   } catch (error) {
     console.error('❌ Erro na importação:', error);
     toast('Erro ao importar transações: ' + error.message, 'error');
@@ -7866,17 +7996,22 @@ function extractNFeData(xmlDoc) {
 }
 
 function converterData(dataStr) {
-  const parts = dataStr.split('/');
+  if (!dataStr) return today();
+  const s = String(dataStr).trim();
+  // Já no formato ISO YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  // ISO com timestamp
+  if (/^\d{4}-\d{2}-\d{2}T/.test(s)) return s.slice(0,10);
+  const parts = s.split('/');
   if (parts.length === 2) {
     parts.push(new Date().getFullYear().toString());
   }
-  
   if (parts.length === 3) {
     const [dia, mes, ano] = parts;
-    return `${ano}-${mes.padStart(2, '0')}-${dia.padStart(2, '0')}`;
+    if (!dia || !mes || !ano) return today();
+    return `${ano.padStart(4,'20')}-${mes.padStart(2,'0')}-${dia.padStart(2,'0')}`;
   }
-  
-  return dataStr;
+  return today();
 }
 
 // ── FUNÇÃO DE TESTE RLS ───────────────────────────────────────

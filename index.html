@@ -817,6 +817,49 @@ async function supaAuth(method, path, body) {
   return res.json();
 }
 
+// ── FUNÇÃO CRÍTICA: SETAR TENANT_ID NO JWT ────────────────────
+async function setTenantIdInJWT(tenantId) {
+  try {
+    console.log('🔧 Setando tenant_id no JWT:', tenantId);
+    
+    // Atualizar user metadata com tenant_id
+    const updateRes = await fetch(`${SUPA_URL}/auth/v1/user`, {
+      method: 'PUT',
+      headers: {
+        'apikey': SUPA_KEY,
+        'Authorization': `Bearer ${APP.token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        data: { tenant_id: tenantId }
+      })
+    });
+    
+    if (updateRes.ok) {
+      console.log('✅ tenant_id setado no JWT:', tenantId);
+      
+      // Refresh token para pegar as claims atualizadas
+      const refreshToken = JSON.parse(localStorage.getItem('supabase.auth.token') || '{}').refresh_token;
+      if (refreshToken) {
+        const refreshRes = await fetch(`${SUPA_URL}/auth/v1/token?grant_type=refresh_token`, {
+          method: 'POST',
+          headers: { 'apikey': SUPA_KEY, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refresh_token: refreshToken })
+        });
+        
+        if (refreshRes.ok) {
+          const newTokenData = await refreshRes.json();
+          APP.token = newTokenData.access_token;
+          localStorage.setItem('supabase.auth.token', JSON.stringify(newTokenData));
+          console.log('✅ Token refreshed com tenant_id no JWT');
+        }
+      }
+    }
+  } catch(e) {
+    console.error('❌ Erro ao setar tenant_id no JWT:', e);
+  }
+}
+
 // ── TOAST ─────────────────────────────────────────────────────
 function toast(msg, type = 'default', ms = 3000) {
   const el = document.createElement('div');
@@ -856,6 +899,10 @@ async function doLogin() {
     const data = await supaAuth('POST', 'token?grant_type=password', { email, password: senha });
     if (!data.access_token) throw new Error(data.error_description || 'Credenciais inválidas.');
     APP.token = data.access_token;
+    
+    // Salvar token no localStorage para refresh
+    localStorage.setItem('supabase.auth.token', JSON.stringify(data));
+    
     await inicializar();
   } catch(e) {
     $id('login-err').textContent = e.message;
@@ -878,6 +925,10 @@ async function doRegister() {
     APP.token = data.access_token;
     APP.nomeTemp = nome;
     APP.emailTemp = email;
+    
+    // Salvar token no localStorage para refresh
+    localStorage.setItem('supabase.auth.token', JSON.stringify(data));
+    
     iniciarOnboarding();
   } catch(e) {
     $id('register-err').textContent = e.message;
@@ -904,6 +955,10 @@ async function inicializar() {
       return;
     }
     APP.user = usuarios[0];
+    
+    // CRÍTICO: Setar tenant_id no JWT para RLS funcionar
+    await setTenantIdInJWT(APP.user.tenant_id);
+    
     const tenants = await supa('GET', 'fin_tenants', { params: { id: `eq.${APP.user.tenant_id}`, select: '*' } });
     APP.tenant = tenants[0];
     await carregarDados();
@@ -914,16 +969,16 @@ async function inicializar() {
 }
 
 async function carregarDados() {
-  const tid = APP.user.tenant_id;
+  // MUDANÇA CRÍTICA: Remover filtros manuais de tenant_id, deixar RLS fazer o trabalho
   const [contas, cats, clis, fors, recs, desps, metas, recorr] = await Promise.all([
-    supa('GET', 'fin_contas',        { params: { tenant_id: `eq.${tid}`, ativo: 'eq.true', select: '*' } }),
-    supa('GET', 'fin_categorias',    { params: { tenant_id: `eq.${tid}`, ativo: 'eq.true', select: '*', order: 'nome.asc' } }),
-    supa('GET', 'fin_clientes',      { params: { tenant_id: `eq.${tid}`, ativo: 'eq.true', select: '*', order: 'nome.asc' } }),
-    supa('GET', 'fin_fornecedores',  { params: { tenant_id: `eq.${tid}`, ativo: 'eq.true', select: '*', order: 'nome.asc' } }),
-    supa('GET', 'fin_receitas',      { params: { tenant_id: `eq.${tid}`, select: '*', order: 'vencimento.desc', limit: 200 } }),
-    supa('GET', 'fin_despesas',      { params: { tenant_id: `eq.${tid}`, select: '*', order: 'vencimento.desc', limit: 200 } }),
-    supa('GET', 'fin_metas',         { params: { tenant_id: `eq.${tid}`, select: '*', order: 'prazo.asc' } }).catch(()=>[]),
-    supa('GET', 'fin_recorrencias',  { params: { tenant_id: `eq.${tid}`, select: '*', order: 'criado_em.asc' } }).catch(()=>[]),
+    supa('GET', 'fin_contas',        { params: { ativo: 'eq.true', select: '*' } }),
+    supa('GET', 'fin_categorias',    { params: { ativo: 'eq.true', select: '*', order: 'nome.asc' } }),
+    supa('GET', 'fin_clientes',      { params: { ativo: 'eq.true', select: '*', order: 'nome.asc' } }),
+    supa('GET', 'fin_fornecedores',  { params: { ativo: 'eq.true', select: '*', order: 'nome.asc' } }),
+    supa('GET', 'fin_receitas',      { params: { select: '*', order: 'vencimento.desc', limit: 200 } }),
+    supa('GET', 'fin_despesas',      { params: { select: '*', order: 'vencimento.desc', limit: 200 } }),
+    supa('GET', 'fin_metas',         { params: { select: '*', order: 'prazo.asc' } }).catch(()=>[]),
+    supa('GET', 'fin_recorrencias',  { params: { select: '*', order: 'criado_em.asc' } }).catch(()=>[]),
   ]);
   CONTAS = contas; CATEGORIAS = cats; CLIENTES = clis;
   FORNECEDORES = fors; RECEITAS = recs; DESPESAS = desps;
@@ -1064,6 +1119,10 @@ async function finalizarOnboarding() {
       headers: { apikey: SUPA_KEY, Authorization: `Bearer ${APP.token}` }
     }).then(r => r.json());
     await supa('POST', 'fin_usuarios', { body: { tenant_id: tenant.id, auth_id: authUser.id, nome: APP.nomeTemp, email: authUser.email, perfil: 'admin' } });
+    
+    // CRÍTICO: Setar tenant_id no JWT antes de continuar
+    await setTenantIdInJWT(tenant.id);
+    
     await supa('POST', 'fin_contas', { body: { tenant_id: tenant.id, nome: OB.contaNome, tipo: OB.contaTipo, saldo_inicial: OB.contaSaldo, saldo_atual: OB.contaSaldo } });
     const cats = OB.categoriasSel.length > 0 ? OB.categoriasSel.map(i => CATEGORIAS_PADRAO[i]) : CATEGORIAS_PADRAO;
     if (cats.length > 0) await supa('POST', 'fin_categorias', { body: cats.map(c => ({ tenant_id: tenant.id, ...c, padrao: true })) });
@@ -6209,6 +6268,56 @@ async function confirmarExcluirEmpresaSA(tenantId, nome) {
   } catch(e) { toast('Erro: ' + e.message, 'error'); }
 }
 
+// ── FUNÇÃO DE TESTE RLS ───────────────────────────────────────
+async function testarRLS() {
+  console.log('🧪 TESTE RLS - Iniciando...');
+  
+  try {
+    // Teste 1: Listar dados que devem estar filtrados por tenant
+    console.log('📊 Teste 1: Carregar dados via RLS...');
+    const contas = await supa('GET', 'fin_contas', { params: { select: '*' } });
+    const receitas = await supa('GET', 'fin_receitas', { params: { select: '*' } });
+    const categorias = await supa('GET', 'fin_categorias', { params: { select: '*' } });
+    
+    console.log('✅ Dados retornados:', {
+      contas: contas.length,
+      receitas: receitas.length, 
+      categorias: categorias.length,
+      tenant_atual: APP.user.tenant_id
+    });
+    
+    // Teste 2: Tentar inserir sem tenant_id manual
+    console.log('📊 Teste 2: Inserir categoria sem tenant_id manual...');
+    const novaCategoria = await supa('POST', 'fin_categorias', {
+      body: { nome: 'Teste RLS', tipo: 'receita', cor: '#ff0000', icone: '🧪' },
+      returning: true
+    });
+    console.log('✅ Inserção via RLS funcionou:', novaCategoria[0]);
+    
+    // Teste 3: Verificar se foi criado com tenant_id correto
+    const testeCats = await supa('GET', 'fin_categorias', { 
+      params: { nome: 'eq.Teste RLS', select: '*' } 
+    });
+    if (testeCats[0]?.tenant_id === APP.user.tenant_id) {
+      console.log('✅ RLS funcionando: categoria criada com tenant_id correto');
+    } else {
+      console.log('❌ RLS falhou: tenant_id incorreto ou ausente');
+    }
+    
+    // Limpar teste
+    await supa('DELETE', 'fin_categorias', { params: { nome: 'eq.Teste RLS' } });
+    
+    toast('🧪 Teste RLS concluído - ver console', 'success');
+    
+  } catch(e) {
+    console.error('❌ Erro no teste RLS:', e);
+    toast('❌ Teste RLS falhou: ' + e.message, 'error');
+  }
+}
+
+// Adicionar função ao escopo global
+window.testarRLS = testarRLS;
+
 // ── INIT ──────────────────────────────────────────────────────
 window.addEventListener('load', () => {
   // Aplica guard de perfil nas funções destrutivas (viewer = só leitura)
@@ -6216,6 +6325,8 @@ window.addEventListener('load', () => {
     if (typeof window[fn] === 'function') window[fn] = guardAdmin(window[fn]);
   });
   $id('auth-screen').classList.add('visible');
+  console.log('🚀 Financeiro Pro carregado - versão com RLS corrigido');
+  console.log('💡 Para testar RLS após login, execute: testarRLS()');
 });
 </script>
 </body>

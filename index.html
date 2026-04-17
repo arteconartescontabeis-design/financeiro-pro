@@ -6721,97 +6721,193 @@ async function parseDocument(file) {
 
 async function parseOFXDocument(text) {
   console.log('🏦 Iniciando parse OFX...');
+  console.log('🏦 Primeiros 500 caracteres:', text.substring(0, 500));
+  
   const transactions = [];
   
-  // Patterns para extrair transações do OFX
-  const transactionPattern = /<STMTTRN>([\s\S]*?)<\/STMTTRN>/g;
+  // Tentar múltiplos patterns para OFX
+  console.log('🔍 Procurando por tags de transação...');
   
-  let match;
-  while ((match = transactionPattern.exec(text)) !== null) {
-    const transactionBlock = match[1];
-    console.log('🔍 Bloco transação encontrado:', transactionBlock.substring(0, 100));
+  // Pattern 1: <STMTTRN>...</STMTTRN>
+  let transactionPattern = /<STMTTRN>([\s\S]*?)<\/STMTTRN>/gi;
+  let matches = [...text.matchAll(transactionPattern)];
+  console.log('🔍 Pattern STMTTRN encontrou:', matches.length, 'transações');
+  
+  // Se não encontrou, tentar sem as tags de fechamento
+  if (matches.length === 0) {
+    console.log('🔍 Tentando pattern sem tags de fechamento...');
+    transactionPattern = /<STMTTRN>([\s\S]*?)(?=<STMTTRN|<\/STMTTRNS|$)/gi;
+    matches = [...text.matchAll(transactionPattern)];
+    console.log('🔍 Pattern alternativo encontrou:', matches.length, 'transações');
+  }
+  
+  // Se ainda não encontrou, tentar buscar campos individuais
+  if (matches.length === 0) {
+    console.log('🔍 Buscando campos individuais...');
     
-    // Extrair campos da transação
-    const dtPosted = extractOFXField(transactionBlock, 'DTPOSTED');
-    const trnAmt = extractOFXField(transactionBlock, 'TRNAMT');
-    const memo = extractOFXField(transactionBlock, 'MEMO') || extractOFXField(transactionBlock, 'NAME') || 'Transação';
-    const trnType = extractOFXField(transactionBlock, 'TRNTYPE');
+    // Buscar todas as datas
+    const dtMatches = [...text.matchAll(/DTPOSTED>(\d{8})/gi)];
+    console.log('🔍 DTPOSTED encontradas:', dtMatches.length);
+    dtMatches.forEach((match, i) => console.log(`Data ${i+1}:`, match[1]));
     
-    console.log('🔍 Campos extraídos:', { dtPosted, trnAmt, memo, trnType });
+    // Buscar todos os valores
+    const amtMatches = [...text.matchAll(/TRNAMT>([-]?\d+\.?\d*)/gi)];
+    console.log('🔍 TRNAMT encontrados:', amtMatches.length);
+    amtMatches.forEach((match, i) => console.log(`Valor ${i+1}:`, match[1]));
     
-    if (dtPosted && trnAmt) {
-      // Converter data YYYYMMDD para DD/MM/YYYY
-      let formattedDate = dtPosted;
-      if (dtPosted.length >= 8) {
-        const year = dtPosted.substring(0, 4);
-        const month = dtPosted.substring(4, 6);
-        const day = dtPosted.substring(6, 8);
-        formattedDate = `${day}/${month}/${year}`;
-      }
+    // Buscar descrições
+    const memoMatches = [...text.matchAll(/MEMO>([^<\n\r]+)/gi)];
+    console.log('🔍 MEMO encontrados:', memoMatches.length);
+    memoMatches.forEach((match, i) => console.log(`Memo ${i+1}:`, match[1]));
+    
+    // Se encontrou pelo menos datas e valores, montar transações
+    if (dtMatches.length > 0 && amtMatches.length > 0) {
+      const minLength = Math.min(dtMatches.length, amtMatches.length);
+      console.log('🔍 Montando', minLength, 'transações dos campos individuais');
       
-      // Converter valor
-      const valor = parseFloat(trnAmt);
-      
-      if (!isNaN(valor) && Math.abs(valor) > 0.01) {
-        const transaction = {
-          data: formattedDate,
-          descricao: memo.trim(),
-          valor: valor,
-          tipo: valor > 0 ? 'receita' : 'despesa'
-        };
+      for (let i = 0; i < minLength; i++) {
+        const dtPosted = dtMatches[i][1];
+        const trnAmt = amtMatches[i][1];
+        const memo = memoMatches[i] ? memoMatches[i][1].trim() : `Transação bancária ${i + 1}`;
         
-        console.log('✅ Transação OFX criada:', transaction);
-        transactions.push(transaction);
+        console.log(`🔍 Processando transação ${i+1}:`, { dtPosted, trnAmt, memo });
+        
+        // Converter data YYYYMMDD para DD/MM/YYYY
+        if (dtPosted.length >= 8) {
+          const year = dtPosted.substring(0, 4);
+          const month = dtPosted.substring(4, 6);
+          const day = dtPosted.substring(6, 8);
+          const formattedDate = `${day}/${month}/${year}`;
+          
+          // Converter valor
+          const valor = parseFloat(trnAmt);
+          
+          if (!isNaN(valor)) {
+            const transaction = {
+              data: formattedDate,
+              descricao: memo,
+              valor: valor,
+              tipo: valor > 0 ? 'receita' : 'despesa'
+            };
+            
+            console.log('✅ Transação OFX criada:', transaction);
+            transactions.push(transaction);
+          }
+        }
+      }
+    } else {
+      // Último recurso: tentar encontrar qualquer padrão de data e valor
+      console.log('🔍 Último recurso: buscando padrões alternativos...');
+      
+      // Mostrar mais do conteúdo para debug
+      console.log('🔍 Conteúdo completo (primeiros 1000 chars):', text.substring(0, 1000));
+      console.log('🔍 Buscando por qualquer número que pareça data...');
+      
+      const anyDatePattern = /(\d{8})/g;
+      const anyAmountPattern = /([-]?\d+\.\d{2})/g;
+      
+      const dates = [...text.matchAll(anyDatePattern)];
+      const amounts = [...text.matchAll(anyAmountPattern)];
+      
+      console.log('🔍 Datas possíveis:', dates.map(d => d[1]).slice(0, 10));
+      console.log('🔍 Valores possíveis:', amounts.map(a => a[1]).slice(0, 10));
+      
+      if (dates.length > 0 && amounts.length > 0) {
+        console.log('⚠️ Criando transações genéricas...');
+        
+        const maxTransactions = Math.min(dates.length, amounts.length, 20); // Limitar a 20
+        
+        for (let i = 0; i < maxTransactions; i++) {
+          const dateStr = dates[i][1];
+          const amountStr = amounts[i][1];
+          
+          // Validar se parece uma data válida
+          if (dateStr.length === 8) {
+            const year = parseInt(dateStr.substring(0, 4));
+            const month = parseInt(dateStr.substring(4, 6));
+            const day = parseInt(dateStr.substring(6, 8));
+            
+            if (year >= 2020 && year <= 2025 && month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+              const formattedDate = `${day.toString().padStart(2, '0')}/${month.toString().padStart(2, '0')}/${year}`;
+              const valor = parseFloat(amountStr);
+              
+              if (!isNaN(valor) && Math.abs(valor) > 0.01) {
+                transactions.push({
+                  data: formattedDate,
+                  descricao: `Transação bancária ${i + 1}`,
+                  valor: valor,
+                  tipo: valor > 0 ? 'receita' : 'despesa'
+                });
+              }
+            }
+          }
+        }
+      }
+    }
+  } else {
+    // Processar transações encontradas pelos patterns normais
+    console.log('🔍 Processando transações encontradas pelos patterns...');
+    
+    for (let i = 0; i < matches.length; i++) {
+      const transactionBlock = matches[i][1];
+      console.log(`🔍 Bloco transação ${i+1}:`, transactionBlock.substring(0, 200));
+      
+      const dtPosted = extractOFXField(transactionBlock, 'DTPOSTED');
+      const trnAmt = extractOFXField(transactionBlock, 'TRNAMT');
+      const memo = extractOFXField(transactionBlock, 'MEMO') || extractOFXField(transactionBlock, 'NAME') || `Transação ${i + 1}`;
+      
+      console.log('🔍 Campos extraídos:', { dtPosted, trnAmt, memo });
+      
+      if (dtPosted && trnAmt) {
+        let formattedDate = dtPosted;
+        if (dtPosted.length >= 8) {
+          const year = dtPosted.substring(0, 4);
+          const month = dtPosted.substring(4, 6);
+          const day = dtPosted.substring(6, 8);
+          formattedDate = `${day}/${month}/${year}`;
+        }
+        
+        const valor = parseFloat(trnAmt);
+        
+        if (!isNaN(valor) && Math.abs(valor) > 0.01) {
+          const transaction = {
+            data: formattedDate,
+            descricao: memo.trim(),
+            valor: valor,
+            tipo: valor > 0 ? 'receita' : 'despesa'
+          };
+          
+          console.log('✅ Transação OFX criada:', transaction);
+          transactions.push(transaction);
+        }
       }
     }
   }
   
-  // Se não encontrou pelo pattern principal, tentar outro approach
-  if (transactions.length === 0) {
-    console.log('🔍 Tentando parser OFX alternativo...');
-    
-    // Buscar por campos individuais
-    const dtMatches = [...text.matchAll(/<DTPOSTED>(\d{8})/g)];
-    const amtMatches = [...text.matchAll(/<TRNAMT>([-]?\d+\.?\d*)/g)];
-    const memoMatches = [...text.matchAll(/<MEMO>([^<]+)/g)];
-    
-    console.log('🔍 Matches encontrados:', {
-      dates: dtMatches.length,
-      amounts: amtMatches.length,
-      memos: memoMatches.length
-    });
-    
-    const minLength = Math.min(dtMatches.length, amtMatches.length);
-    
-    for (let i = 0; i < minLength; i++) {
-      const dtPosted = dtMatches[i][1];
-      const trnAmt = amtMatches[i][1];
-      const memo = memoMatches[i] ? memoMatches[i][1] : `Transação ${i + 1}`;
-      
-      // Converter data
-      const year = dtPosted.substring(0, 4);
-      const month = dtPosted.substring(4, 6);
-      const day = dtPosted.substring(6, 8);
-      const formattedDate = `${day}/${month}/${year}`;
-      
-      // Converter valor
-      const valor = parseFloat(trnAmt);
-      
-      if (!isNaN(valor)) {
-        transactions.push({
-          data: formattedDate,
-          descricao: memo.trim(),
-          valor: valor,
-          tipo: valor > 0 ? 'receita' : 'despesa'
-        });
-      }
-    }
-  }
-  
-  console.log('🏦 Total de transações OFX:', transactions.length);
+  console.log('🏦 Total de transações OFX encontradas:', transactions.length);
   
   if (transactions.length === 0) {
-    throw new Error('Nenhuma transação encontrada no arquivo OFX. Verifique se o arquivo contém dados de transações.');
+    // Mostrar debug mais detalhado
+    console.log('❌ NENHUMA TRANSAÇÃO ENCONTRADA - DEBUG COMPLETO:');
+    console.log('Arquivo contém OFXHEADER?', text.includes('OFXHEADER'));
+    console.log('Arquivo contém STMTTRN?', text.includes('STMTTRN'));
+    console.log('Arquivo contém DTPOSTED?', text.includes('DTPOSTED'));
+    console.log('Arquivo contém TRNAMT?', text.includes('TRNAMT'));
+    
+    throw new Error(`Nenhuma transação encontrada no arquivo OFX.
+
+DIAGNÓSTICO:
+- Tamanho do arquivo: ${text.length} caracteres
+- Contém OFXHEADER: ${text.includes('OFXHEADER') ? 'SIM' : 'NÃO'}
+- Contém STMTTRN: ${text.includes('STMTTRN') ? 'SIM' : 'NÃO'}
+- Contém DTPOSTED: ${text.includes('DTPOSTED') ? 'SIM' : 'NÃO'}
+- Contém TRNAMT: ${text.includes('TRNAMT') ? 'SIM' : 'NÃO'}
+
+Primeiros 300 caracteres do arquivo:
+${text.substring(0, 300)}
+
+Se o arquivo tem transações, pode ser um formato OFX não padrão. 
+Tente exportar novamente do seu banco ou converta para CSV.`);
   }
   
   return transactions;

@@ -6702,10 +6702,9 @@ function updateProcessStep(stepId, status) {
 
 async function parseDocument(file) {
   const text = await file.text();
-  console.log('🔍 ARQUIVO COMPLETO:', text.substring(0, 300));
+  console.log('🔍 ARQUIVO:', file.name);
   console.log('🔍 TAMANHO:', text.length, 'bytes');
   console.log('🔍 TIPO:', file.type);
-  console.log('🔍 NOME:', file.name);
   
   const transactions = [];
   
@@ -6713,9 +6712,138 @@ async function parseDocument(file) {
   if (text.includes('OFXHEADER') || text.includes('<OFX>')) {
     console.log('🏦 Detectado arquivo OFX - processando...');
     return parseOFXDocument(text);
+  } else if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
+    console.log('📄 Detectado arquivo PDF - processando...');
+    return parsePDFDocument(file);
   } else {
     console.log('📊 Detectado arquivo CSV - processando...');
     return parseCSVDocument(text);
+  }
+}
+
+async function parsePDFDocument(file) {
+  console.log('📄 Iniciando extração de PDF...');
+  
+  // PDFs precisam ser processados diferente - vamos usar uma abordagem simples
+  // Como não temos bibliotecas PDF no frontend, vamos orientar o usuário
+  
+  toast('⚠️ PDFs requerem conversão. Baixando arquivo para análise...', 'warning', 3000);
+  
+  try {
+    // Tentar ler como texto (alguns PDFs podem ter texto extraível)
+    const text = await file.text();
+    console.log('📄 Tentando ler PDF como texto:', text.substring(0, 200));
+    
+    // Se contém texto legível, tentar extrair
+    if (text.includes('Extrato') || text.includes('Banco') || text.includes('Data') || /\d{2}\/\d{2}\/\d{4}/.test(text)) {
+      console.log('📄 PDF contém texto extraível!');
+      
+      // Usar parser CSV no texto do PDF
+      const transactions = [];
+      const lines = text.split(/[\n\r]+/).filter(line => line.trim());
+      
+      console.log('📄 Linhas encontradas no PDF:', lines.length);
+      
+      for (let i = 0; i < Math.min(lines.length, 50); i++) { // Limitar a 50 linhas para teste
+        const line = lines[i].trim();
+        console.log(`Linha ${i+1}:`, line);
+        
+        // Buscar padrões de extrato bancário
+        const patterns = [
+          // DD/MM/YYYY DESCRIÇÃO VALOR
+          /(\d{1,2}\/\d{1,2}\/\d{4})\s+(.+?)\s+([-]?\d+[.,]\d{2})/,
+          // DD/MM DESCRIÇÃO VALOR
+          /(\d{1,2}\/\d{1,2})\s+(.+?)\s+([-]?\d+[.,]\d{2})/,
+          // VALOR no final da linha
+          /(.+?)\s+(\d{1,2}\/\d{1,2}\/?\d{0,4})\s+([-]?\d+[.,]\d{2})/
+        ];
+        
+        for (const pattern of patterns) {
+          const match = line.match(pattern);
+          if (match) {
+            const [_, part1, part2, part3] = match;
+            
+            // Detectar qual parte é data, descrição e valor
+            let date, description, amount;
+            
+            if (/\d{1,2}\/\d{1,2}/.test(part1)) {
+              date = part1;
+              description = part2;
+              amount = part3;
+            } else if (/\d{1,2}\/\d{1,2}/.test(part2)) {
+              description = part1;
+              date = part2;
+              amount = part3;
+            } else {
+              continue;
+            }
+            
+            // Processar data
+            let fullDate = date;
+            if (date.length <= 5) { // DD/MM
+              fullDate = `${date}/${new Date().getFullYear()}`;
+            }
+            
+            // Processar valor
+            let valor = parseFloat(amount.replace(',', '.').replace(/[^\d.-]/g, ''));
+            
+            if (!isNaN(valor) && Math.abs(valor) > 0.01) {
+              // Detectar sinal por contexto se não explícito
+              if (!amount.includes('-') && !amount.includes('+')) {
+                const desc = description.toLowerCase();
+                if (desc.includes('deb') || desc.includes('pagamento') || desc.includes('taxa') || desc.includes('tarifa')) {
+                  valor = -Math.abs(valor);
+                }
+              }
+              
+              transactions.push({
+                data: fullDate,
+                descricao: description.trim(),
+                valor: valor,
+                tipo: valor > 0 ? 'receita' : 'despesa'
+              });
+              
+              console.log('✅ Transação PDF extraída:', transactions[transactions.length - 1]);
+              break; // Parar no primeiro pattern que funcionar
+            }
+          }
+        }
+      }
+      
+      if (transactions.length > 0) {
+        console.log('📄 Total de transações extraídas do PDF:', transactions.length);
+        return transactions;
+      }
+    }
+    
+    // Se chegou aqui, o PDF não é legível ou não contém transações
+    throw new Error(`PDF não pôde ser processado automaticamente.
+
+SOLUÇÕES:
+
+1. 📊 EXPORT COMO CSV/OFX:
+   - Acesse seu internet banking
+   - Exporte o extrato como CSV, OFX ou TXT
+   - Esses formatos são 100% compatíveis
+
+2. 📄 PDF COM TEXTO:
+   - Certifique-se que o PDF não é uma imagem escaneada
+   - O PDF deve ter texto selecionável
+   - Teste copiar texto do PDF - se conseguir, envie novamente
+
+3. 🔄 CONVERTA O PDF:
+   - Use uma ferramenta online para PDF → CSV
+   - Ou copie manualmente o texto e salve como CSV
+
+FORMATO CSV ESPERADO:
+15/03/2024,PIX RECEBIDO,1000.50
+16/03/2024,PAGAMENTO,-500.00
+
+O sistema funcionará perfeitamente com esses formatos! 📊`);
+    
+  } catch (error) {
+    console.error('❌ Erro ao processar PDF:', error);
+    throw new Error('Erro ao processar PDF. Por favor, converta para CSV ou OFX primeiro.');
   }
 }
 

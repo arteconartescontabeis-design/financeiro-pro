@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -4116,19 +4115,23 @@ function renderDocumentos() {
     <!-- Configuração Claude API -->
     <div class="content-card" id="claude-config" style="margin-bottom: 20px;">
       <h3 style="margin-bottom: 16px; display: flex; align-items: center; gap: 8px;">
-        🔑 <span>Configuração Claude API</span>
-        <span class="badge ${DOC_AI.claude_key ? 'badge-green' : 'badge-red'}" id="api-status">
-          ${DOC_AI.claude_key ? 'Configurado' : 'Não configurado'}
+        🔑 <span>Claude API (Opcional)</span>
+        <span class="badge ${DOC_AI.claude_key ? 'badge-green' : 'badge-amber'}" id="api-status">
+          ${DOC_AI.claude_key ? 'IA Ativa' : 'IA Automática'}
         </span>
       </h3>
+      <p style="font-size: 13px; color: var(--text-3); margin-bottom: 16px;">
+        <strong>Sistema funciona sem API!</strong> Com Claude API: categorização por IA avançada. 
+        Sem API: categorização automática inteligente por regras.
+      </p>
       <div class="form-grid">
         <div class="form-group">
-          <label class="form-label">Claude API Key</label>
+          <label class="form-label">Claude API Key (Opcional)</label>
           <input type="password" id="claude-api-key" class="form-input" 
-                 placeholder="sk-ant-api..." value="${DOC_AI.claude_key || ''}"
+                 placeholder="sk-ant-api... (deixe vazio para usar regras automáticas)" value="${DOC_AI.claude_key || ''}"
                  style="font-family: var(--mono); font-size: 12px;">
           <small style="color: var(--text-3); margin-top: 4px; display: block;">
-            Obtenha sua API key em: <a href="https://console.anthropic.com/" target="_blank" style="color: var(--gold);">console.anthropic.com</a>
+            Para IA avançada: <a href="https://console.anthropic.com/" target="_blank" style="color: var(--gold);">console.anthropic.com</a>
           </small>
         </div>
       </div>
@@ -4156,7 +4159,7 @@ function renderDocumentos() {
             <div id="file-details" style="font-size: 12px; color: var(--text-3);"></div>
           </div>
           <button class="btn btn-gold" onclick="processDocument()" id="process-btn">
-            🧠 Analisar com IA
+            🧠 Analisar Documento
           </button>
         </div>
       </div>
@@ -6602,23 +6605,24 @@ function handleFileSelection(file) {
 
 function saveClaudeKey() {
   const key = $id('claude-api-key').value.trim();
-  if (!key) {
-    toast('Digite uma API key válida.', 'error');
-    return;
-  }
   
-  if (!key.startsWith('sk-ant-api')) {
-    toast('API key deve começar com "sk-ant-api"', 'error');
+  if (key && !key.startsWith('sk-ant-api')) {
+    toast('API key deve começar com "sk-ant-api" ou deixe vazio para modo automático.', 'error');
     return;
   }
   
   DOC_AI.claude_key = key;
   localStorage.setItem('claude_api_key', key);
   
-  $id('api-status').textContent = 'Configurado';
-  $id('api-status').className = 'badge badge-green';
-  
-  toast('Claude API configurada com sucesso!', 'success');
+  if (key) {
+    $id('api-status').textContent = 'IA Ativa';
+    $id('api-status').className = 'badge badge-green';
+    toast('Claude API ativada! Categorização por IA avançada habilitada.', 'success');
+  } else {
+    $id('api-status').textContent = 'IA Automática';
+    $id('api-status').className = 'badge badge-amber';
+    toast('Modo automático ativado! Categorização inteligente por regras.', 'success');
+  }
 }
 
 function loadClaudeKey() {
@@ -6626,19 +6630,17 @@ function loadClaudeKey() {
   if (savedKey) {
     DOC_AI.claude_key = savedKey;
     $id('claude-api-key').value = savedKey;
-    $id('api-status').textContent = 'Configurado';
+    $id('api-status').textContent = 'IA Ativa';
     $id('api-status').className = 'badge badge-green';
+  } else {
+    $id('api-status').textContent = 'IA Automática';
+    $id('api-status').className = 'badge badge-amber';
   }
 }
 
 async function processDocument() {
   if (!DOC_AI.currentFile) {
     toast('Nenhum arquivo selecionado.', 'error');
-    return;
-  }
-  
-  if (!DOC_AI.claude_key) {
-    toast('Configure a Claude API key primeiro.', 'error');
     return;
   }
   
@@ -6655,19 +6657,29 @@ async function processDocument() {
     const rawData = await parseDocument(DOC_AI.currentFile);
     updateProcessStep('step-parse', 'completed');
     
-    // Passo 2: Análise com Claude (pode falhar)
+    // Passo 2: Tentar análise com Claude (pode falhar por CORS)
     updateProcessStep('step-analyze', 'processing');
     let analyzed = null;
-    try {
-      analyzed = await analyzeWithClaude(rawData);
-      updateProcessStep('step-analyze', 'completed');
-    } catch (apiError) {
-      console.error('❌ Erro da Claude API:', apiError);
+    let useAI = false;
+    
+    // Só tentar IA se a API key estiver configurada
+    if (DOC_AI.claude_key && DOC_AI.claude_key.startsWith('sk-ant-api')) {
+      try {
+        analyzed = await analyzeWithClaude(rawData);
+        updateProcessStep('step-analyze', 'completed');
+        useAI = true;
+        console.log('✅ IA funcionou - usando análise completa');
+      } catch (apiError) {
+        console.error('❌ Erro da Claude API (CORS ou outro):', apiError.message);
+        updateProcessStep('step-analyze', 'error');
+        
+        // CORS ou outro erro - continuar sem IA
+        toast(`⚠️ IA indisponível (CORS). Usando categorização inteligente automática.`, 'warning', 4000);
+      }
+    } else {
+      console.log('💡 API key não configurada - usando fallback');
       updateProcessStep('step-analyze', 'error');
-      
-      // Continuar sem IA
-      toast(`⚠️ Claude API falhou: ${apiError.message.split('\n')[0]}. Usando categorização básica.`, 'warning', 8000);
-      await new Promise(resolve => setTimeout(resolve, 2000)); // Pause para ler a mensagem
+      toast(`💡 Configure a Claude API para IA completa. Usando categorização automática.`, 'info', 4000);
     }
     
     // Passo 3: Categorização (sempre funciona)
@@ -6683,8 +6695,10 @@ async function processDocument() {
       $id('results-card').style.display = 'block';
       displayResults(categorized);
       
-      if (!analyzed) {
-        toast('💡 Análise básica aplicada. Configure a Claude API corretamente para IA completa.', 'default', 5000);
+      if (!useAI) {
+        toast(`✅ ${categorized.length} transações categorizadas automaticamente! Revise e importe.`, 'success', 5000);
+      } else {
+        toast(`🧠 ${categorized.length} transações analisadas pela IA! Pronto para importar.`, 'success');
       }
     }, 1000);
     
@@ -6695,7 +6709,7 @@ async function processDocument() {
   } finally {
     DOC_AI.isProcessing = false;
     $id('process-btn').disabled = false;
-    $id('process-btn').textContent = '🧠 Analisar com IA';
+    $id('process-btn').textContent = '🧠 Analisar Documento';
   }
 }
 
@@ -7368,41 +7382,79 @@ async function categorizeTransactions(analyzed, rawTransactions) {
       cliente_fornecedor = analysis.cliente_fornecedor || '';
       confianca = analysis.confianca || 50;
     } else {
-      // Fallback sem IA - categorização simples por palavras-chave
+      // Fallback sem IA - categorização inteligente
+      console.log(`💡 Aplicando categorização sem IA para: "${transaction.descricao}"`);
+      
       const desc = transaction.descricao.toLowerCase();
       
-      if (transaction.tipo === 'receita') {
-        if (desc.includes('pix') || desc.includes('recebido') || desc.includes('recebimento')) {
-          categoria = CATEGORIAS.find(c => c.nome.includes('Vendas') || c.nome.includes('Receita'));
-          confianca = 70;
-        }
-      } else {
-        if (desc.includes('pagamento') || desc.includes('fornecedor')) {
+      // Categorização específica por tipo de documento
+      if (transaction.nfe_numero || desc.includes('nfe') || desc.includes('nfse')) {
+        // É uma nota fiscal
+        if (desc.includes('material') || desc.includes('produto') || desc.includes('mercadoria')) {
+          categoria = CATEGORIAS.find(c => c.nome.includes('Material') || c.nome.includes('Produto'));
+          confianca = 80;
+        } else if (desc.includes('serviço') || desc.includes('servico') || transaction.nfe_fornecedor) {
+          categoria = CATEGORIAS.find(c => c.nome.includes('Serviço') || c.nome.includes('Servicos'));
+          confianca = 85;
+        } else {
           categoria = CATEGORIAS.find(c => c.nome.includes('Fornecedor'));
           confianca = 70;
-        } else if (desc.includes('taxa') || desc.includes('tarifa')) {
-          categoria = CATEGORIAS.find(c => c.nome.includes('Taxa') || c.nome.includes('Bancária'));
+        }
+        
+        // Usar fornecedor da NFe se disponível
+        cliente_fornecedor = transaction.nfe_fornecedor || 'Fornecedor da Nota';
+        
+      } else if (transaction.tipo === 'receita') {
+        // Receitas
+        if (desc.includes('pix') || desc.includes('recebido') || desc.includes('recebimento')) {
+          categoria = CATEGORIAS.find(c => c.nome.includes('Vendas') || c.nome.includes('Receita'));
+          confianca = 75;
+        } else if (desc.includes('cobranca') || desc.includes('liquidacao')) {
+          categoria = CATEGORIAS.find(c => c.nome.includes('Vendas'));
           confianca = 80;
+        }
+        
+      } else {
+        // Despesas
+        if (desc.includes('pagamento') || desc.includes('fornecedor')) {
+          categoria = CATEGORIAS.find(c => c.nome.includes('Fornecedor'));
+          confianca = 75;
+        } else if (desc.includes('taxa') || desc.includes('tarifa') || desc.includes('bancaria')) {
+          categoria = CATEGORIAS.find(c => c.nome.includes('Taxa') || c.nome.includes('Bancária'));
+          confianca = 90;
         } else if (desc.includes('aluguel')) {
           categoria = CATEGORIAS.find(c => c.nome.includes('Aluguel'));
-          confianca = 90;
-        } else if (desc.includes('combustível') || desc.includes('posto')) {
+          confianca = 95;
+        } else if (desc.includes('combustível') || desc.includes('combustivel') || desc.includes('posto')) {
           categoria = CATEGORIAS.find(c => c.nome.includes('Combustível'));
-          confianca = 85;
+          confianca = 90;
+        } else if (desc.includes('energia') || desc.includes('luz') || desc.includes('eletrica')) {
+          categoria = CATEGORIAS.find(c => c.nome.includes('Energia'));
+          confianca = 90;
+        } else if (desc.includes('telefone') || desc.includes('internet') || desc.includes('telecom')) {
+          categoria = CATEGORIAS.find(c => c.nome.includes('Telefone') || c.nome.includes('Comunicação'));
+          confianca = 90;
         }
       }
       
-      // Extrair possível cliente/fornecedor
-      if (desc.includes('empresa')) {
-        cliente_fornecedor = 'EMPRESA (extraído)';
+      // Extrair possível cliente/fornecedor do texto
+      if (!cliente_fornecedor) {
+        if (desc.includes('empresa')) {
+          cliente_fornecedor = 'EMPRESA (extraído)';
+        } else {
+          // Pegar palavras maiúsculas que podem ser nomes
+          const words = transaction.descricao.split(' ');
+          const upperWords = words.filter(w => w.length > 2 && /^[A-Z]/.test(w) && !/^(PIX|COB|DAS|COTA)/.test(w));
+          if (upperWords.length > 0) {
+            cliente_fornecedor = upperWords.slice(0, 2).join(' ');
+          }
+        }
       }
-      
-      console.log(`💡 Fallback para "${transaction.descricao}" → ${categoria?.nome || 'Outros'}`);
     }
     
     // Categoria padrão se não encontrou
     if (!categoria) {
-      categoria = CATEGORIAS.find(c => c.tipo === transaction.tipo);
+      categoria = CATEGORIAS.find(c => c.tipo === transaction.tipo) || CATEGORIAS[0];
     }
     
     return {

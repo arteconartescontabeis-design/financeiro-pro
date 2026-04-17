@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -6728,8 +6729,9 @@ async function parseDocument(file) {
   if (text.includes('OFXHEADER') || text.includes('<OFX>')) {
     console.log('🏦 Detectado arquivo OFX - processando...');
     return parseOFXDocument(text);
-  } else if (text.includes('<nfeProc') || text.includes('<infNFe') || (file.name.toLowerCase().endsWith('.xml') && text.includes('NFe'))) {
-    console.log('🧾 Detectado XML de NFe - processando...');
+  } else if (text.includes('<nfeProc') || text.includes('<infNFe') || text.includes('<nfse') || 
+             (file.name.toLowerCase().endsWith('.xml') && (text.includes('NFe') || text.includes('nfse')))) {
+    console.log('🧾 Detectado XML de NFe/NFSe - processando...');
     return parseNFeXML(text, file.name);
   } else if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
     console.log('📄 Detectado arquivo PDF - processando...');
@@ -6762,7 +6764,9 @@ async function parsePDFDocument(file) {
     
     // DEBUG: Procurar linhas que contém datas
     console.log('📄 === LINHAS COM DATAS ===');
-    const dateLines = lines.filter(line => /\d{2}\/\d{2}\/\d{4}/.test(line));
+    const dateLines = lines.filter(line => 
+      /\d{1,2}\/\d{1,2}\/\d{4}|\d{1,2}\/\d{1,2}|\d{1,2}-\d{1,2}-\d{4}|\d{4}-\d{1,2}-\d{1,2}/.test(line)
+    );
     console.log('📄 Linhas com datas encontradas:', dateLines.length);
     dateLines.slice(0, 10).forEach((line, i) => {
       console.log(`Data ${i+1}:`, JSON.stringify(line));
@@ -6796,14 +6800,25 @@ async function parsePDFDocument(file) {
       }
       
       // Só processar linhas que têm data E valor
-      if (!(/\d{2}\/\d{2}\/\d{4}/.test(line) && /[-]?\d+[.,]\d{2}/.test(line))) {
+      if (!(/\d{1,2}\/\d{1,2}\/\d{4}|\d{1,2}\/\d{1,2}|\d{1,2}-\d{1,2}-\d{4}|\d{4}-\d{1,2}-\d{1,2}/.test(line) && /[-]?\d+[.,]\d{2}/.test(line))) {
         continue;
       }
       
       console.log(`📄 PROCESSANDO linha ${i+1}:`, JSON.stringify(line));
       
       // Pattern super simples: qualquer linha com data e valor
-      const dateMatch = line.match(/(\d{2}\/\d{2}\/\d{4})/);
+      const datePatterns = [
+        /(\d{1,2}\/\d{1,2}\/\d{4})/,  // DD/MM/YYYY ou D/M/YYYY
+        /(\d{1,2}\/\d{1,2})/,         // DD/MM ou D/M
+        /(\d{1,2}-\d{1,2}-\d{4})/,    // DD-MM-YYYY
+        /(\d{4}-\d{1,2}-\d{1,2})/     // YYYY-MM-DD
+      ];
+      
+      let dateMatch = null;
+      for (const pattern of datePatterns) {
+        dateMatch = line.match(pattern);
+        if (dateMatch) break;
+      }
       const valueMatches = line.match(/([-]?\d+[.,]\d{2})/g);
       
       if (dateMatch && valueMatches) {
@@ -6841,14 +6856,33 @@ async function parsePDFDocument(file) {
                 if (desc.includes('tarifa') || 
                     desc.includes('pagamento') || 
                     desc.includes('debito') ||
-                    desc.includes('manutencao')) {
+                    desc.includes('manutencao') ||
+                    desc.includes('taxa') ||
+                    desc.includes('saque')) {
                   valor = -Math.abs(valor);
                   console.log('📄 Valor convertido para negativo por contexto:', valor);
                 }
               }
               
+              // Processar data para formato padrão
+              let formattedDate = date;
+              if (date.includes('-')) {
+                // Converter formato YYYY-MM-DD ou DD-MM-YYYY
+                const parts = date.split('-');
+                if (parts[0].length === 4) {
+                  // YYYY-MM-DD
+                  formattedDate = `${parts[2]}/${parts[1]}/${parts[0]}`;
+                } else {
+                  // DD-MM-YYYY
+                  formattedDate = date.replace(/-/g, '/');
+                }
+              } else if (date.split('/').length === 2) {
+                // DD/MM → DD/MM/YYYY
+                formattedDate = `${date}/${new Date().getFullYear()}`;
+              }
+              
               const transaction = {
-                data: date,
+                data: formattedDate,
                 descricao: description,
                 valor: valor,
                 tipo: valor > 0 ? 'receita' : 'despesa'
@@ -7601,7 +7635,7 @@ Arquivo: ${fileName}`);
 }
 
 function extractNFeData(xmlDoc) {
-  console.log('🧾 Extraindo dados específicos da NFe...');
+  console.log('🧾 Extraindo dados específicos da NFe/NFSe...');
   
   // Helper function para extrair texto de elementos XML
   function getElementText(selector) {
@@ -7609,35 +7643,56 @@ function extractNFeData(xmlDoc) {
     return element ? element.textContent.trim() : null;
   }
   
-  // Dados básicos da NFe
-  const numero = getElementText('nNF');
-  const serie = getElementText('serie'); 
-  const dataEmissao = getElementText('dhEmi') || getElementText('dEmi');
-  const chave = getElementText('chNFe') || xmlDoc.querySelector('infNFe')?.getAttribute('Id')?.replace('NFe', '');
+  // Detectar tipo: NFe ou NFSe
+  const isNFSe = xmlDoc.querySelector('nfse') || xmlDoc.querySelector('numero_nfse');
+  console.log('🧾 Tipo detectado:', isNFSe ? 'NFSe' : 'NFe');
   
-  // Dados do emitente (fornecedor)
-  const cnpjFornecedor = getElementText('emit CNPJ');
-  const fornecedor = getElementText('emit xNome');
+  let numero, serie, dataEmissao, chave, cnpjFornecedor, fornecedor, cfop, natureza, valorTotal;
   
-  // Dados fiscais
-  const cfop = getElementText('CFOP');
-  const natureza = getElementText('natOp');
-  
-  // Valor total da NFe
-  let valorTotal = parseFloat(getElementText('vNF')) || 0;
-  if (valorTotal === 0) {
-    // Tentar outras tags de valor
-    valorTotal = parseFloat(getElementText('vProd')) || parseFloat(getElementText('total vNF')) || 0;
+  if (isNFSe) {
+    // Parse específico para NFSe
+    numero = getElementText('numero_nfse') || getElementText('numero');
+    serie = getElementText('serie_nfse') || getElementText('serie') || '1';
+    dataEmissao = getElementText('data_emissao') || getElementText('data_nfse');
+    chave = getElementText('codigo_verificacao') || getElementText('chave');
+    
+    // Prestador (quem emite a NFSe)
+    cnpjFornecedor = getElementText('prestador cnpj') || getElementText('cnpj_prestador') || getElementText('prestador cpf_cnpj');
+    fornecedor = getElementText('prestador razao_social') || getElementText('prestador nome') || getElementText('razao_social_prestador');
+    
+    // Dados do serviço
+    natureza = getElementText('discriminacao') || getElementText('descricao_servico') || 'Prestação de serviços';
+    valorTotal = parseFloat(getElementText('valor_servico') || getElementText('valor_total') || getElementText('valor_liquido') || getElementText('valor')) || 0;
+    
+    console.log('🧾 Dados NFSe extraídos:', {numero, serie, dataEmissao, cnpjFornecedor, fornecedor, valorTotal});
+    
+  } else {
+    // Parse padrão para NFe (código existente)
+    numero = getElementText('nNF');
+    serie = getElementText('serie'); 
+    dataEmissao = getElementText('dhEmi') || getElementText('dEmi');
+    chave = getElementText('chNFe') || xmlDoc.querySelector('infNFe')?.getAttribute('Id')?.replace('NFe', '');
+    
+    cnpjFornecedor = getElementText('emit CNPJ');
+    fornecedor = getElementText('emit xNome');
+    
+    cfop = getElementText('CFOP');
+    natureza = getElementText('natOp');
+    
+    valorTotal = parseFloat(getElementText('vNF')) || parseFloat(getElementText('vProd')) || parseFloat(getElementText('total vNF')) || 0;
   }
   
-  // Produtos (pegar alguns para descrição)
+  // Produtos (para NFe) ou serviços (para NFSe)
   const produtos = [];
-  const prodElements = xmlDoc.querySelectorAll('det');
-  for (let i = 0; i < Math.min(3, prodElements.length); i++) {
-    const prod = prodElements[i];
-    const nomeProd = prod.querySelector('xProd')?.textContent?.trim();
-    if (nomeProd) {
-      produtos.push(nomeProd);
+  if (isNFSe) {
+    const servico = getElementText('discriminacao') || getElementText('descricao_servico');
+    if (servico) produtos.push(servico.substring(0, 100));
+  } else {
+    const prodElements = xmlDoc.querySelectorAll('det');
+    for (let i = 0; i < Math.min(3, prodElements.length); i++) {
+      const prod = prodElements[i];
+      const nomeProd = prod.querySelector('xProd')?.textContent?.trim();
+      if (nomeProd) produtos.push(nomeProd);
     }
   }
   
@@ -7645,7 +7700,6 @@ function extractNFeData(xmlDoc) {
   let dataFormatada = null;
   if (dataEmissao) {
     try {
-      // Data pode estar em formato ISO (YYYY-MM-DD) ou brasileiro (DD/MM/YYYY)
       if (dataEmissao.includes('T')) {
         // Formato ISO: 2024-03-15T10:30:00
         const dataISO = dataEmissao.split('T')[0];
@@ -7655,6 +7709,9 @@ function extractNFeData(xmlDoc) {
         // Formato: 2024-03-15
         const [ano, mes, dia] = dataEmissao.split('-');
         dataFormatada = `${dia}/${mes}/${ano}`;
+      } else if (dataEmissao.includes('/')) {
+        // Já no formato brasileiro
+        dataFormatada = dataEmissao;
       } else {
         dataFormatada = dataEmissao;
       }
@@ -7673,7 +7730,8 @@ function extractNFeData(xmlDoc) {
     cfop: cfop,
     natureza: natureza,
     valor: valorTotal,
-    produtos: produtos.length > 0 ? produtos.slice(0, 2).join(', ') : null
+    produtos: produtos.length > 0 ? produtos.slice(0, 2).join(', ') : null,
+    tipo: isNFSe ? 'NFSe' : 'NFe'
   };
   
   console.log('🧾 Resultado da extração:', result);

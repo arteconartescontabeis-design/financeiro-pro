@@ -4004,17 +4004,249 @@ function htmlWidgetAnexos(tipoRef, refId) {
     </div>`;
 }
 
-async function handleAnexoUpload(input, tipoRef, refId) {
-  const file = input.files[0]; if (!file) return;
-  if (file.size > 10*1024*1024) { toast('Arquivo muito grande. Máximo 10MB.', 'error'); return; }
+// ============================================================
+// MÓDULO DE VALIDAÇÃO INTELIGENTE DE ANEXOS
+// ============================================================
+const CLAUDE_PROXY_URL = `${SUPA_URL}/functions/v1/claude-proxy`;
+
+function soDigitos(s) {
+  return (s || '').toString().replace(/\D/g, '');
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result.split(',')[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function usuarioEhAdmin() {
+  return APP.user && APP.user.perfil === 'admin';
+}
+
+function dadosParaValidacao(tipoRef, refId) {
+  let lanc = null, entidadeDoc = null, entidadeNome = null;
+
+  if (tipoRef === 'receita') {
+    lanc = RECEITAS.find(x => x.id === refId);
+    if (lanc && lanc.cliente_id) {
+      const entidade = CLIENTES.find(c => c.id === lanc.cliente_id);
+      if (entidade) { entidadeDoc = entidade.cpf_cnpj; entidadeNome = entidade.nome; }
+    }
+  } else if (tipoRef === 'despesa') {
+    lanc = DESPESAS.find(x => x.id === refId);
+    if (lanc && lanc.fornecedor_id) {
+      const entidade = FORNECEDORES.find(f => f.id === lanc.fornecedor_id);
+      if (entidade) { entidadeDoc = entidade.cpf_cnpj; entidadeNome = entidade.nome; }
+    }
+  } else if (tipoRef === 'imposto') {
+    lanc = IMPOSTOS.find(x => x.id === refId);
+    entidadeDoc = APP.tenant?.cnpj;
+    entidadeNome = APP.tenant?.nome;
+  }
+
+  if (!lanc) return null;
+
+  return {
+    lancamento: {
+      valor: parseFloat(lanc.valor) || null,
+      vencimento: lanc.vencimento || null,
+      numero_documento: lanc.numero_documento || null,
+      entidade_cnpj_cpf: entidadeDoc || null,
+      entidade_nome: entidadeNome || null,
+    },
+    lanc,
+    tipoRef,
+  };
+}
+
+async function validarDocumentoIA(file, lancamento) {
+  const fileBase64 = await fileToBase64(file);
+  const resp = await fetch(CLAUDE_PROXY_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${SUPA_KEY}`,
+      'apikey': SUPA_KEY,
+    },
+    body: JSON.stringify({
+      validar_documento: true,
+      file_base64: fileBase64,
+      media_type: file.type || 'application/octet-stream',
+      file_name: file.name,
+      lancamento,
+    }),
+  });
+  if (!resp.ok) {
+    const txt = await resp.text();
+    throw new Error(`Edge Function erro ${resp.status}: ${txt.slice(0, 200)}`);
+  }
+  return await resp.json();
+}
+
+function modalConferenciaAnexo(diag, contexto) {
+  const { status, mensagem, divergencias, coincidencias, dados_extraidos } = diag;
+  const statusStyle = {
+    ok:            { cor: 'var(--green)', bg: 'rgba(30,132,73,.08)', icone: '✓', titulo: 'Documento confere' },
+    divergente:    { cor: 'var(--amber)', bg: 'rgba(183,119,13,.08)', icone: '⚠', titulo: 'Divergências encontradas' },
+    bloqueado:     { cor: 'var(--red)',   bg: 'rgba(192,57,43,.08)',  icone: '✕', titulo: 'Anexo bloqueado' },
+    sem_validacao: { cor: 'var(--text-3)',bg: 'var(--surface-2)',     icone: '?', titulo: 'Validação parcial' },
+    erro:          { cor: 'var(--red)',   bg: 'rgba(192,57,43,.08)',  icone: '✕', titulo: 'Erro na análise' },
+  };
+  const st = statusStyle[status] || statusStyle.erro;
+  const extr = dados_extraidos || {};
+  const admin = usuarioEhAdmin();
+
+  let tabelaHtml = '';
+  if ((coincidencias && coincidencias.length) || (divergencias && divergencias.length)) {
+    const linhas = [];
+    for (const c of (coincidencias||[])) {
+      linhas.push(`<tr style="border-bottom:1px solid var(--border-lt)"><td style="padding:8px 10px;font-size:12px;color:var(--text-2)">${c.campo}</td><td style="padding:8px 10px;font-size:12px;color:var(--green);font-family:var(--mono)" colspan="2">✓ ${c.valor}</td></tr>`);
+    }
+    for (const d of (divergencias||[])) {
+      const corLinha = d.critico ? 'var(--red)' : 'var(--amber)';
+      linhas.push(`<tr style="border-bottom:1px solid var(--border-lt)"><td style="padding:8px 10px;font-size:12px;color:${corLinha};font-weight:600">${d.campo}${d.critico?' ⚠️':''}</td><td style="padding:8px 10px;font-size:12px;color:var(--text-3);font-family:var(--mono)"><div style="font-size:10px;color:var(--text-3)">Digitado</div>${d.digitado ?? '—'}</td><td style="padding:8px 10px;font-size:12px;color:${corLinha};font-family:var(--mono)"><div style="font-size:10px;color:var(--text-3)">No documento</div>${d.documento ?? '—'}</td></tr>`);
+    }
+    tabelaHtml = `<div style="margin-top:14px;background:var(--surface-2);border:1px solid var(--border-lt);border-radius:9px;overflow:hidden"><table style="width:100%;border-collapse:collapse"><thead><tr style="background:var(--surface)"><th style="padding:8px 10px;font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.06em;text-align:left">Campo</th><th style="padding:8px 10px;font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.06em;text-align:left">Lançamento</th><th style="padding:8px 10px;font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.06em;text-align:left">Documento</th></tr></thead><tbody>${linhas.join('')}</tbody></table></div>`;
+  }
+
+  const infoExtra = `<details style="margin-top:10px"><summary style="cursor:pointer;font-size:11px;color:var(--text-3);padding:6px 0">Ver dados extraídos pela IA</summary><div style="background:var(--bg-2);padding:10px 12px;border-radius:8px;font-family:var(--mono);font-size:11px;color:var(--text-2);margin-top:6px;line-height:1.6">${extr.tipo_documento ? `<div><b>Tipo:</b> ${extr.tipo_documento}</div>`:''}${extr.nome_emitente ? `<div><b>Emitente:</b> ${extr.nome_emitente}</div>`:''}${extr.cnpj_cpf_emitente ? `<div><b>CNPJ/CPF emit.:</b> ${extr.cnpj_cpf_emitente}</div>`:''}${extr.descricao ? `<div><b>Descrição:</b> ${extr.descricao}</div>`:''}${extr.confianca != null ? `<div><b>Confiança IA:</b> ${extr.confianca}%</div>`:''}${extr.observacoes ? `<div><b>Obs:</b> ${extr.observacoes}</div>`:''}</div></details>`;
+
+  let footerBotoes = '';
+  if (status === 'ok') {
+    footerBotoes = `<button class="btn btn-outline" onclick="closeModal()">Cancelar</button><button class="btn btn-gold" onclick="confirmarAnexoValidado()">✓ Anexar documento</button>`;
+  } else if (status === 'divergente') {
+    footerBotoes = `<button class="btn btn-outline" onclick="closeModal()">Cancelar</button><button class="btn btn-sm" style="background:var(--surface-2);color:var(--text-2);border:1px solid var(--border-lt)" onclick="confirmarAnexoValidado()">Manter lançamento e anexar</button><button class="btn btn-gold" onclick="confirmarAnexoComAtualizacao()">Usar dados do documento</button>`;
+  } else if (status === 'bloqueado') {
+    if (admin) {
+      footerBotoes = `<button class="btn btn-outline" onclick="closeModal()">Cancelar</button><button class="btn btn-sm" style="background:var(--red-lt);color:var(--red);border:1px solid rgba(224,92,92,.2)" onclick="overrideAdminAnexo()">🔓 Override admin</button>`;
+    } else {
+      footerBotoes = `<button class="btn btn-gold" onclick="closeModal()">Entendi</button>`;
+    }
+  } else if (status === 'sem_validacao') {
+    footerBotoes = `<button class="btn btn-outline" onclick="closeModal()">Cancelar</button><button class="btn btn-gold" onclick="confirmarAnexoValidado()">Anexar mesmo assim</button>`;
+  } else {
+    footerBotoes = `<button class="btn btn-outline" onclick="closeModal()">Cancelar</button><button class="btn btn-sm" style="background:var(--surface-2);color:var(--text-2);border:1px solid var(--border-lt)" onclick="confirmarAnexoValidado()">Anexar sem validar</button>`;
+  }
+
+  window._anexoValidacao = { diag, contexto };
+
+  openModal('Conferência do Documento',
+    `<div style="background:${st.bg};border:1px solid ${st.cor};border-radius:10px;padding:14px 16px;display:flex;align-items:flex-start;gap:12px"><span style="font-size:22px;color:${st.cor};flex-shrink:0;font-weight:700">${st.icone}</span><div><div style="font-size:13px;font-weight:700;color:${st.cor};margin-bottom:3px">${st.titulo}</div><div style="font-size:12px;color:var(--text-2);line-height:1.5">${mensagem}</div></div></div>${tabelaHtml}${infoExtra}`,
+    footerBotoes
+  );
+}
+
+async function confirmarAnexoValidado() {
+  const ctx = window._anexoValidacao?.contexto;
+  if (!ctx) return;
+  closeModal();
+  await executarUploadFinal(ctx);
+}
+
+async function confirmarAnexoComAtualizacao() {
+  const wrap = window._anexoValidacao;
+  if (!wrap) return;
+  const { diag, contexto } = wrap;
+  const extr = diag.dados_extraidos || {};
+  closeModal();
+  toast('Atualizando lançamento...', 'default', 8000);
   try {
-    toast('Enviando...', 'default', 10000);
-    await anexarDocumento(tipoRef, refId, file);
-    // Atualiza widget dentro do modal
-    const widget = document.getElementById(`widget-anexos-${refId}`);
-    if (widget) widget.outerHTML = htmlWidgetAnexos(tipoRef, refId);
-  } catch(e) { toast('Erro no upload: ' + e.message, 'error'); }
+    const patch = {};
+    if (extr.valor_total != null) patch.valor = Number(extr.valor_total);
+    const novaData = extr.data_vencimento || extr.data_emissao;
+    if (novaData) patch.vencimento = novaData;
+    if (extr.numero_documento) patch.numero_documento = String(extr.numero_documento);
+
+    if (Object.keys(patch).length > 0) {
+      const tabela = contexto.tipoRef === 'receita' ? 'fin_receitas'
+                   : contexto.tipoRef === 'despesa' ? 'fin_despesas'
+                   : 'fin_impostos';
+      await supa('PATCH', tabela, { params: { id: `eq.${contexto.refId}` }, body: patch });
+    }
+    await executarUploadFinal(contexto);
+    await carregarDados();
+  } catch(e) {
+    toast('Erro ao atualizar: ' + e.message, 'error');
+  }
+}
+
+async function overrideAdminAnexo() {
+  const justificativa = prompt('Justifique por que está anexando um documento com CNPJ divergente:');
+  if (!justificativa || justificativa.trim().length < 10) {
+    toast('Justificativa obrigatória (mín. 10 caracteres).', 'error');
+    return;
+  }
+  const ctx = window._anexoValidacao?.contexto;
+  if (!ctx) return;
+  console.warn('[OVERRIDE ADMIN] Anexo com CNPJ divergente:', {
+    usuario: APP.user?.email, tipoRef: ctx.tipoRef, refId: ctx.refId,
+    arquivo: ctx.file?.name, justificativa,
+    diag: window._anexoValidacao.diag, timestamp: new Date().toISOString(),
+  });
+  closeModal();
+  toast('Override registrado. Anexando...', 'default', 5000);
+  await executarUploadFinal(ctx);
+}
+
+async function executarUploadFinal(ctx) {
+  try {
+    await anexarDocumento(ctx.tipoRef, ctx.refId, ctx.file);
+    const widget = document.getElementById(`widget-anexos-${ctx.refId}`);
+    if (widget) widget.outerHTML = htmlWidgetAnexos(ctx.tipoRef, ctx.refId);
+    window._anexoValidacao = null;
+  } catch(e) {
+    toast('Erro no upload: ' + e.message, 'error');
+  }
+}
+
+async function handleAnexoUpload(input, tipoRef, refId) {
+  const file = input.files[0];
+  if (!file) return;
   input.value = '';
+
+  if (file.size > 10*1024*1024) {
+    toast('Arquivo muito grande. Máximo 10MB.', 'error');
+    return;
+  }
+
+  const ctxDados = dadosParaValidacao(tipoRef, refId);
+  if (!ctxDados) {
+    toast('Lançamento não encontrado.', 'error');
+    return;
+  }
+
+  const contexto = { file, tipoRef, refId, lanc: ctxDados.lanc };
+
+  const podeValidar = /\.(pdf|png|jpe?g|webp|xml|txt)$/i.test(file.name) ||
+    ['application/pdf','image/png','image/jpeg','image/jpg','image/webp','text/xml','application/xml','text/plain'].includes(file.type);
+
+  if (!podeValidar) {
+    toast('Tipo não analisável pela IA. Anexando direto...', 'default', 5000);
+    await executarUploadFinal(contexto);
+    return;
+  }
+
+  openModal('Analisando documento...',
+    `<div style="display:flex;flex-direction:column;align-items:center;padding:20px;gap:14px"><div style="width:44px;height:44px;border:3px solid var(--border);border-top-color:var(--gold);border-radius:50%;animation:spin 1s linear infinite"></div><div style="font-size:13px;color:var(--text-2);text-align:center">A IA está lendo <b>${file.name}</b><br>e comparando com o lançamento...</div></div><style>@keyframes spin{to{transform:rotate(360deg)}}</style>`,
+    ''
+  );
+
+  try {
+    const diag = await validarDocumentoIA(file, ctxDados.lancamento);
+    closeModal();
+    setTimeout(() => modalConferenciaAnexo(diag, contexto), 100);
+  } catch(e) {
+    closeModal();
+    const diag = {
+      status: 'erro',
+      mensagem: `Não foi possível validar o documento: ${e.message}. Você pode anexar mesmo assim ou cancelar.`,
+      divergencias: [], coincidencias: [], dados_extraidos: {},
+    };
+    setTimeout(() => modalConferenciaAnexo(diag, contexto), 100);
+  }
 }
 
 async function excluirAnexoModal(id, path) {
@@ -5767,6 +5999,7 @@ const _guardedFns = ['salvarReceita','baixarReceita','editarReceita','salvarEdic
   'salvarConta','salvarCliente','salvarFornecedor','salvarCategoria',
   'salvarMeta','excluirMeta','salvarRecorrencia','toggleRecorrencia','excluirRecorrencia',
   'salvarImposto','pagarImposto','excluirImposto','editarCliente','salvarEdicaoCliente','excluirCliente','editarFornecedor','salvarEdicaoFornecedor','excluirFornecedor','editarConta','salvarEdicaoConta','excluirConta','editarMeta','salvarEdicaoMeta','anexarDocumento','confirmarImportacaoExtrato','confirmarImportacaoNFe',
+  'confirmarAnexoValidado','confirmarAnexoComAtualizacao','overrideAdminAnexo',
   'modalNovaReceita','modalNovaDespesa','modalNovaConta','modalNovoCliente',
   'modalNovoFornecedor','modalNovaCategoria','modalNovaMeta','modalNovaRecorrencia','modalNovoImposto'];
 

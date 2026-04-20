@@ -6085,6 +6085,7 @@ async function trocarEmpresaSA(tenantId) {
 
 async function abrirSuperadmin() {
   $id('app').classList.remove('visible');
+  $id('app').style.display = 'none';
   const screen = $id('superadmin-screen');
   screen.style.display = 'flex';
   screen.style.flexDirection = 'column';
@@ -6092,6 +6093,7 @@ async function abrirSuperadmin() {
   // Logo
   const logoEl = $id('sa-logo');
   if (logoEl) {
+    logoEl.innerHTML = '';
     const logoImg = document.querySelector('.sidebar-brand img');
     if (logoImg) { const img = logoImg.cloneNode(); img.style.height='36px'; img.style.width='auto'; logoEl.appendChild(img); }
   }
@@ -6100,6 +6102,7 @@ async function abrirSuperadmin() {
 
 function sairSuperadmin() {
   $id('superadmin-screen').style.display = 'none';
+  $id('app').style.display = '';
   $id('app').classList.add('visible');
 }
 

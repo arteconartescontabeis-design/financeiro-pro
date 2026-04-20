@@ -4007,7 +4007,7 @@ function htmlWidgetAnexos(tipoRef, refId) {
 // ============================================================
 // MÓDULO DE VALIDAÇÃO INTELIGENTE DE ANEXOS
 // ============================================================
-const CLAUDE_PROXY_URL = `${SUPA_URL}/functions/v1/claude-proxy`;
+const CLAUDE_PROXY_URL = `${SUPA_URL}/functions/v1/validar-anexos`;
 
 function soDigitos(s) {
   return (s || '').toString().replace(/\D/g, '');
@@ -4666,7 +4666,7 @@ async function processarPDFAutoDoc(id, file) {
   let dados;
   let dadosLista = [];
   try {
-    const proxyUrl = `${SUPA_URL}/functions/v1/claude-proxy`;
+    const proxyUrl = `${SUPA_URL}/functions/v1/validar-anexos`;
 
     // Verificar tamanho - PDFs grandes precisam ser limitados
     if (file.size > 5 * 1024 * 1024) {

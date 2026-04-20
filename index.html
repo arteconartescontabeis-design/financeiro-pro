@@ -4023,7 +4023,7 @@ function fileToBase64(file) {
 }
 
 function usuarioEhAdmin() {
-  return APP.user && APP.user.perfil === 'admin';
+  return APP.user && (APP.user.perfil === 'admin' || APP.user.perfil === 'superadmin');
 }
 
 function dadosParaValidacao(tipoRef, refId) {
@@ -4064,13 +4064,11 @@ function dadosParaValidacao(tipoRef, refId) {
 
 async function validarDocumentoIA(file, lancamento) {
   const fileBase64 = await fileToBase64(file);
-  const resp = await fetch(CLAUDE_PROXY_URL, {
+  // IMPORTANTE: requisição "simple" sem headers customizados para evitar preflight CORS.
+  // apikey vai como query param; Content-Type text/plain é permitido sem preflight.
+  const resp = await fetch(`${CLAUDE_PROXY_URL}?apikey=${encodeURIComponent(SUPA_KEY)}`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${SUPA_KEY}`,
-      'apikey': SUPA_KEY,
-    },
+    headers: { 'Content-Type': 'text/plain' },
     body: JSON.stringify({
       validar_documento: true,
       file_base64: fileBase64,
@@ -5818,7 +5816,7 @@ document.addEventListener('click', e => {
 });
 
 // ── PERFIL: GUARD ─────────────────────────────────────────────
-function isAdmin() { return APP.user?.perfil === 'admin'; }
+function isAdmin() { return APP.user?.perfil === 'admin' || APP.user?.perfil === 'superadmin'; }
 
 function guardAdmin(fn) {
   return function(...args) {

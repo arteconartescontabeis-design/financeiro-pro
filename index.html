@@ -5300,6 +5300,8 @@ async function processarPDFAutoDoc(id, file) {
 
     // Log para diagnóstico
     console.log('IA retornou:', JSON.stringify(dados).slice(0,600));
+    console.log('[DIAG] Campos top-level:', Object.keys(dados).join(', '));
+    console.log('[DIAG] dados.valor =', dados.valor, '· dados.tipo =', dados.tipo);
 
     // Normalizar função
     function normalizarItem(d) {
@@ -5355,6 +5357,7 @@ async function processarPDFAutoDoc(id, file) {
     //  de múltiplos lançamentos num único documento.)
 
     console.log('Itens normalizados:', listaItens.length, JSON.stringify(listaItens.slice(0,2)));
+    console.log('[DIAG] Valores encontrados:', listaItens.map(x=>x.valor).join(', '));
     dadosLista = listaItens.filter(d => d.valor > 0);
     if (!dadosLista.length) throw new Error('IA não encontrou valores válidos no documento.');
 
@@ -6827,14 +6830,54 @@ async function renderSuperadmin() {
               <td style="padding:14px 16px;font-size:11px;color:#64748b;font-family:'DM Mono',monospace">${t.criado_em?new Date(t.criado_em).toLocaleDateString('pt-BR'):'—'}</td>
               <td style="padding:14px 16px;white-space:nowrap">
                 <div style="display:flex;gap:6px">
-                  <button onclick="modalGerenciarEmpresa('${t.id}')" style="padding:5px 12px;border-radius:7px;border:1px solid #334155;background:none;color:#94a3b8;font-size:11px;cursor:pointer;font-family:'DM Sans',sans-serif">Gerenciar</button>
-                  <button onclick="modalCriarUsuarioEmpresa('${t.id}','${t.nome?.replace(/'/g,"\'")||''}')" style="padding:5px 12px;border-radius:7px;border:none;background:#1a5276;color:#fff;font-size:11px;cursor:pointer;font-family:'DM Sans',sans-serif">+ Usuário</button>
+                  <button data-action="gerenciar" data-tenant-id="${t.id}" style="padding:5px 12px;border-radius:7px;border:1px solid #334155;background:none;color:#94a3b8;font-size:11px;cursor:pointer;font-family:'DM Sans',sans-serif">Gerenciar</button>
+                  <button data-action="novo-usuario" data-tenant-id="${t.id}" data-tenant-nome="${(t.nome||'').replace(/"/g,'&quot;')}" style="padding:5px 12px;border-radius:7px;border:none;background:#1a5276;color:#fff;font-size:11px;cursor:pointer;font-family:'DM Sans',sans-serif">+ Usuário</button>
                 </div>
               </td>
             </tr>`).join('')}
       </tbody>
     </table>
   </div>`;
+
+  // ═══════════════════════════════════════════════════════════
+  // FIX + DIAGNÓSTICO · Botões "Gerenciar" / "+ Usuário"
+  // Event delegation no container (sobrevive a stacking issues,
+  // re-renders e onclick inline que por algum motivo não dispara).
+  // Os logs [SA-CLICK] saem só se DEBUG_SA_CLICK = true.
+  // ═══════════════════════════════════════════════════════════
+  window.DEBUG_SA_CLICK = true; // ← trocar pra false depois de confirmar
+
+  // Remove handler anterior (idempotente a re-renders)
+  if (window._saClickHandler) {
+    el.removeEventListener('click', window._saClickHandler, true);
+  }
+  window._saClickHandler = function(ev) {
+    // DIAGNÓSTICO: mostra TUDO que foi clicado dentro do sa-content
+    if (window.DEBUG_SA_CLICK) {
+      const stack = document.elementsFromPoint(ev.clientX, ev.clientY)
+        .map(e => `${e.tagName.toLowerCase()}${e.id?'#'+e.id:''}${e.className&&typeof e.className==='string'?'.'+e.className.split(' ').filter(Boolean).slice(0,2).join('.'):''}`)
+        .slice(0, 6);
+      console.log('[SA-CLICK] target=', ev.target.tagName, ev.target.dataset?.action || '(sem data-action)',
+                  '· stack:', stack.join(' → '));
+    }
+
+    // Sobe até o button com data-action (caso clique tenha pego um child)
+    const btn = ev.target.closest('button[data-action]');
+    if (!btn) return;
+    const action = btn.dataset.action;
+    const tid    = btn.dataset.tenantId;
+    const tnome  = btn.dataset.tenantNome || '';
+
+    if (window.DEBUG_SA_CLICK) {
+      console.log('[SA-CLICK] ✓ delegate disparou:', action, 'tenant:', tid);
+    }
+
+    if (action === 'gerenciar')     { modalGerenciarEmpresa(tid); }
+    else if (action === 'novo-usuario') { modalCriarUsuarioEmpresa(tid, tnome); }
+  };
+  // useCapture=true garante que pegamos o evento ANTES de qualquer
+  // stopPropagation que possa estar atrapalhando
+  el.addEventListener('click', window._saClickHandler, true);
 }
 
 // ── Modal Cadastrar Empresa ────────────────────────────────────

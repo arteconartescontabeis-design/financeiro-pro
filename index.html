@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -4398,9 +4399,12 @@ async function processarArquivos(files) {
   if (!files.length) return;
   window._docTab = 'importar';
 
-  // Inicializa modo batch XML (modo 2b: 1º pede confirmação, demais silencioso)
-  const temXML = Array.from(files).some(f => f.name.toLowerCase().endsWith('.xml'));
-  if (temXML && typeof _xmlBatchReset === 'function') _xmlBatchReset();
+  // Inicializa modo batch XML/PDF (modo 2b: 1º pede confirmação, demais silencioso)
+  const temDocFiscal = Array.from(files).some(f => {
+    const ext = f.name.toLowerCase().split('.').pop();
+    return ext === 'xml' || ext === 'pdf';
+  });
+  if (temDocFiscal && typeof _xmlBatchReset === 'function') _xmlBatchReset();
 
   for (const file of files) {
     const id   = Date.now() + '_' + Math.random().toString(36).slice(2);
@@ -4424,8 +4428,8 @@ async function processarArquivos(files) {
     }
   }
 
-  // Resumo do batch XML (se houve)
-  if (temXML && typeof _xmlBatchResumo === 'function') _xmlBatchResumo();
+  // Resumo do batch XML/PDF (se houve)
+  if (temDocFiscal && typeof _xmlBatchResumo === 'function') _xmlBatchResumo();
 
   await carregarDados();
 }
@@ -5222,7 +5226,7 @@ async function processarPDFAutoDoc(id, file) {
             },
             {
               type: 'text',
-              text: 'Analise este documento fiscal brasileiro (NFS-e, NF-e, boleto, recibo ou comprovante) e extraia as informacoes. Responda APENAS com JSON valido, sem explicacoes, no formato: {"tipo":"despesa ou receita","descricao":"NFS-e nº XXX - Nome ou descricao","valor":0.00,"vencimento":"YYYY-MM-DD","beneficiario":"nome do prestador ou emissor","numero_nf":"numero da nota se houver","cnpj_prestador":"cnpj sem pontuacao","cnpj_tomador":"cnpj sem pontuacao","observacao":"discriminacao do servico ou detalhes"}. Regras: NFS-e emitida por voce=receita, NFS-e recebida de terceiro=despesa, boleto=despesa, comprovante de recebimento=receita. valor deve ser numero sem simbolos. Se nao houver vencimento use a data de emissao ou hoje.'
+              text: 'Analise este documento fiscal brasileiro (NFS-e, NF-e, boleto, recibo ou comprovante) e extraia as informacoes. Responda APENAS com JSON valido, sem explicacoes, no formato: {"tipo":"despesa ou receita","descricao":"NFS-e nº XXX - Nome ou descricao","valor":0.00,"vencimento":"YYYY-MM-DD","beneficiario":"nome do prestador ou emissor","numero_nf":"numero da nota se houver","cnpj_prestador":"cnpj sem pontuacao","cnpj_tomador":"cnpj sem pontuacao","observacao":"discriminacao do servico ou detalhes","prestador":{"cnpj":"","nome":"","nome_fantasia":"","ie":"","im":"","logradouro":"","numero":"","complemento":"","bairro":"","municipio":"","uf":"","cep":"","email":"","telefone":""},"tomador":{"cnpj":"","nome":"","nome_fantasia":"","ie":"","im":"","logradouro":"","numero":"","complemento":"","bairro":"","municipio":"","uf":"","cep":"","email":"","telefone":""}}. Regras: NFS-e emitida por voce=receita, NFS-e recebida de terceiro=despesa, boleto=despesa, comprovante de recebimento=receita. valor deve ser numero sem simbolos. Se nao houver vencimento use a data de emissao ou hoje. Para prestador e tomador, extraia TODOS os dados de identificacao e endereco que aparecerem no documento — se algum campo nao estiver visivel, deixe string vazia. CNPJ/CPF sempre sem pontuacao, CEP sem hifen, UF com 2 letras maiusculas.'
             }
           ]
         }]
@@ -5264,6 +5268,29 @@ async function processarPDFAutoDoc(id, file) {
 
     // Normalizar função
     function normalizarItem(d) {
+      // Helper: extrai entidade (prestador/tomador) no formato esperado por resolveEntidadeXML
+      const _ent = (raw, cnpjFallback) => {
+        if (!raw && !cnpjFallback) return null;
+        raw = raw || {};
+        const cnpj = (raw.cnpj || raw.cpf || raw.cnpj_cpf || cnpjFallback || '').replace(/\D/g,'');
+        if (!cnpj) return null;
+        return {
+          cpf_cnpj:            cnpj,
+          nome:                raw.nome || raw.razao_social || raw.nome_razao_social || '—',
+          nome_fantasia:       raw.nome_fantasia || raw.fantasia || null,
+          inscricao_estadual:  raw.ie || raw.inscricao_estadual || null,
+          inscricao_municipal: raw.im || raw.inscricao_municipal || null,
+          logradouro:  raw.logradouro || null,
+          numero:      raw.numero || null,
+          complemento: raw.complemento || null,
+          bairro:      raw.bairro || null,
+          municipio:   raw.municipio || raw.cidade || null,
+          uf:          (raw.uf || '').slice(0,2).toUpperCase() || null,
+          cep:         (raw.cep || '').replace(/\D/g,'') || null,
+          email:       raw.email || null,
+          telefone:   (raw.telefone || raw.fone || '').replace(/\D/g,'') || null,
+        };
+      };
       return {
         valor:       parseFloat(String(d.valor||d.value||d.total||d.amount||d.valor_total||d.vl||0).replace(/[^\d.,]/g,'').replace(',','.')) || 0,
         tipo:        String(d.tipo||d.type||d.natureza||'despesa').toLowerCase().includes('receita') ? 'receita' : 'despesa',
@@ -5271,6 +5298,9 @@ async function processarPDFAutoDoc(id, file) {
         descricao:   d.descricao||d.description||d.titulo||d.title||d.nome||file.name,
         beneficiario:d.beneficiario||d.beneficiary||d.emitente||d.pagador||d.cedente||'—',
         observacao:  d.observacao||d.observation||d.notes||d.detalhes||'',
+        // Entidades (novo) — usadas pra cadastrar cliente/fornecedor automaticamente
+        prestador:   _ent(d.prestador, d.cnpj_prestador),
+        tomador:     _ent(d.tomador,   d.cnpj_tomador),
       };
     }
 
@@ -5313,11 +5343,46 @@ async function processarPDFAutoDoc(id, file) {
   adicionarFilaItem(id, file.name, 'processando', `Criando ${dadosLista.length} lançamento(s)...`, null);
   let ok = 0;
 
+  // CNPJ da empresa — usado pra escolher a contraparte correta
+  const cnpjEmpresaPDF = (APP.tenant?.cnpj||'').replace(/\D/g,'');
+
   for (const dados of dadosLista) {
     const tipo      = dados.tipo;
     const descricao = dados.descricao;
     const valor     = dados.valor;
     const vencimento = dados.vencimento;
+
+    // ── Resolver entidade (criar/atualizar cliente ou fornecedor) ──
+    // Em receita: a contraparte é o TOMADOR (cliente); em despesa, é o PRESTADOR (fornecedor).
+    // Se os CNPJs do doc permitirem identificar qual é a empresa, usa o oposto como contraparte.
+    let contraparte = null;
+    let categoriaEnt = null;
+    if (tipo === 'receita') {
+      // Prefere tomador; se tomador for a própria empresa, usa prestador
+      if (dados.tomador && (!cnpjEmpresaPDF || dados.tomador.cpf_cnpj !== cnpjEmpresaPDF)) {
+        contraparte = dados.tomador;
+      } else if (dados.prestador && dados.prestador.cpf_cnpj !== cnpjEmpresaPDF) {
+        contraparte = dados.prestador;
+      }
+      categoriaEnt = 'cliente';
+    } else {
+      // despesa: contraparte = prestador (emissor da nota/boleto)
+      if (dados.prestador && (!cnpjEmpresaPDF || dados.prestador.cpf_cnpj !== cnpjEmpresaPDF)) {
+        contraparte = dados.prestador;
+      } else if (dados.tomador && dados.tomador.cpf_cnpj !== cnpjEmpresaPDF) {
+        contraparte = dados.tomador;
+      }
+      categoriaEnt = 'fornecedor';
+    }
+
+    let entidadeResolvida = null;
+    if (contraparte && contraparte.cpf_cnpj && typeof resolveEntidadeXML === 'function') {
+      try {
+        entidadeResolvida = await resolveEntidadeXML(contraparte, categoriaEnt, 'pdf_ia');
+      } catch(e) {
+        console.error('[PDF] erro resolvendo entidade:', e);
+      }
+    }
 
     const body = {
       tenant_id:  APP.user.tenant_id,
@@ -5327,6 +5392,10 @@ async function processarPDFAutoDoc(id, file) {
       status:     'pendente',
       observacao: `${dados.observacao||''} | Beneficiário: ${dados.beneficiario||'—'} | Importado via PDF+IA`,
     };
+    if (entidadeResolvida) {
+      if (categoriaEnt === 'cliente')   body.cliente_id = entidadeResolvida.id;
+      else                              body.fornecedor_id = entidadeResolvida.id;
+    }
 
     try {
       let refId;

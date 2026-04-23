@@ -6828,10 +6828,10 @@ async function renderSuperadmin() {
               <td style="padding:14px 16px;text-align:right;font-family:'DM Mono',monospace;font-size:12px;color:#ef4444;font-weight:700">${fmtMoeda(t._despesas)}</td>
               <td style="padding:14px 16px;text-align:right;font-family:'DM Mono',monospace;font-size:12px;font-weight:700;color:${t._saldo>=0?'#22c55e':'#ef4444'}">${fmtMoeda(t._saldo)}</td>
               <td style="padding:14px 16px;font-size:11px;color:#64748b;font-family:'DM Mono',monospace">${t.criado_em?new Date(t.criado_em).toLocaleDateString('pt-BR'):'—'}</td>
-              <td style="padding:14px 16px;white-space:nowrap">
-                <div style="display:flex;gap:6px">
-                  <button data-action="gerenciar" data-tenant-id="${t.id}" style="padding:5px 12px;border-radius:7px;border:1px solid #334155;background:none;color:#94a3b8;font-size:11px;cursor:pointer;font-family:'DM Sans',sans-serif">Gerenciar</button>
-                  <button data-action="novo-usuario" data-tenant-id="${t.id}" data-tenant-nome="${(t.nome||'').replace(/"/g,'&quot;')}" style="padding:5px 12px;border-radius:7px;border:none;background:#1a5276;color:#fff;font-size:11px;cursor:pointer;font-family:'DM Sans',sans-serif">+ Usuário</button>
+              <td style="padding:14px 16px;white-space:nowrap;position:relative;z-index:2">
+                <div style="display:flex;gap:6px;position:relative;z-index:2">
+                  <button data-action="gerenciar" data-tenant-id="${t.id}" style="padding:5px 12px;border-radius:7px;border:1px solid #334155;background:none;color:#94a3b8;font-size:11px;cursor:pointer;font-family:'DM Sans',sans-serif;position:relative;z-index:3">Gerenciar</button>
+                  <button data-action="novo-usuario" data-tenant-id="${t.id}" data-tenant-nome="${(t.nome||'').replace(/"/g,'&quot;')}" style="padding:5px 12px;border-radius:7px;border:none;background:#1a5276;color:#fff;font-size:11px;cursor:pointer;font-family:'DM Sans',sans-serif;position:relative;z-index:3">+ Usuário</button>
                 </div>
               </td>
             </tr>`).join('')}
@@ -6862,7 +6862,29 @@ async function renderSuperadmin() {
     }
 
     // Sobe até o button com data-action (caso clique tenha pego um child)
-    const btn = ev.target.closest('button[data-action]');
+    let btn = ev.target.closest('button[data-action]');
+
+    // Safety net: se o clique pegou uma <td>/<tr>/<div> irmã do botão
+    // (stacking context estranho), procura dentro dessa linha.
+    if (!btn) {
+      const row = ev.target.closest('tr');
+      if (row) {
+        // Usa coordenadas do clique pra descobrir qual botão estava na mesma coluna
+        const btns = row.querySelectorAll('button[data-action]');
+        for (const b of btns) {
+          const r = b.getBoundingClientRect();
+          if (ev.clientX >= r.left - 4 && ev.clientX <= r.right + 4
+           && ev.clientY >= r.top  - 4 && ev.clientY <= r.bottom + 4) {
+            btn = b;
+            if (window.DEBUG_SA_CLICK) {
+              console.log('[SA-CLICK] ⚠ clique fora do botão, mas dentro da bbox — usando fallback');
+            }
+            break;
+          }
+        }
+      }
+    }
+
     if (!btn) return;
     const action = btn.dataset.action;
     const tid    = btn.dataset.tenantId;

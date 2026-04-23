@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -5248,23 +5247,59 @@ async function processarPDFAutoDoc(id, file) {
 
     console.log('Resposta bruta da IA:', text.slice(0, 500));
 
-    // Parser tolerante — extrai o primeiro bloco JSON válido da resposta
+    // Parser tolerante — prioriza JSON top-level (pode ter objetos aninhados
+    // como prestador/tomador); só cai no regex simples como último recurso.
     let dados = null;
-    const jsonMatches = text.match(/\{[^{}]*\}/g) || [];
-    for (const candidate of jsonMatches) {
-      try { dados = JSON.parse(candidate); if (dados.valor !== undefined) break; } catch(_) {}
+
+    // 1) Tenta o maior bloco JSON (aninhamento via balanceamento de chaves)
+    //    Encontra a primeira '{' e a última '}' e tenta parse.
+    const firstBrace = text.indexOf('{');
+    const lastBrace  = text.lastIndexOf('}');
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+      const slice = text.slice(firstBrace, lastBrace + 1);
+      try { dados = JSON.parse(slice); } catch(_) {}
     }
-    // Fallback: tenta extrair JSON com aninhamento
+
+    // 2) Se falhou, varre por balanceamento de chaves (aceita aninhamento)
     if (!dados) {
-      const deepMatch = text.match(/\{[\s\S]*\}/);
-      if (deepMatch) {
-        try { dados = JSON.parse(deepMatch[0]); } catch(_) {}
+      let depth = 0, start = -1;
+      for (let i = 0; i < text.length; i++) {
+        const ch = text[i];
+        if (ch === '{') { if (depth === 0) start = i; depth++; }
+        else if (ch === '}') {
+          depth--;
+          if (depth === 0 && start >= 0) {
+            const candidate = text.slice(start, i + 1);
+            try {
+              const obj = JSON.parse(candidate);
+              // Prioriza objetos que parecem lançamento (têm valor/tipo/descricao)
+              if (obj && (obj.valor !== undefined || obj.value !== undefined
+                       || obj.tipo !== undefined  || obj.descricao !== undefined
+                       || obj.lancamentos || obj.itens || obj.items)) {
+                dados = obj;
+                break;
+              }
+              // Guarda fallback: primeiro JSON válido qualquer
+              if (!dados) dados = obj;
+            } catch(_) {}
+            start = -1;
+          }
+        }
       }
     }
+
+    // 3) Último fallback: regex simples (só objetos sem aninhamento)
+    if (!dados) {
+      const jsonMatches = text.match(/\{[^{}]*\}/g) || [];
+      for (const candidate of jsonMatches) {
+        try { dados = JSON.parse(candidate); if (dados.valor !== undefined) break; } catch(_) {}
+      }
+    }
+
     if (!dados) throw new Error('Resposta da IA não contém JSON válido: ' + text.slice(0,150));
 
     // Log para diagnóstico
-    console.log('IA retornou:', JSON.stringify(dados));
+    console.log('IA retornou:', JSON.stringify(dados).slice(0,600));
 
     // Normalizar função
     function normalizarItem(d) {
@@ -5315,19 +5350,9 @@ async function processarPDFAutoDoc(id, file) {
       listaItens = [normalizarItem(dados)];
     }
 
-    // Também tentar pegar todos os JSONs do texto (para múltiplos objetos separados)
-    if (listaItens.length === 1 && jsonMatches.length > 1) {
-      const extras = [];
-      for (const candidate of jsonMatches) {
-        try {
-          const obj = JSON.parse(candidate);
-          if (obj.valor !== undefined || obj.value !== undefined) {
-            extras.push(normalizarItem(obj));
-          }
-        } catch(_) {}
-      }
-      if (extras.length > 1) listaItens = extras;
-    }
+    // (Bloco de múltiplos JSONs removido — o novo parser já extrai o JSON
+    //  top-level corretamente, e `dados.lancamentos/itens/items` cobre o caso
+    //  de múltiplos lançamentos num único documento.)
 
     console.log('Itens normalizados:', listaItens.length, JSON.stringify(listaItens.slice(0,2)));
     dadosLista = listaItens.filter(d => d.valor > 0);

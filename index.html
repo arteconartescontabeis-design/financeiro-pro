@@ -4398,6 +4398,10 @@ async function processarArquivos(files) {
   if (!files.length) return;
   window._docTab = 'importar';
 
+  // Inicializa modo batch XML (modo 2b: 1º pede confirmação, demais silencioso)
+  const temXML = Array.from(files).some(f => f.name.toLowerCase().endsWith('.xml'));
+  if (temXML && typeof _xmlBatchReset === 'function') _xmlBatchReset();
+
   for (const file of files) {
     const id   = Date.now() + '_' + Math.random().toString(36).slice(2);
     const nome = file.name;
@@ -4420,15 +4424,495 @@ async function processarArquivos(files) {
     }
   }
 
+  // Resumo do batch XML (se houve)
+  if (temXML && typeof _xmlBatchResumo === 'function') _xmlBatchResumo();
+
   await carregarDados();
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// BLOCO XML · Cadastro automático de entidades (v1 — 2026-04-22)
+// Suporta: NFe (emit/dest) e NFSe (prestador/tomador)
+// Modo batch inteligente: primeiro XML abre modal; demais criam silencioso
+// ═══════════════════════════════════════════════════════════════════
+
+// Estado de sessão de batch (zerado a cada run da fila)
+window._XMLBatch = {
+  ativo: false,
+  primeiroJaMostrado: false,
+  entidadesCriadas: 0,
+  divergenciasRevisadas: 0,
+  conflitosCategoria: 0,
+  ignorados: 0,
+};
+
+function _xmlBatchReset() {
+  window._XMLBatch = {
+    ativo: true,
+    primeiroJaMostrado: false,
+    entidadesCriadas: 0,
+    divergenciasRevisadas: 0,
+    conflitosCategoria: 0,
+    ignorados: 0,
+  };
+}
+
+function _xmlBatchResumo() {
+  const b = window._XMLBatch;
+  if (!b.ativo) return;
+  const partes = [];
+  if (b.entidadesCriadas)        partes.push(`${b.entidadesCriadas} entidade(s) cadastrada(s)`);
+  if (b.divergenciasRevisadas)   partes.push(`${b.divergenciasRevisadas} divergência(s) revisada(s)`);
+  if (b.conflitosCategoria)      partes.push(`${b.conflitosCategoria} conflito(s) de categoria`);
+  if (b.ignorados)               partes.push(`${b.ignorados} ignorado(s)`);
+  if (partes.length) toast('Importação XML: ' + partes.join(' · '), 'success');
+  window._XMLBatch.ativo = false;
+}
+
+// ── Helpers de XML (extração robusta) ──────────────────────────────
+function _xmlGetNested(doc, rootTag, childTag) {
+  const root = doc.getElementsByTagName(rootTag)[0];
+  if (!root) return '';
+  const child = root.getElementsByTagName(childTag)[0];
+  return child?.textContent?.trim() || '';
+}
+
+// Extrai dados de uma entidade (<emit>/<dest> da NFe, ou <Prestador>/<Tomador> da NFSe)
+// Retorna objeto normalizado: { cpf_cnpj, nome, nome_fantasia, ie, im, endereco... }
+function extrairEntidadeXML(doc, tipo) {
+  // tipo: 'emit' | 'dest' | 'prestador' | 'tomador'
+  const isNFe = tipo === 'emit' || tipo === 'dest';
+  const rootNames = isNFe
+    ? (tipo === 'emit' ? ['emit'] : ['dest'])
+    : (tipo === 'prestador' ? ['prestador','Prestador','PrestadorServico'] : ['tomador','Tomador','TomadorServico']);
+
+  let root = null;
+  for (const rn of rootNames) {
+    root = doc.getElementsByTagName(rn)[0];
+    if (root) break;
+  }
+  if (!root) return null;
+
+  const g = (...tags) => {
+    for (const t of tags) {
+      const el = root.getElementsByTagName(t)[0];
+      if (el?.textContent?.trim()) return el.textContent.trim();
+    }
+    return '';
+  };
+
+  // CNPJ / CPF — tags variam muito entre layouts
+  let doc_ = g('CNPJ','Cnpj','cnpj','CPF','Cpf','cpf','cpfcnpj','CpfCnpj','CNPJCPF');
+  doc_ = (doc_||'').replace(/\D/g,'');
+
+  // Nome / Razão social
+  const nome = g('xNome','RazaoSocial','razao_social','Nome','nome_razao_social','NomeRazaoSocial') || '';
+  const fantasia = g('xFant','NomeFantasia','nome_fantasia','sobrenome_nome_fantasia') || '';
+
+  // Inscrições
+  const ie = g('IE','InscricaoEstadual','inscricao_estadual');
+  const im = g('IM','InscricaoMunicipal','inscricao_municipal');
+
+  // Endereço — pode estar em <enderEmit>/<enderDest> (NFe) ou <Endereco>/<endereco> (NFSe)
+  let end = root.getElementsByTagName('enderEmit')[0]
+         || root.getElementsByTagName('enderDest')[0]
+         || root.getElementsByTagName('Endereco')[0]
+         || root.getElementsByTagName('endereco')[0]
+         || root; // fallback: alguns XMLs põem direto na raiz
+  const ge = (...tags) => {
+    for (const t of tags) {
+      const el = end.getElementsByTagName(t)[0];
+      if (el?.textContent?.trim()) return el.textContent.trim();
+    }
+    return '';
+  };
+
+  return {
+    cpf_cnpj:            doc_ || null,
+    nome:                nome || fantasia || '—',
+    nome_fantasia:       fantasia || null,
+    inscricao_estadual:  ie || null,
+    inscricao_municipal: im || null,
+    logradouro:  ge('xLgr','Logradouro','logradouro','Endereco','endereco') || null,
+    numero:      ge('nro','Numero','numero') || null,
+    complemento: ge('xCpl','Complemento','complemento') || null,
+    bairro:      ge('xBairro','Bairro','bairro') || null,
+    municipio:   ge('xMun','Municipio','municipio','cidade') || null,
+    uf:          (ge('UF','Uf','uf','estado')||'').slice(0,2).toUpperCase() || null,
+    cep:         (ge('CEP','Cep','cep')||'').replace(/\D/g,'') || null,
+    email:       ge('email','Email','EmailContato') || null,
+    telefone:    (ge('fone','Fone','telefone','Telefone')||'').replace(/\D/g,'') || null,
+  };
+}
+
+// ── Lookup na base ─────────────────────────────────────────────────
+// Procura em clientes E fornecedores; retorna { registro, categoria } ou null
+async function buscarEntidadePorDoc(cpfCnpj) {
+  if (!cpfCnpj) return null;
+  const tid = APP.user.tenant_id;
+
+  // Busca local primeiro (evita round-trip)
+  const docLimpo = cpfCnpj.replace(/\D/g,'');
+  const matchLocal = (arr) => arr.find(e => (e.cpf_cnpj||'').replace(/\D/g,'') === docLimpo);
+
+  const cli = matchLocal(CLIENTES);
+  if (cli) return { registro: cli, categoria: 'cliente' };
+  const forn = matchLocal(FORNECEDORES);
+  if (forn) return { registro: forn, categoria: 'fornecedor' };
+
+  // Fallback: consulta direta (caso cache esteja desatualizado)
+  try {
+    const [cs, fs] = await Promise.all([
+      supa('GET','fin_clientes',     { params: { tenant_id: `eq.${tid}`, cpf_cnpj: `eq.${cpfCnpj}`, select: '*', limit: 1 } }).catch(()=>[]),
+      supa('GET','fin_fornecedores', { params: { tenant_id: `eq.${tid}`, cpf_cnpj: `eq.${cpfCnpj}`, select: '*', limit: 1 } }).catch(()=>[]),
+    ]);
+    if (cs?.length)  return { registro: cs[0],  categoria: 'cliente' };
+    if (fs?.length)  return { registro: fs[0],  categoria: 'fornecedor' };
+  } catch(_) {}
+
+  return null;
+}
+
+// ── Comparação pra detectar divergências ──────────────────────────
+function compararEntidades(cadastrada, xml) {
+  const campos = ['nome','nome_fantasia','inscricao_estadual','inscricao_municipal',
+                  'logradouro','numero','complemento','bairro','municipio','uf','cep',
+                  'email','telefone'];
+  const divergencias = [];
+  for (const c of campos) {
+    const atual = (cadastrada[c] || '').toString().trim();
+    const novo  = (xml[c]        || '').toString().trim();
+    // Ignora se XML não trouxe valor OU se os dois estão vazios
+    if (!novo) continue;
+    // Normaliza docs/CEP/telefone (só dígitos)
+    const norm = (v) => ['cep','telefone'].includes(c) ? v.replace(/\D/g,'') : v.toLowerCase();
+    if (norm(atual) !== norm(novo)) {
+      divergencias.push({ campo: c, atual: atual || '(vazio)', novo });
+    }
+  }
+  return divergencias;
+}
+
+// ── Criação da entidade ────────────────────────────────────────────
+async function criarEntidadeDoXML(dados, categoria, origem) {
+  const tabela = categoria === 'cliente' ? 'fin_clientes' : 'fin_fornecedores';
+  const body = {
+    tenant_id: APP.user.tenant_id,
+    ativo: true,
+    origem_cadastro: origem, // 'xml_nfe' | 'xml_nfse'
+    nome: dados.nome,
+    cpf_cnpj: dados.cpf_cnpj,
+    nome_fantasia: dados.nome_fantasia,
+    inscricao_estadual: dados.inscricao_estadual,
+    inscricao_municipal: dados.inscricao_municipal,
+    logradouro: dados.logradouro,
+    numero: dados.numero,
+    complemento: dados.complemento,
+    bairro: dados.bairro,
+    municipio: dados.municipio,
+    uf: dados.uf,
+    cep: dados.cep,
+    email: dados.email,
+    telefone: dados.telefone,
+  };
+  const r = await supa('POST', tabela, { body, returning: true });
+  const novo = r?.[0];
+  if (novo) {
+    if (categoria === 'cliente') CLIENTES.push(novo);
+    else                         FORNECEDORES.push(novo);
+    window._XMLBatch.entidadesCriadas++;
+  }
+  return novo;
+}
+
+// ── Atualização parcial (campos selecionados) ─────────────────────
+async function atualizarEntidadeDoXML(registro, categoria, camposSelecionados, dadosXML) {
+  if (!camposSelecionados.length) return registro;
+  const tabela = categoria === 'cliente' ? 'fin_clientes' : 'fin_fornecedores';
+  const body = {};
+  for (const c of camposSelecionados) body[c] = dadosXML[c];
+  await supa('PATCH', tabela, { params: { id: `eq.${registro.id}` }, body });
+  // atualiza cache local
+  Object.assign(registro, body);
+  window._XMLBatch.divergenciasRevisadas++;
+  return registro;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// MODAIS
+// ═══════════════════════════════════════════════════════════════════
+
+// Modal 1: cadastrar nova entidade (modo 2b) — retorna Promise<entidade|null>
+function modalNovaEntidadeXML(dadosXML, categoria, origem) {
+  return new Promise((resolve) => {
+    const tituloCat = categoria === 'cliente' ? 'Cliente' : 'Fornecedor';
+    const docFmt = (dadosXML.cpf_cnpj||'').length === 14
+      ? (dadosXML.cpf_cnpj||'').replace(/(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/,'$1.$2.$3/$4-$5')
+      : (dadosXML.cpf_cnpj||'').replace(/(\d{3})(\d{3})(\d{3})(\d{2})/,'$1.$2.$3-$4');
+
+    const campo = (label, id, val, tipo='text') =>
+      `<div class="form-field"><label class="form-label">${label}</label><input class="form-input" type="${tipo}" id="${id}" value="${(val||'').replace(/"/g,'&quot;')}"></div>`;
+
+    const body = `
+      <div style="background:rgba(30,132,73,.08);border:1px solid var(--green);border-radius:10px;padding:12px 14px;margin-bottom:14px;font-size:12px;color:var(--text-2);line-height:1.5">
+        <b style="color:var(--green)">Novo ${tituloCat.toLowerCase()}</b> — dados extraídos do XML. Revise e salve.
+      </div>
+      <div class="form-grid">
+        <div class="form-field full">${campo('Razão Social / Nome *','nexml-nome', dadosXML.nome).slice(21,-6)}</div>
+        <div class="form-field">${campo('CPF / CNPJ','nexml-doc', docFmt).slice(21,-6)}</div>
+        <div class="form-field">${campo('Nome Fantasia','nexml-fant', dadosXML.nome_fantasia).slice(21,-6)}</div>
+        <div class="form-field">${campo('Inscrição Estadual','nexml-ie', dadosXML.inscricao_estadual).slice(21,-6)}</div>
+        <div class="form-field">${campo('Inscrição Municipal','nexml-im', dadosXML.inscricao_municipal).slice(21,-6)}</div>
+        <div class="form-field full">${campo('Logradouro','nexml-log', dadosXML.logradouro).slice(21,-6)}</div>
+        <div class="form-field">${campo('Número','nexml-num', dadosXML.numero).slice(21,-6)}</div>
+        <div class="form-field">${campo('Complemento','nexml-cpl', dadosXML.complemento).slice(21,-6)}</div>
+        <div class="form-field">${campo('Bairro','nexml-bai', dadosXML.bairro).slice(21,-6)}</div>
+        <div class="form-field">${campo('Município','nexml-mun', dadosXML.municipio).slice(21,-6)}</div>
+        <div class="form-field">${campo('UF','nexml-uf', dadosXML.uf).slice(21,-6)}</div>
+        <div class="form-field">${campo('CEP','nexml-cep', dadosXML.cep).slice(21,-6)}</div>
+        <div class="form-field">${campo('E-mail','nexml-email', dadosXML.email,'email').slice(21,-6)}</div>
+        <div class="form-field">${campo('Telefone','nexml-tel', dadosXML.telefone).slice(21,-6)}</div>
+      </div>`;
+
+    const footer = `
+      <button class="btn btn-outline" onclick="_xmlModalAction('ignorar')">Ignorar (não cadastrar)</button>
+      <button class="btn btn-gold" onclick="_xmlModalAction('salvar')">✓ Cadastrar ${tituloCat}</button>`;
+
+    window._xmlModalResolver = async (acao) => {
+      if (acao === 'ignorar') {
+        closeModal();
+        window._XMLBatch.ignorados++;
+        resolve(null);
+        return;
+      }
+      // salvar
+      const revisado = {
+        ...dadosXML,
+        nome:                $id('nexml-nome').value.trim() || dadosXML.nome,
+        cpf_cnpj:           ($id('nexml-doc').value||'').replace(/\D/g,'') || dadosXML.cpf_cnpj,
+        nome_fantasia:       $id('nexml-fant').value.trim() || null,
+        inscricao_estadual:  $id('nexml-ie').value.trim() || null,
+        inscricao_municipal: $id('nexml-im').value.trim() || null,
+        logradouro:          $id('nexml-log').value.trim() || null,
+        numero:              $id('nexml-num').value.trim() || null,
+        complemento:         $id('nexml-cpl').value.trim() || null,
+        bairro:              $id('nexml-bai').value.trim() || null,
+        municipio:           $id('nexml-mun').value.trim() || null,
+        uf:                 ($id('nexml-uf').value||'').slice(0,2).toUpperCase() || null,
+        cep:                ($id('nexml-cep').value||'').replace(/\D/g,'') || null,
+        email:               $id('nexml-email').value.trim() || null,
+        telefone:           ($id('nexml-tel').value||'').replace(/\D/g,'') || null,
+      };
+      try {
+        const novo = await criarEntidadeDoXML(revisado, categoria, origem);
+        closeModal();
+        toast(`${tituloCat} cadastrado: ${revisado.nome}`, 'success');
+        resolve(novo);
+      } catch(e) {
+        toast('Erro ao cadastrar: ' + e.message, 'error');
+        resolve(null);
+      }
+    };
+
+    openModal(`Cadastrar ${tituloCat} (via XML)`, body, footer);
+  });
+}
+
+function _xmlModalAction(acao) {
+  if (typeof window._xmlModalResolver === 'function') {
+    const fn = window._xmlModalResolver;
+    window._xmlModalResolver = null;
+    fn(acao);
+  }
+}
+
+// Modal 2: divergências entre cadastro e XML — checkbox por campo
+function modalDivergenciasXML(registro, divergencias, dadosXML, categoria) {
+  return new Promise((resolve) => {
+    const linhas = divergencias.map((d,i) => `
+      <tr style="border-bottom:1px solid var(--border-lt)">
+        <td style="padding:8px 10px;width:28px">
+          <input type="checkbox" id="divxml-${i}" data-campo="${d.campo}" style="cursor:pointer">
+        </td>
+        <td style="padding:8px 10px;font-size:12px;font-weight:600;color:var(--text-2)">${d.campo}</td>
+        <td style="padding:8px 10px;font-size:12px;color:var(--text-3);font-family:var(--mono)">
+          <div style="font-size:10px;color:var(--text-3)">Cadastro atual</div>${d.atual}
+        </td>
+        <td style="padding:8px 10px;font-size:12px;color:var(--amber);font-family:var(--mono)">
+          <div style="font-size:10px;color:var(--text-3)">No XML</div>${d.novo}
+        </td>
+      </tr>`).join('');
+
+    const body = `
+      <div style="background:rgba(183,119,13,.08);border:1px solid var(--amber);border-radius:10px;padding:12px 14px;margin-bottom:14px;font-size:12px;color:var(--text-2);line-height:1.5">
+        <b style="color:var(--amber)">Dados divergentes</b> — O ${categoria} <b>${registro.nome}</b> já está cadastrado, mas o XML traz informações diferentes. Marque os campos que deseja atualizar.
+      </div>
+      <div style="margin:10px 0;display:flex;gap:8px">
+        <button class="btn btn-sm" style="background:var(--surface-2);color:var(--text-2);border:1px solid var(--border-lt)" onclick="document.querySelectorAll('[id^=divxml-]').forEach(c=>c.checked=true)">Marcar todos</button>
+        <button class="btn btn-sm" style="background:var(--surface-2);color:var(--text-2);border:1px solid var(--border-lt)" onclick="document.querySelectorAll('[id^=divxml-]').forEach(c=>c.checked=false)">Desmarcar todos</button>
+      </div>
+      <div style="background:var(--surface-2);border:1px solid var(--border-lt);border-radius:9px;overflow:hidden">
+        <table style="width:100%;border-collapse:collapse">
+          <thead><tr style="background:var(--surface)">
+            <th style="padding:8px 10px;font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.06em"></th>
+            <th style="padding:8px 10px;font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.06em;text-align:left">Campo</th>
+            <th style="padding:8px 10px;font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.06em;text-align:left">Cadastro</th>
+            <th style="padding:8px 10px;font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.06em;text-align:left">XML</th>
+          </tr></thead>
+          <tbody>${linhas}</tbody>
+        </table>
+      </div>`;
+
+    const footer = `
+      <button class="btn btn-outline" onclick="_xmlDivAction('manter')">Manter cadastro</button>
+      <button class="btn btn-gold" onclick="_xmlDivAction('atualizar')">✓ Atualizar selecionados</button>`;
+
+    window._xmlDivResolver = async (acao) => {
+      if (acao === 'manter') {
+        closeModal();
+        resolve(registro);
+        return;
+      }
+      const selecionados = Array.from(document.querySelectorAll('[id^=divxml-]:checked'))
+        .map(c => c.dataset.campo);
+      try {
+        const atualizado = await atualizarEntidadeDoXML(registro, categoria, selecionados, dadosXML);
+        closeModal();
+        if (selecionados.length) toast(`${selecionados.length} campo(s) atualizado(s) em ${registro.nome}`, 'success');
+        resolve(atualizado);
+      } catch(e) {
+        toast('Erro ao atualizar: ' + e.message, 'error');
+        resolve(registro);
+      }
+    };
+
+    openModal(`Divergências · ${registro.nome}`, body, footer);
+  });
+}
+
+function _xmlDivAction(acao) {
+  if (typeof window._xmlDivResolver === 'function') {
+    const fn = window._xmlDivResolver;
+    window._xmlDivResolver = null;
+    fn(acao);
+  }
+}
+
+// Modal 3: conflito de categoria (CNPJ já existe em outra categoria)
+// Opções: [Criar em categoria nova separadamente] [Cancelar importação deste XML]
+function modalConflitoCategoriaXML(registro, categoriaExistente, categoriaNova, dadosXML, origem) {
+  return new Promise((resolve) => {
+    const rotuloExist = categoriaExistente === 'cliente' ? 'Cliente' : 'Fornecedor';
+    const rotuloNova  = categoriaNova      === 'cliente' ? 'Cliente' : 'Fornecedor';
+
+    const body = `
+      <div style="background:rgba(192,57,43,.08);border:1px solid var(--red);border-radius:10px;padding:14px 16px;margin-bottom:14px;font-size:12px;color:var(--text-2);line-height:1.6">
+        <b style="color:var(--red)">Conflito de categoria</b><br>
+        O documento <b>${registro.cpf_cnpj}</b> (<b>${registro.nome}</b>) já está cadastrado como <b>${rotuloExist.toLowerCase()}</b>, mas este XML traz esta entidade como <b>${rotuloNova.toLowerCase()}</b>.
+      </div>
+      <div style="background:var(--surface-2);border:1px solid var(--border-lt);border-radius:8px;padding:12px;font-size:12px;color:var(--text-2);line-height:1.6">
+        <b>Como deseja proceder?</b>
+        <ul style="margin:8px 0 0 18px;padding:0">
+          <li><b>Cadastrar como ${rotuloNova.toLowerCase()}</b>: cria um registro separado em ${rotuloNova.toLowerCase()}es. O registro de ${rotuloExist.toLowerCase()} permanece inalterado.</li>
+          <li><b>Cancelar</b>: a importação deste XML é abortada. Nenhum lançamento será criado.</li>
+        </ul>
+      </div>`;
+
+    const footer = `
+      <button class="btn btn-outline" onclick="_xmlCatAction('cancelar')">Cancelar importação</button>
+      <button class="btn btn-gold" onclick="_xmlCatAction('criar_novo')">+ Cadastrar como ${rotuloNova}</button>`;
+
+    window._xmlCatResolver = async (acao) => {
+      if (acao === 'cancelar') {
+        closeModal();
+        window._XMLBatch.ignorados++;
+        resolve(null);
+        return;
+      }
+      // cria novo registro na categoria nova
+      try {
+        const novo = await criarEntidadeDoXML(dadosXML, categoriaNova, origem);
+        window._XMLBatch.conflitosCategoria++;
+        closeModal();
+        toast(`${rotuloNova} cadastrado: ${dadosXML.nome}`, 'success');
+        resolve(novo);
+      } catch(e) {
+        toast('Erro ao cadastrar: ' + e.message, 'error');
+        resolve(null);
+      }
+    };
+
+    openModal('Entidade já existe em outra categoria', body, footer);
+  });
+}
+
+function _xmlCatAction(acao) {
+  if (typeof window._xmlCatResolver === 'function') {
+    const fn = window._xmlCatResolver;
+    window._xmlCatResolver = null;
+    fn(acao);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// ORQUESTRADOR: resolveEntidadeXML
+// Dada uma entidade extraída do XML + categoria desejada, retorna
+// { id, categoria } pronta pra usar em cliente_id/fornecedor_id.
+// Aplica modo batch (2b): primeiro XML pede modal, demais silencioso.
+// ═══════════════════════════════════════════════════════════════════
+async function resolveEntidadeXML(dadosXML, categoriaDesejada, origem) {
+  if (!dadosXML || !dadosXML.cpf_cnpj) return null;
+
+  const existente = await buscarEntidadePorDoc(dadosXML.cpf_cnpj);
+
+  // ── CASO 1: não existe em lugar nenhum ────────────────────────
+  if (!existente) {
+    const batch = window._XMLBatch;
+    if (batch.ativo && batch.primeiroJaMostrado) {
+      // Silencioso: cria direto
+      try {
+        const novo = await criarEntidadeDoXML(dadosXML, categoriaDesejada, origem);
+        return novo ? { id: novo.id, categoria: categoriaDesejada } : null;
+      } catch(e) {
+        console.error('[XML] erro cadastro silencioso:', e);
+        return null;
+      }
+    }
+    // Primeiro da fila: modal
+    batch.primeiroJaMostrado = true;
+    const novo = await modalNovaEntidadeXML(dadosXML, categoriaDesejada, origem);
+    return novo ? { id: novo.id, categoria: categoriaDesejada } : null;
+  }
+
+  // ── CASO 2: existe na MESMA categoria ─────────────────────────
+  if (existente.categoria === categoriaDesejada) {
+    const divs = compararEntidades(existente.registro, dadosXML);
+    if (!divs.length) {
+      // Dados batem → segue
+      return { id: existente.registro.id, categoria: categoriaDesejada };
+    }
+    // Divergências → pergunta
+    const atualizado = await modalDivergenciasXML(existente.registro, divs, dadosXML, categoriaDesejada);
+    return { id: atualizado.id, categoria: categoriaDesejada };
+  }
+
+  // ── CASO 3: existe em categoria DIFERENTE ────────────────────
+  const novo = await modalConflitoCategoriaXML(
+    existente.registro,
+    existente.categoria,
+    categoriaDesejada,
+    dadosXML,
+    origem
+  );
+  return novo ? { id: novo.id, categoria: categoriaDesejada } : null;
+}
+
 
 async function processarXMLAutoDoc(id, file) {
   const text = await file.text();
   const parser = new DOMParser();
   const doc    = parser.parseFromString(text, 'text/xml');
 
-  // Helper para pegar primeira tag encontrada (case insensitive via múltiplos nomes)
   const get = (...tags) => {
     for (const tag of tags) {
       const el = doc.getElementsByTagName(tag)[0];
@@ -4437,7 +4921,6 @@ async function processarXMLAutoDoc(id, file) {
     return '';
   };
 
-  // ── Detectar tipo de XML ──────────────────────────────────
   const isNFSe  = doc.getElementsByTagName('CompNfse').length > 0
                 || doc.getElementsByTagName('Nfse').length > 0
                 || doc.getElementsByTagName('nfse').length > 0
@@ -4451,44 +4934,33 @@ async function processarXMLAutoDoc(id, file) {
   adicionarFilaItem(id, file.name, 'processando',
     isNFSe ? 'Lendo NFS-e...' : isNFe ? 'Lendo NF-e...' : 'Lendo XML...', null);
 
-  // ── CNPJ da empresa logada para detectar receita/despesa ──
   const cnpjEmpresa = (APP.tenant?.cnpj||'').replace(/\D/g,'');
 
+  // ═════════════════════════════════════════════════════════════════
+  // NFSe
+  // ═════════════════════════════════════════════════════════════════
   if (isNFSe) {
-    // ── PARSER NFSe ABRASF + prefeituras ─────────────────────
-    const numero    = get('numero_nfse','Numero','NumeroNfse','nNFSe');
+    const numero = get('numero_nfse','Numero','NumeroNfse','nNFSe');
 
-    // Data — suporta DD/MM/YYYY e YYYY-MM-DD
-    const dataRaw   = get('data_nfse','DataEmissao','DataEmissaoNfse','Competencia','dataEmissao') || today();
+    const dataRaw = get('data_nfse','DataEmissao','DataEmissaoNfse','Competencia','dataEmissao') || today();
     let data = today();
     if (dataRaw.includes('/')) {
-      // DD/MM/YYYY → YYYY-MM-DD
       const [d,m,y] = dataRaw.split('/');
       data = `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`;
     } else if (dataRaw.length >= 10) {
       data = dataRaw.slice(0,10);
     }
 
-    // Valor — suporta vírgula como decimal (formato BR)
-    const valorStr  = get('valor_total','ValorServicos','ValorLiquidoNfse','ValorNfse','ValorTotal','Valor','valor_tributavel');
-    const valor     = parseFloat(valorStr.replace(/\./g,'').replace(',','.')) || 0;
+    const valorStr = get('valor_total','ValorServicos','ValorLiquidoNfse','ValorNfse','ValorTotal','Valor','valor_tributavel');
+    const valor = parseFloat(valorStr.replace(/\./g,'').replace(',','.')) || 0;
 
-    // Prestador
-    const cnpjPrestador = get('cpfcnpj').replace(/\D/g,'') ||
-                          (doc.getElementsByTagName('prestador')[0]?.getElementsByTagName('cpfcnpj')[0]?.textContent?.trim()||'').replace(/\D/g,'') ||
-                          (doc.getElementsByTagName('Prestador')[0]?.getElementsByTagName('Cnpj')[0]?.textContent?.trim()||'').replace(/\D/g,'');
-    const nomePrestador = get('RazaoSocialPrestador','RazaoSocial','NomeFantasiaPrestador') ||
-                          doc.getElementsByTagName('Prestador')[0]?.getElementsByTagName('RazaoSocial')[0]?.textContent?.trim() || '—';
+    // Extrair entidades completas via helper
+    const prestador = extrairEntidadeXML(doc, 'prestador') || {};
+    const tomador   = extrairEntidadeXML(doc, 'tomador')   || {};
 
-    // Tomador
-    const cnpjTomador   = (doc.getElementsByTagName('tomador')[0]?.getElementsByTagName('cpfcnpj')[0]?.textContent?.trim()||'').replace(/\D/g,'') ||
-                          (doc.getElementsByTagName('Tomador')[0]?.getElementsByTagName('Cnpj')[0]?.textContent?.trim()||'').replace(/\D/g,'');
-    const nomeTomador   = doc.getElementsByTagName('tomador')[0]?.getElementsByTagName('nome_razao_social')[0]?.textContent?.trim() ||
-                          doc.getElementsByTagName('tomador')[0]?.getElementsByTagName('sobrenome_nome_fantasia')[0]?.textContent?.trim() ||
-                          doc.getElementsByTagName('Tomador')[0]?.getElementsByTagName('RazaoSocial')[0]?.textContent?.trim() ||
-                          get('RazaoSocialTomador','NomeFantasiaTomador') || '—';
+    const cnpjPrestador = (prestador.cpf_cnpj||'').replace(/\D/g,'');
+    const cnpjTomador   = (tomador.cpf_cnpj||'').replace(/\D/g,'');
 
-    // Discriminação do serviço
     const discriminacao = get('descritivo','Discriminacao','DescricaoServico','Descricao') || '';
 
     if (!valor) {
@@ -4496,7 +4968,6 @@ async function processarXMLAutoDoc(id, file) {
       return;
     }
 
-    // Validar se o documento tem relação com o CNPJ da empresa
     if (cnpjEmpresa && cnpjPrestador && cnpjTomador) {
       if (cnpjEmpresa !== cnpjPrestador && cnpjEmpresa !== cnpjTomador) {
         adicionarFilaItem(id, file.name, 'erro',
@@ -4505,13 +4976,22 @@ async function processarXMLAutoDoc(id, file) {
       }
     }
 
-    // Detectar tipo: prestador = empresa → receita; tomador = empresa → despesa
-    let tipo = 'receita'; // padrão: você emitiu
+    // Determinar tipo e contraparte
+    let tipo = 'receita';
     if (cnpjEmpresa && cnpjTomador && cnpjTomador === cnpjEmpresa) tipo = 'despesa';
     if (cnpjEmpresa && cnpjPrestador && cnpjPrestador !== cnpjEmpresa) tipo = 'despesa';
 
-    const contraparte = tipo === 'receita' ? nomeTomador : nomePrestador;
-    const desc = `NFS-e nº ${numero} — ${contraparte}`;
+    const contraparte = tipo === 'receita' ? tomador : prestador;
+    const categoriaEntidade = tipo === 'receita' ? 'cliente' : 'fornecedor';
+
+    // Resolver entidade (criar/atualizar/conflito)
+    adicionarFilaItem(id, file.name, 'processando', 'Verificando cadastro da entidade...', null);
+    let entidadeResolvida = null;
+    if (contraparte.cpf_cnpj) {
+      entidadeResolvida = await resolveEntidadeXML(contraparte, categoriaEntidade, 'xml_nfse');
+    }
+
+    const desc = `NFS-e nº ${numero} — ${contraparte.nome || '—'}`;
 
     const body = {
       tenant_id:  APP.user.tenant_id,
@@ -4519,10 +4999,15 @@ async function processarXMLAutoDoc(id, file) {
       valor,
       vencimento: data,
       status:     'pendente',
-      observacao: `${discriminacao.slice(0,200)} | Prestador: ${nomePrestador} | Tomador: ${nomeTomador} | Importado via NFS-e XML`,
+      observacao: `${discriminacao.slice(0,200)} | Prestador: ${prestador.nome||'—'} | Tomador: ${tomador.nome||'—'} | Importado via NFS-e XML`,
     };
+    // Vincular entidade ao lançamento
+    if (entidadeResolvida) {
+      if (categoriaEntidade === 'cliente')     body.cliente_id = entidadeResolvida.id;
+      else                                     body.fornecedor_id = entidadeResolvida.id;
+    }
 
-    // Verificar duplicado
+    // Duplicidade
     const tabela = tipo === 'receita' ? 'fin_receitas' : 'fin_despesas';
     const existentes = await supa('GET', tabela, { params: {
       tenant_id: `eq.${APP.user.tenant_id}`,
@@ -4539,58 +5024,103 @@ async function processarXMLAutoDoc(id, file) {
 
     let refId;
     try {
-      if (tipo === 'receita') { const r = await supa('POST', 'fin_receitas', { body, returning: true }); refId = r[0]?.id; }
-      else                    { const r = await supa('POST', 'fin_despesas', { body, returning: true }); refId = r[0]?.id; }
-    } catch(e) { adicionarFilaItem(id, file.name, 'erro', 'Erro ao salvar: ' + e.message, null); return; }
+      const r = await supa('POST', tabela, { body, returning: true });
+      refId = r[0]?.id;
+    } catch(e) {
+      adicionarFilaItem(id, file.name, 'erro', 'Erro ao salvar: ' + e.message, null);
+      return;
+    }
 
-    // Salvar XML no storage
     if (refId) {
       try {
         const path = `${APP.user.tenant_id}/${tipo}/${refId}/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g,'_')}`;
         await uploadStorage(path, file);
-        await supa('POST', 'fin_anexos', { body: { tenant_id: APP.user.tenant_id, tipo_ref: tipo, ref_id: refId, nome: file.name, tipo_arquivo: 'text/xml', storage_path: path, tamanho: file.size }});
+        await supa('POST', 'fin_anexos', { body: {
+          tenant_id: APP.user.tenant_id, tipo_ref: tipo, ref_id: refId,
+          nome: file.name, tipo_arquivo: 'text/xml', storage_path: path, tamanho: file.size
+        }});
       } catch(_) {}
     }
 
-    adicionarFilaItem(id, file.name, 'ok', `${tipo==='receita'?'Receita':'Despesa'} criada: ${desc} — ${fmtMoeda(valor)}`, tipo);
+    adicionarFilaItem(id, file.name, 'ok',
+      `${tipo==='receita'?'Receita':'Despesa'} criada: ${desc} — ${fmtMoeda(valor)}`, tipo);
 
+  // ═════════════════════════════════════════════════════════════════
+  // NFe
+  // ═════════════════════════════════════════════════════════════════
   } else if (isNFe) {
-    // ── PARSER NF-e SEFAZ ────────────────────────────────────
     const nNF   = get('nNF');
     const dhEmi = get('dhEmi','dEmi');
     const data  = dhEmi ? dhEmi.slice(0,10) : today();
     const vNF   = parseFloat(get('vNF')) || 0;
-    const xNome = get('xNome');
-    const CNPJ  = get('CNPJ');
     const tpNF  = get('tpNF');
 
-    if (!vNF) { adicionarFilaItem(id, file.name, 'erro', 'NF-e: valor não encontrado.', null); return; }
+    if (!vNF) {
+      adicionarFilaItem(id, file.name, 'erro', 'NF-e: valor não encontrado.', null);
+      return;
+    }
 
+    // Extrair entidades via helper
+    const emit = extrairEntidadeXML(doc, 'emit') || {};
+    const dest = extrairEntidadeXML(doc, 'dest') || {};
+
+    // tpNF: 0 = entrada (despesa: emitente é fornecedor)
+    //       1 = saída  (receita: destinatário é cliente)
     const tipo = tpNF === '0' ? 'despesa' : 'receita';
-    const desc = `NF-e nº ${nNF} — ${xNome}`;
+    const contraparte = tipo === 'despesa' ? emit : dest;
+    const categoriaEntidade = tipo === 'despesa' ? 'fornecedor' : 'cliente';
 
-    const body = { tenant_id: APP.user.tenant_id, descricao: desc, valor: vNF, vencimento: data, status: 'pendente', observacao: `CNPJ: ${CNPJ} | Importado via NF-e XML` };
+    // Resolver entidade
+    adicionarFilaItem(id, file.name, 'processando', 'Verificando cadastro da entidade...', null);
+    let entidadeResolvida = null;
+    if (contraparte.cpf_cnpj) {
+      entidadeResolvida = await resolveEntidadeXML(contraparte, categoriaEntidade, 'xml_nfe');
+    }
+
+    const desc = `NF-e nº ${nNF} — ${contraparte.nome || '—'}`;
+    const body = {
+      tenant_id: APP.user.tenant_id,
+      descricao: desc,
+      valor: vNF,
+      vencimento: data,
+      status: 'pendente',
+      observacao: `CNPJ: ${contraparte.cpf_cnpj||'—'} | Importado via NF-e XML`,
+    };
+    if (entidadeResolvida) {
+      if (categoriaEntidade === 'cliente')     body.cliente_id = entidadeResolvida.id;
+      else                                     body.fornecedor_id = entidadeResolvida.id;
+    }
+
     let refId;
     try {
-      if (tipo === 'receita') { const r = await supa('POST', 'fin_receitas', { body, returning: true }); refId = r[0]?.id; }
-      else                    { const r = await supa('POST', 'fin_despesas', { body, returning: true }); refId = r[0]?.id; }
-    } catch(e) { adicionarFilaItem(id, file.name, 'erro', 'Erro ao salvar: ' + e.message, null); return; }
+      const tabela = tipo === 'receita' ? 'fin_receitas' : 'fin_despesas';
+      const r = await supa('POST', tabela, { body, returning: true });
+      refId = r[0]?.id;
+    } catch(e) {
+      adicionarFilaItem(id, file.name, 'erro', 'Erro ao salvar: ' + e.message, null);
+      return;
+    }
 
     if (refId) {
       try {
         const path = `${APP.user.tenant_id}/${tipo}/${refId}/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g,'_')}`;
         await uploadStorage(path, file);
-        await supa('POST', 'fin_anexos', { body: { tenant_id: APP.user.tenant_id, tipo_ref: tipo, ref_id: refId, nome: file.name, tipo_arquivo: 'text/xml', storage_path: path, tamanho: file.size }});
+        await supa('POST', 'fin_anexos', { body: {
+          tenant_id: APP.user.tenant_id, tipo_ref: tipo, ref_id: refId,
+          nome: file.name, tipo_arquivo: 'text/xml', storage_path: path, tamanho: file.size
+        }});
       } catch(_) {}
     }
 
-    adicionarFilaItem(id, file.name, 'ok', `${tipo==='receita'?'Receita':'Despesa'} criada: ${desc} — ${fmtMoeda(vNF)}`, tipo);
+    adicionarFilaItem(id, file.name, 'ok',
+      `${tipo==='receita'?'Receita':'Despesa'} criada: ${desc} — ${fmtMoeda(vNF)}`, tipo);
 
   } else {
-    // XML desconhecido — tenta extrair valores genéricos
-    adicionarFilaItem(id, file.name, 'erro', 'XML não reconhecido. Formatos suportados: NFS-e (ABRASF), NF-e (SEFAZ). Tente importar como PDF.', null);
+    adicionarFilaItem(id, file.name, 'erro',
+      'XML não reconhecido. Formatos suportados: NFS-e (ABRASF), NF-e (SEFAZ). Tente importar como PDF.', null);
   }
 }
+
 
 async function processarExtratoAutoDoc(id, file) {
   const text = await file.text();

@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -6888,19 +6887,15 @@ async function renderSuperadmin() {
       }
     }
 
-    // ── Nível 3: bbox expandida na linha inteira ───────────────
+    // ── Nível 3: clique em qualquer lugar da <tr> que contenha um td-actions-cell ──
+    // (último recurso: a linha inteira vira clicável pra "Gerenciar")
     if (!btn) {
       const row = ev.target.closest('tr');
       if (row) {
-        const btns = row.querySelectorAll('button[data-action]');
-        for (const b of btns) {
-          const r = b.getBoundingClientRect();
-          if (ev.clientX >= r.left - 8 && ev.clientX <= r.right + 8
-           && ev.clientY >= r.top  - 8 && ev.clientY <= r.bottom + 8) {
-            btn = b;
-            resolvedBy = 'row-bbox';
-            break;
-          }
+        const cell = row.querySelector('td[data-actions-cell]');
+        if (cell) {
+          btn = cell.querySelector('button[data-action="gerenciar"]');
+          if (btn) resolvedBy = 'row-fallback-gerenciar';
         }
       }
     }

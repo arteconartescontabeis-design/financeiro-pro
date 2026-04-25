@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -6828,10 +6829,10 @@ async function renderSuperadmin() {
               <td style="padding:14px 16px;text-align:right;font-family:'DM Mono',monospace;font-size:12px;color:#ef4444;font-weight:700">${fmtMoeda(t._despesas)}</td>
               <td style="padding:14px 16px;text-align:right;font-family:'DM Mono',monospace;font-size:12px;font-weight:700;color:${t._saldo>=0?'#22c55e':'#ef4444'}">${fmtMoeda(t._saldo)}</td>
               <td style="padding:14px 16px;font-size:11px;color:#64748b;font-family:'DM Mono',monospace">${t.criado_em?new Date(t.criado_em).toLocaleDateString('pt-BR'):'—'}</td>
-              <td style="padding:14px 16px;white-space:nowrap;position:relative;z-index:2">
-                <div style="display:flex;gap:8px;position:relative;z-index:2">
-                  <button data-action="gerenciar" data-tenant-id="${t.id}" style="padding:8px 16px;border-radius:7px;border:1px solid #334155;background:none;color:#cbd5e1;font-size:12px;font-weight:600;cursor:pointer;font-family:'DM Sans',sans-serif;position:relative;z-index:3;min-width:90px">Gerenciar</button>
-                  <button data-action="novo-usuario" data-tenant-id="${t.id}" data-tenant-nome="${(t.nome||'').replace(/"/g,'&quot;')}" style="padding:8px 16px;border-radius:7px;border:none;background:#1a5276;color:#fff;font-size:12px;font-weight:600;cursor:pointer;font-family:'DM Sans',sans-serif;position:relative;z-index:3;min-width:90px">+ Usuário</button>
+              <td data-actions-cell="true" data-tenant-id="${t.id}" data-tenant-nome="${(t.nome||'').replace(/"/g,'&quot;')}" style="padding:14px 16px;white-space:nowrap;cursor:pointer">
+                <div style="display:flex;gap:8px">
+                  <button type="button" data-action="gerenciar" data-tenant-id="${t.id}" style="padding:8px 16px;border-radius:7px;border:1px solid #334155;background:none;color:#cbd5e1;font-size:12px;font-weight:600;cursor:pointer;font-family:'DM Sans',sans-serif;min-width:90px;pointer-events:auto">Gerenciar</button>
+                  <button type="button" data-action="novo-usuario" data-tenant-id="${t.id}" data-tenant-nome="${(t.nome||'').replace(/"/g,'&quot;')}" style="padding:8px 16px;border-radius:7px;border:none;background:#1a5276;color:#fff;font-size:12px;font-weight:600;cursor:pointer;font-family:'DM Sans',sans-serif;min-width:90px;pointer-events:auto">+ Usuário</button>
                 </div>
               </td>
             </tr>`).join('')}
@@ -6840,10 +6841,11 @@ async function renderSuperadmin() {
   </div>`;
 
   // ═══════════════════════════════════════════════════════════
-  // FIX + DIAGNÓSTICO · Botões "Gerenciar" / "+ Usuário"
-  // Event delegation no container (sobrevive a stacking issues,
-  // re-renders e onclick inline que por algum motivo não dispara).
-  // Os logs [SA-CLICK] saem só se DEBUG_SA_CLICK = true.
+  // FIX v2 · Botões "Gerenciar" / "+ Usuário"
+  // 3 níveis de fallback:
+  //  1. closest('button[data-action]')           — clique direto no botão
+  //  2. closest('td[data-actions-cell]')         — clique no td/div pai
+  //  3. bbox de cada botão na linha (±8px)       — clique fora mas próximo
   // ═══════════════════════════════════════════════════════════
   window.DEBUG_SA_CLICK = true; // ← trocar pra false depois de confirmar
 
@@ -6852,7 +6854,7 @@ async function renderSuperadmin() {
     el.removeEventListener('click', window._saClickHandler, true);
   }
   window._saClickHandler = function(ev) {
-    // DIAGNÓSTICO: mostra TUDO que foi clicado dentro do sa-content
+    // DIAGNÓSTICO: mostra TUDO que foi clicado
     if (window.DEBUG_SA_CLICK) {
       const stack = document.elementsFromPoint(ev.clientX, ev.clientY)
         .map(e => `${e.tagName.toLowerCase()}${e.id?'#'+e.id:''}${e.className&&typeof e.className==='string'?'.'+e.className.split(' ').filter(Boolean).slice(0,2).join('.'):''}`)
@@ -6861,40 +6863,66 @@ async function renderSuperadmin() {
                   '· stack:', stack.join(' → '));
     }
 
-    // Sobe até o button com data-action (caso clique tenha pego um child)
+    // ── Nível 1: clique direto no botão ────────────────────────
     let btn = ev.target.closest('button[data-action]');
+    let resolvedBy = 'button';
 
-    // Safety net: se o clique pegou uma <td>/<tr>/<div> irmã do botão
-    // (stacking context estranho), procura dentro dessa linha.
+    // ── Nível 2: clique no <td data-actions-cell> ──────────────
+    // (cobre clique no gap entre botões, no padding do td, ou em qq filho não-button)
+    if (!btn) {
+      const cell = ev.target.closest('td[data-actions-cell]');
+      if (cell) {
+        // Decide qual botão usar: o mais próximo do clique no eixo X
+        const btns = Array.from(cell.querySelectorAll('button[data-action]'));
+        if (btns.length) {
+          let best = null, bestDist = Infinity;
+          for (const b of btns) {
+            const r = b.getBoundingClientRect();
+            const cx = (r.left + r.right) / 2;
+            const d = Math.abs(ev.clientX - cx);
+            if (d < bestDist) { bestDist = d; best = b; }
+          }
+          btn = best;
+          resolvedBy = 'td-cell-nearest';
+        }
+      }
+    }
+
+    // ── Nível 3: bbox expandida na linha inteira ───────────────
     if (!btn) {
       const row = ev.target.closest('tr');
       if (row) {
-        // Usa coordenadas do clique pra descobrir qual botão estava na mesma coluna
         const btns = row.querySelectorAll('button[data-action]');
         for (const b of btns) {
           const r = b.getBoundingClientRect();
-          if (ev.clientX >= r.left - 4 && ev.clientX <= r.right + 4
-           && ev.clientY >= r.top  - 4 && ev.clientY <= r.bottom + 4) {
+          if (ev.clientX >= r.left - 8 && ev.clientX <= r.right + 8
+           && ev.clientY >= r.top  - 8 && ev.clientY <= r.bottom + 8) {
             btn = b;
-            if (window.DEBUG_SA_CLICK) {
-              console.log('[SA-CLICK] ⚠ clique fora do botão, mas dentro da bbox — usando fallback');
-            }
+            resolvedBy = 'row-bbox';
             break;
           }
         }
       }
     }
 
-    if (!btn) return;
+    if (!btn) {
+      if (window.DEBUG_SA_CLICK) console.log('[SA-CLICK] ✗ nenhum botão resolvido — clique ignorado');
+      return;
+    }
+
     const action = btn.dataset.action;
     const tid    = btn.dataset.tenantId;
     const tnome  = btn.dataset.tenantNome || '';
 
     if (window.DEBUG_SA_CLICK) {
-      console.log('[SA-CLICK] ✓ delegate disparou:', action, 'tenant:', tid);
+      console.log(`[SA-CLICK] ✓ delegate disparou (via ${resolvedBy}):`, action, 'tenant:', tid);
     }
 
-    if (action === 'gerenciar')     { modalGerenciarEmpresa(tid); }
+    // Previne qualquer comportamento default ou bubble pra outros listeners
+    ev.preventDefault();
+    ev.stopPropagation();
+
+    if (action === 'gerenciar')         { modalGerenciarEmpresa(tid); }
     else if (action === 'novo-usuario') { modalCriarUsuarioEmpresa(tid, tnome); }
   };
   // useCapture=true garante que pegamos o evento ANTES de qualquer

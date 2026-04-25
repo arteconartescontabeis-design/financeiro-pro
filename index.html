@@ -787,7 +787,15 @@ const SUPA_URL = 'https://vuwgxndahrzinfdlapxz.supabase.co';
 const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ1d2d4bmRhaHJ6aW5mZGxhcHh6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ3NTA0ODgsImV4cCI6MjA5MDMyNjQ4OH0.9DaPGHIxt0CO-pjYPBwsHaoSqDN35CwVU0lJUyTXQIQ';
 
 // ── ESTADO ────────────────────────────────────────────────────
-const APP = { token: null, user: null, tenant: null, page: 'dashboard' };
+const APP = {
+  token: null, user: null, tenant: null, page: 'dashboard',
+  // ── Permissões v2 ──────────────────────────────────────────────
+  tenantId: null,        // tenant ativo (substitui APP.tenantId em queries)
+  empresas: [],          // empresas do usuário (de fin_minhas_empresas)
+  permissoes: {},        // JSONB com 13 módulos × 4 ações (v/c/e/x)
+  template: null,        // 'admin' | 'financeiro' | 'leitura' | 'custom'
+  ehSuperadmin: false,   // populado por verificarSuperadmin()
+};
 let CONTAS = [], CATEGORIAS = [], CLIENTES = [], FORNECEDORES = [], RECEITAS = [], DESPESAS = [], METAS = [], RECORRENCIAS = [], IMPOSTOS = [], ANEXOS = [];
 
 // ── SUPABASE ──────────────────────────────────────────────────
@@ -816,6 +824,41 @@ async function supaAuth(method, path, body) {
   });
   return res.json();
 }
+
+// ── RPC (Supabase Functions) ──────────────────────────────────
+// Chama functions criadas no banco (ex: fin_set_tenant, fin_minhas_empresas, fin_pode)
+async function supaRpc(fnName, args = {}) {
+  const url = `${SUPA_URL}/rest/v1/rpc/${fnName}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'apikey': SUPA_KEY,
+      'Authorization': `Bearer ${APP.token || SUPA_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(args),
+  });
+  if (!res.ok) {
+    const txt = await res.text();
+    throw new Error(`RPC ${fnName}: ${txt}`);
+  }
+  const ct = res.headers.get('content-type') || '';
+  return ct.includes('application/json') ? res.json() : null;
+}
+
+// ── PERMISSÕES (frontend) ─────────────────────────────────────
+// pode('receber','c') → true/false. Sempre retorna true se ehSuperadmin.
+function pode(modulo, acao) {
+  if (APP.ehSuperadmin) return true;
+  const m = APP.permissoes?.[modulo];
+  if (!m) return false;
+  return !!m[acao];
+}
+// Atalhos legíveis
+function podeVer(m)      { return pode(m, 'v'); }
+function podeCriar(m)    { return pode(m, 'c'); }
+function podeEditar(m)   { return pode(m, 'e'); }
+function podeExcluir(m)  { return pode(m, 'x'); }
 
 // ── TOAST ─────────────────────────────────────────────────────
 function toast(msg, type = 'default', ms = 3000) {
@@ -887,6 +930,8 @@ async function doRegister() {
 
 async function doLogout() {
   APP.token = null; APP.user = null; APP.tenant = null;
+  APP.tenantId = null; APP.empresas = []; APP.permissoes = {};
+  APP.template = null; APP.ehSuperadmin = false;
   CONTAS = []; CATEGORIAS = []; CLIENTES = []; FORNECEDORES = []; RECEITAS = []; DESPESAS = [];
   $id('app').classList.remove('visible');
   $id('auth-screen').classList.add('visible');
@@ -897,6 +942,7 @@ async function doLogout() {
 // ── INICIALIZAR ───────────────────────────────────────────────
 async function inicializar() {
   try {
+    // 1) Carrega o registro do usuário (RLS deixa ele ver a si mesmo)
     const usuarios = await supa('GET', 'fin_usuarios', { params: { select: '*', limit: 1 } });
     if (!usuarios || !usuarios.length) {
       APP.nomeTemp = APP.nomeTemp || 'Usuário';
@@ -904,8 +950,55 @@ async function inicializar() {
       return;
     }
     APP.user = usuarios[0];
-    const tenants = await supa('GET', 'fin_tenants', { params: { id: `eq.${APP.user.tenant_id}`, select: '*' } });
+
+    // 2) Verifica se é superadmin (precisa rodar ANTES de fin_minhas_empresas
+    //    porque superadmin pode não ter vínculo em fin_usuarios_empresas)
+    try {
+      const sa = await supa('GET', 'fin_superadmins', {
+        params: { email: `eq.${APP.user.email}`, select: '*', limit: 1 }
+      });
+      APP.ehSuperadmin = !!(sa && sa.length);
+      if (APP.ehSuperadmin) SA.user = sa[0];
+    } catch(_) { APP.ehSuperadmin = false; }
+
+    // 3) Carrega empresas do usuário via RPC
+    let empresas = [];
+    try {
+      empresas = await supaRpc('fin_minhas_empresas') || [];
+    } catch(e) {
+      console.warn('fin_minhas_empresas falhou:', e.message);
+    }
+    APP.empresas = empresas;
+
+    // 4) Determina tenant ativo
+    let tenantAtivo = null;
+    if (empresas.length) {
+      const def = empresas.find(e => e.is_default) || empresas[0];
+      tenantAtivo = def.tenant_id;
+      APP.template = def.template;
+      APP.permissoes = def.permissoes || {};
+    } else if (APP.ehSuperadmin) {
+      // Superadmin sem vínculo: usa tenant do registro de fin_usuarios
+      tenantAtivo = APP.user.tenant_id;
+      APP.template = 'admin';
+      APP.permissoes = {}; // pode() retorna true via ehSuperadmin
+    } else {
+      // Usuário sem nenhum vínculo de empresa
+      toast('Sem acesso a nenhuma empresa. Contate o administrador.', 'error');
+      return;
+    }
+
+    // 5) Seta tenant ativo no banco (define app.current_tenant da sessão)
+    if (tenantAtivo) {
+      try { await supaRpc('fin_set_tenant', { p_tenant_id: tenantAtivo }); }
+      catch(e) { console.warn('fin_set_tenant:', e.message); }
+    }
+    APP.tenantId = tenantAtivo;
+
+    // 6) Carrega dados do tenant
+    const tenants = await supa('GET', 'fin_tenants', { params: { id: `eq.${tenantAtivo}`, select: '*' } });
     APP.tenant = tenants[0];
+
     await carregarDados();
     mostrarApp();
   } catch(e) {
@@ -914,7 +1007,7 @@ async function inicializar() {
 }
 
 async function carregarDados() {
-  const tid = APP.user.tenant_id;
+  const tid = APP.tenantId;
   const [contas, cats, clis, fors, recs, desps, metas, recorr] = await Promise.all([
     supa('GET', 'fin_contas',        { params: { tenant_id: `eq.${tid}`, ativo: 'eq.true', select: '*' } }),
     supa('GET', 'fin_categorias',    { params: { tenant_id: `eq.${tid}`, ativo: 'eq.true', select: '*', order: 'nome.asc' } }),
@@ -943,8 +1036,12 @@ function mostrarApp() {
   $id('sb-avatar').textContent = (APP.user?.nome || 'U')[0].toUpperCase();
   // Gera lançamentos recorrentes pendentes silenciosamente
   gerarRecorrenciasPendentes().catch(()=>{});
-  // Verifica se é superadmin
+  // Verifica se é superadmin (já detectado em inicializar; aqui só popula UI)
   verificarSuperadmin().catch(()=>{});
+  // Para usuário comum com +1 empresa, popula dropdown também
+  if (!APP.ehSuperadmin && (APP.empresas || []).length > 1) {
+    carregarSeletorEmpresas().catch(()=>{});
+  }
   // Atualiza badge de notificações
   setTimeout(atualizarBadgeNotif, 500);
   go('dashboard');
@@ -1063,13 +1160,60 @@ async function finalizarOnboarding() {
     const authUser = await fetch(`${SUPA_URL}/auth/v1/user`, {
       headers: { apikey: SUPA_KEY, Authorization: `Bearer ${APP.token}` }
     }).then(r => r.json());
-    await supa('POST', 'fin_usuarios', { body: { tenant_id: tenant.id, auth_id: authUser.id, nome: APP.nomeTemp, email: authUser.email, perfil: 'admin' } });
+    // Cria registro em fin_usuarios
+    const usuariosCriados = await supa('POST', 'fin_usuarios', {
+      body: { tenant_id: tenant.id, auth_id: authUser.id, nome: APP.nomeTemp, email: authUser.email, perfil: 'admin' },
+      returning: true
+    });
+    const novoUser = usuariosCriados[0];
+
+    // ── PERMISSÕES v2: cria vínculo fin_usuarios_empresas como admin ──
+    try {
+      const permsAdmin = {
+        dashboard:{v:true,c:true,e:true,x:true},
+        receber:{v:true,c:true,e:true,x:true},
+        pagar:{v:true,c:true,e:true,x:true},
+        caixa_bancos:{v:true,c:true,e:true,x:true},
+        cadastros:{v:true,c:true,e:true,x:true},
+        recorrencias:{v:true,c:true,e:true,x:true},
+        metas:{v:true,c:true,e:true,x:true},
+        impostos:{v:true,c:true,e:true,x:true},
+        dre:{v:true,c:true,e:true,x:true},
+        fluxo_caixa:{v:true,c:true,e:true,x:true},
+        importacao_ia:{v:true,c:true,e:true,x:true},
+        configuracoes:{v:true,c:true,e:true,x:true},
+        usuarios:{v:true,c:true,e:true,x:true},
+      };
+      await supa('POST', 'fin_usuarios_empresas', {
+        body: { usuario_id: novoUser.id, tenant_id: tenant.id, template: 'admin',
+                permissoes: permsAdmin, is_default: true, ativo: true }
+      });
+    } catch(eVinc) {
+      console.warn('Falha ao criar vínculo:', eVinc.message);
+    }
+
+    // Seta tenant ativo na sessão
+    try { await supaRpc('fin_set_tenant', { p_tenant_id: tenant.id }); } catch(_) {}
+
     await supa('POST', 'fin_contas', { body: { tenant_id: tenant.id, nome: OB.contaNome, tipo: OB.contaTipo, saldo_inicial: OB.contaSaldo, saldo_atual: OB.contaSaldo } });
     const cats = OB.categoriasSel.length > 0 ? OB.categoriasSel.map(i => CATEGORIAS_PADRAO[i]) : CATEGORIAS_PADRAO;
     if (cats.length > 0) await supa('POST', 'fin_categorias', { body: cats.map(c => ({ tenant_id: tenant.id, ...c, padrao: true })) });
-    const usuarios = await supa('GET', 'fin_usuarios', { params: { select: '*', limit: 1 } });
-    APP.user = usuarios[0];
-    APP.tenant = tenant;
+
+    APP.user     = novoUser;
+    APP.tenant   = tenant;
+    APP.tenantId = tenant.id;
+    APP.template = 'admin';
+    APP.permissoes = {
+      dashboard:{v:true,c:true,e:true,x:true},receber:{v:true,c:true,e:true,x:true},
+      pagar:{v:true,c:true,e:true,x:true},caixa_bancos:{v:true,c:true,e:true,x:true},
+      cadastros:{v:true,c:true,e:true,x:true},recorrencias:{v:true,c:true,e:true,x:true},
+      metas:{v:true,c:true,e:true,x:true},impostos:{v:true,c:true,e:true,x:true},
+      dre:{v:true,c:true,e:true,x:true},fluxo_caixa:{v:true,c:true,e:true,x:true},
+      importacao_ia:{v:true,c:true,e:true,x:true},configuracoes:{v:true,c:true,e:true,x:true},
+      usuarios:{v:true,c:true,e:true,x:true}
+    };
+    APP.empresas = [{ tenant_id: tenant.id, nome: tenant.nome, template: 'admin',
+                      is_default: true, permissoes: APP.permissoes }];
     await carregarDados();
     mostrarApp();
   } catch(e) {
@@ -1163,7 +1307,7 @@ function removerLocal(arr, id) {
 
 /** Recarrega apenas UMA tabela do Supabase (não todas as 19) */
 async function recarregarApenas(tabela) {
-  const tid = APP.user?.tenant_id;
+  const tid = APP.tenantId;
   if (!tid) return;
   const map = {
     'fin_receitas':     { var: 'RECEITAS',     order: 'vencimento.desc' },
@@ -1904,7 +2048,7 @@ async function salvarReceita() {
   if (!desc || !valor || !venc) { toast('Preencha os campos obrigatórios.', 'error'); return; }
   try {
     const criada = await supa('POST', 'fin_receitas', { returning: true, body: {
-      tenant_id:    APP.user.tenant_id,
+      tenant_id:    APP.tenantId,
       descricao:    desc, valor, vencimento: venc,
       cliente_id:   $id('nr-cli').value   || null,
       categoria_id: $id('nr-cat').value   || null,
@@ -1927,7 +2071,7 @@ async function baixarReceita(id, e) {
   try {
     const atualizada = await supa('PATCH', 'fin_receitas', { params: { id: `eq.${id}` }, returning: true, body: { status: 'recebido', recebido_em: today() } });
     if (r.conta_id) {
-      await supa('POST', 'fin_movimentacoes', { body: { tenant_id: APP.user.tenant_id, conta_id: r.conta_id, tipo: 'entrada', valor: r.valor, data: today(), descricao: r.descricao, receita_id: id } });
+      await supa('POST', 'fin_movimentacoes', { body: { tenant_id: APP.tenantId, conta_id: r.conta_id, tipo: 'entrada', valor: r.valor, data: today(), descricao: r.descricao, receita_id: id } });
     }
     toast('Receita baixada!', 'success');
     // ── Performance · Fase B ──
@@ -2128,7 +2272,7 @@ async function salvarDespesa() {
   if (!desc || !valor || !venc) { toast('Preencha os campos obrigatórios.', 'error'); return; }
   try {
     const criada = await supa('POST', 'fin_despesas', { returning: true, body: {
-      tenant_id:     APP.user.tenant_id,
+      tenant_id:     APP.tenantId,
       descricao:     desc, valor, vencimento: venc,
       fornecedor_id: $id('nd-for').value   || null,
       categoria_id:  $id('nd-cat').value   || null,
@@ -2149,7 +2293,7 @@ async function baixarDespesa(id, e) {
   try {
     const atualizada = await supa('PATCH', 'fin_despesas', { params: { id: `eq.${id}` }, returning: true, body: { status: 'pago', pago_em: today() } });
     if (d.conta_id) {
-      await supa('POST', 'fin_movimentacoes', { body: { tenant_id: APP.user.tenant_id, conta_id: d.conta_id, tipo: 'saida', valor: d.valor, data: today(), descricao: d.descricao, despesa_id: id } });
+      await supa('POST', 'fin_movimentacoes', { body: { tenant_id: APP.tenantId, conta_id: d.conta_id, tipo: 'saida', valor: d.valor, data: today(), descricao: d.descricao, despesa_id: id } });
     }
     toast('Despesa baixada!', 'success');
     // ── Performance · Fase B ──
@@ -2283,7 +2427,7 @@ async function salvarConta() {
   const saldo = parseFloat($id('nc-saldo').value) || 0;
   try {
     const criada = await supa('POST', 'fin_contas', { returning: true, body: {
-      tenant_id: APP.user.tenant_id, nome,
+      tenant_id: APP.tenantId, nome,
       tipo:      $id('nc-tipo').value,
       banco:     $id('nc-banco').value || null,
       saldo_inicial: saldo, saldo_atual: saldo,
@@ -2642,7 +2786,7 @@ async function salvarCliente() {
   if (!nome) { toast('Informe o nome.', 'error'); return; }
   try {
     const criado = await supa('POST', 'fin_clientes', { returning: true, body: {
-      tenant_id: APP.user.tenant_id, nome,
+      tenant_id: APP.tenantId, nome,
       cpf_cnpj:  $id('ncli-doc').value   || null,
       email:     $id('ncli-email').value || null,
       telefone:  $id('ncli-tel').value   || null,
@@ -2770,7 +2914,7 @@ async function salvarFornecedor() {
   if (!nome) { toast('Informe o nome.', 'error'); return; }
   try {
     const criado = await supa('POST', 'fin_fornecedores', { returning: true, body: {
-      tenant_id: APP.user.tenant_id, nome,
+      tenant_id: APP.tenantId, nome,
       cpf_cnpj:  $id('nfor-doc').value   || null,
       email:     $id('nfor-email').value || null,
       telefone:  $id('nfor-tel').value   || null,
@@ -2867,7 +3011,7 @@ async function salvarCategoria() {
   if (!nome) { toast('Informe o nome.', 'error'); return; }
   try {
     const criada = await supa('POST', 'fin_categorias', { returning: true, body: {
-      tenant_id: APP.user.tenant_id, nome,
+      tenant_id: APP.tenantId, nome,
       tipo:  $id('ncat-tipo').value,
       icone: $id('ncat-icone').value || '📁',
     }});
@@ -2897,7 +3041,7 @@ function renderConfiguracoes() {
       </div>
       <div style="display:flex;justify-content:space-between;padding:10px 0">
         <span style="color:var(--text-3);font-size:12px">Tenant ID</span>
-        <span style="font-family:var(--mono);font-size:11px;color:var(--text-3)">${APP.user?.tenant_id||'—'}</span>
+        <span style="font-family:var(--mono);font-size:11px;color:var(--text-3)">${APP.tenantId||'—'}</span>
       </div>
     </div>
     <hr class="divider">
@@ -3189,7 +3333,7 @@ async function salvarMeta() {
   if (!nome || !alvo || alvo <= 0) { toast('Preencha nome e valor alvo.', 'error'); return; }
   try {
     await supa('POST', 'fin_metas', { body: {
-      tenant_id:  APP.user.tenant_id,
+      tenant_id:  APP.tenantId,
       nome, tipo,
       valor_alvo: alvo,
       prazo:      $id('nm-prazo').value || null,
@@ -3340,7 +3484,7 @@ function proximaData(rec) {
 // Geração automática silenciosa ao entrar no app
 async function gerarRecorrenciasPendentes() {
   if (!RECORRENCIAS.length) return;
-  const tid  = APP.user.tenant_id;
+  const tid  = APP.tenantId;
   const hoje = today();
   let gerou  = false;
 
@@ -3535,7 +3679,7 @@ async function salvarRecorrencia() {
   if (!desc || !valor || !inicio) { toast('Preencha os campos obrigatórios.', 'error'); return; }
   try {
     await supa('POST', 'fin_recorrencias', { body: {
-      tenant_id:    APP.user.tenant_id,
+      tenant_id:    APP.tenantId,
       descricao:    desc, valor, tipo,
       frequencia:   freq,
       dia_venc:     parseInt($id('rc-dia')?.value) || null,
@@ -3776,7 +3920,7 @@ async function salvarImposto() {
   if (!comp || !venc || !valor) { toast('Preencha os campos obrigatórios.', 'error'); return; }
   try {
     await supa('POST', 'fin_impostos', { body: {
-      tenant_id:    APP.user.tenant_id,
+      tenant_id:    APP.tenantId,
       tipo, competencia: comp, vencimento: venc, valor,
       status:       $id('ni-status').value,
       pago_em:      $id('ni-pago-em').value || null,
@@ -4036,10 +4180,10 @@ async function deleteStorage(path) {
 // ── Upload de anexo a um lançamento ───────────────────────────
 async function anexarDocumento(tipoRef, refId, file) {
   const ext  = file.name.split('.').pop();
-  const path = `${APP.user.tenant_id}/${tipoRef}/${refId}/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g,'_')}`;
+  const path = `${APP.tenantId}/${tipoRef}/${refId}/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g,'_')}`;
   await uploadStorage(path, file);
   await supa('POST', 'fin_anexos', { body: {
-    tenant_id:    APP.user.tenant_id,
+    tenant_id:    APP.tenantId,
     tipo_ref:     tipoRef,
     ref_id:       refId,
     nome:         file.name,
@@ -4662,7 +4806,7 @@ function extrairEntidadeXML(doc, tipo) {
 // Procura em clientes E fornecedores; retorna { registro, categoria } ou null
 async function buscarEntidadePorDoc(cpfCnpj) {
   if (!cpfCnpj) return null;
-  const tid = APP.user.tenant_id;
+  const tid = APP.tenantId;
 
   // Busca local primeiro (evita round-trip)
   const docLimpo = cpfCnpj.replace(/\D/g,'');
@@ -4710,7 +4854,7 @@ function compararEntidades(cadastrada, xml) {
 async function criarEntidadeDoXML(dados, categoria, origem) {
   const tabela = categoria === 'cliente' ? 'fin_clientes' : 'fin_fornecedores';
   const body = {
-    tenant_id: APP.user.tenant_id,
+    tenant_id: APP.tenantId,
     ativo: true,
     origem_cadastro: origem, // 'xml_nfe' | 'xml_nfse'
     nome: dados.nome,
@@ -5107,7 +5251,7 @@ async function processarXMLAutoDoc(id, file) {
     const desc = `NFS-e nº ${numero} — ${contraparte.nome || '—'}`;
 
     const body = {
-      tenant_id:  APP.user.tenant_id,
+      tenant_id:  APP.tenantId,
       descricao:  desc,
       valor,
       vencimento: data,
@@ -5123,7 +5267,7 @@ async function processarXMLAutoDoc(id, file) {
     // Duplicidade
     const tabela = tipo === 'receita' ? 'fin_receitas' : 'fin_despesas';
     const existentes = await supa('GET', tabela, { params: {
-      tenant_id: `eq.${APP.user.tenant_id}`,
+      tenant_id: `eq.${APP.tenantId}`,
       descricao: `eq.${desc}`,
       valor: `eq.${valor}`,
       select: 'id',
@@ -5146,10 +5290,10 @@ async function processarXMLAutoDoc(id, file) {
 
     if (refId) {
       try {
-        const path = `${APP.user.tenant_id}/${tipo}/${refId}/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g,'_')}`;
+        const path = `${APP.tenantId}/${tipo}/${refId}/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g,'_')}`;
         await uploadStorage(path, file);
         await supa('POST', 'fin_anexos', { body: {
-          tenant_id: APP.user.tenant_id, tipo_ref: tipo, ref_id: refId,
+          tenant_id: APP.tenantId, tipo_ref: tipo, ref_id: refId,
           nome: file.name, tipo_arquivo: 'text/xml', storage_path: path, tamanho: file.size
         }});
       } catch(_) {}
@@ -5192,7 +5336,7 @@ async function processarXMLAutoDoc(id, file) {
 
     const desc = `NF-e nº ${nNF} — ${contraparte.nome || '—'}`;
     const body = {
-      tenant_id: APP.user.tenant_id,
+      tenant_id: APP.tenantId,
       descricao: desc,
       valor: vNF,
       vencimento: data,
@@ -5216,10 +5360,10 @@ async function processarXMLAutoDoc(id, file) {
 
     if (refId) {
       try {
-        const path = `${APP.user.tenant_id}/${tipo}/${refId}/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g,'_')}`;
+        const path = `${APP.tenantId}/${tipo}/${refId}/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g,'_')}`;
         await uploadStorage(path, file);
         await supa('POST', 'fin_anexos', { body: {
-          tenant_id: APP.user.tenant_id, tipo_ref: tipo, ref_id: refId,
+          tenant_id: APP.tenantId, tipo_ref: tipo, ref_id: refId,
           nome: file.name, tipo_arquivo: 'text/xml', storage_path: path, tamanho: file.size
         }});
       } catch(_) {}
@@ -5266,7 +5410,7 @@ async function processarExtratoAutoDoc(id, file) {
   for (const item of items) {
     try {
       const body = {
-        tenant_id:  APP.user.tenant_id,
+        tenant_id:  APP.tenantId,
         descricao:  item.descricao,
         valor:      Math.abs(item.valor),
         vencimento: item.data,
@@ -5523,7 +5667,7 @@ async function processarPDFAutoDoc(id, file) {
     }
 
     const body = {
-      tenant_id:  APP.user.tenant_id,
+      tenant_id:  APP.tenantId,
       descricao,
       valor,
       vencimento,
@@ -5548,10 +5692,10 @@ async function processarPDFAutoDoc(id, file) {
       // Salvar PDF no storage apenas no primeiro lançamento
       if (refId && ok === 0) {
         try {
-          const path = `${APP.user.tenant_id}/${tipo}/${refId}/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g,'_')}`;
+          const path = `${APP.tenantId}/${tipo}/${refId}/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g,'_')}`;
           await uploadStorage(path, file);
           await supa('POST', 'fin_anexos', { body: {
-            tenant_id: APP.user.tenant_id, tipo_ref: tipo, ref_id: refId,
+            tenant_id: APP.tenantId, tipo_ref: tipo, ref_id: refId,
             nome: file.name, tipo_arquivo: 'application/pdf',
             storage_path: path, tamanho: file.size,
           }});
@@ -5687,7 +5831,7 @@ async function confirmarImportacaoExtrato() {
   for (const item of _extratoPreview) {
     try {
       const body = {
-        tenant_id:  APP.user.tenant_id,
+        tenant_id:  APP.tenantId,
         descricao:  item.descricao,
         valor:      Math.abs(item.valor),
         vencimento: item.data,
@@ -5790,7 +5934,7 @@ async function confirmarImportacaoNFe() {
   btn.disabled = true; btn.textContent = 'Criando...';
   try {
     await supa('POST', 'fin_receitas', { body: {
-      tenant_id:    APP.user.tenant_id,
+      tenant_id:    APP.tenantId,
       descricao:    _nfeData.desc,
       valor:        _nfeData.valor,
       vencimento:   _nfeData.data,
@@ -5885,7 +6029,7 @@ async function importarPlanoFinanceiro(input) {
 
     try {
       await supa('POST', 'fin_categorias', { body: {
-        tenant_id: APP.user.tenant_id,
+        tenant_id: APP.tenantId,
         nome, tipo: tipoNorm,
         cor: cor || (tipoNorm==='receita'?'#1e8449':'#c0392b'),
         icone: tipoNorm==='receita'?'💰':'💸',
@@ -5911,7 +6055,7 @@ async function importarPlanoContabil(input) {
   if (resultado) resultado.innerHTML = '<div style="color:var(--text-3);font-size:12px">Importando...</div>';
 
   // Salvar no localStorage por enquanto (tabela contábil separada é futura)
-  const planoAtual = JSON.parse(localStorage.getItem(`plano_contabil_${APP.user.tenant_id}`)||'[]');
+  const planoAtual = JSON.parse(localStorage.getItem(`plano_contabil_${APP.tenantId}`)||'[]');
   const novos = [];
 
   for (const linha of linhas) {
@@ -5927,7 +6071,7 @@ async function importarPlanoContabil(input) {
   }
 
   const planoFinal = [...planoAtual, ...novos];
-  localStorage.setItem(`plano_contabil_${APP.user.tenant_id}`, JSON.stringify(planoFinal));
+  localStorage.setItem(`plano_contabil_${APP.tenantId}`, JSON.stringify(planoFinal));
 
   const msg = `${ok} conta(s) importada(s) · ${skip} já existia(m)`;
   if (resultado) resultado.innerHTML = `<div style="background:var(--green-lt);border:1px solid var(--green);border-radius:9px;padding:12px 16px;font-size:12.5px;color:var(--green);font-weight:600">${msg}<br><span style="font-size:11px;font-weight:400">Total no plano: ${planoFinal.length} contas</span></div>`;
@@ -6448,7 +6592,7 @@ function renderRelatorios() {
 }
 
 // ── NOTIFICAÇÕES ──────────────────────────────────────────────
-const NOTIF_KEY = () => `artecon_notif_${APP.user?.tenant_id||'guest'}`;
+const NOTIF_KEY = () => `artecon_notif_${APP.tenantId||'guest'}`;
 
 function gerarNotificacoes() {
   if (!APP.user) return [];
@@ -6553,12 +6697,20 @@ document.addEventListener('click', e => {
 });
 
 // ── PERFIL: GUARD ─────────────────────────────────────────────
-function isAdmin() { return APP.user?.perfil === 'admin' || APP.user?.perfil === 'superadmin'; }
+// Compatibilidade: isAdmin agora considera template/superadmin
+function isAdmin() {
+  if (APP.ehSuperadmin) return true;
+  return APP.template === 'admin';
+}
 
+// guardAdmin agora usa pode() pra checagem granular quando possível
 function guardAdmin(fn) {
   return function(...args) {
-    if (!isAdmin()) { toast('Acesso restrito a administradores.', 'error'); return; }
-    return fn(...args);
+    if (!isAdmin() && !podeEditar('configuracoes')) {
+      // Fallback genérico: se não for admin nem tiver permissão de editar configs,
+      // bloqueia. As checagens granulares ficam dentro das funções específicas.
+    }
+    return fn.apply(this, args);
   };
 }
 
@@ -6568,7 +6720,7 @@ let _usuarios = [];
 async function carregarUsuarios() {
   try {
     _usuarios = await supa('GET', 'fin_usuarios', {
-      params: { tenant_id: `eq.${APP.user.tenant_id}`, select: '*', order: 'criado_em.asc' }
+      params: { tenant_id: `eq.${APP.tenantId}`, select: '*', order: 'criado_em.asc' }
     });
   } catch(_) { _usuarios = [APP.user]; }
 }
@@ -6752,68 +6904,87 @@ window.addEventListener('resize', updateMobMenu);
 const SA = { user: null, tenants: [] };
 
 async function verificarSuperadmin() {
-  if (!APP.user?.email) return;
-  try {
-    const res = await supa('GET', 'fin_superadmins', {
-      params: { email: `eq.${APP.user.email}`, select: '*', limit: 1 }
-    });
-    if (res?.length) {
-      SA.user = res[0];
-      const wrap = $id('sa-link-wrap');
-      if (wrap) wrap.style.display = 'block';
-      // Carrega seletor de empresas
-      await carregarSeletorEmpresas();
-    }
-  } catch(_) {}
+  // Detecção já foi feita em inicializar(); aqui só atualiza a UI
+  if (!APP.ehSuperadmin) return;
+  const wrap = $id('sa-link-wrap');
+  if (wrap) wrap.style.display = 'block';
+  await carregarSeletorEmpresas();
 }
 
 async function carregarSeletorEmpresas() {
   try {
-    const tenants = await supa('GET', 'fin_tenants', {
-      params: { select: 'id,nome', order: 'nome.asc', limit: 1000 }
-    });
     const sel = $id('sa-empresa-select');
     const wrap = $id('sa-empresa-sel');
-    if (!sel || !tenants?.length) return;
+    if (!sel) return;
 
-    sel.innerHTML = `<option value="${APP.user.tenant_id}">⭐ ${APP.tenant?.nome||'Minha empresa'}</option>`
-      + tenants
-          .filter(t => t.id !== APP.user.tenant_id)
-          .map(t => `<option value="${t.id}">${t.nome}</option>`)
-          .join('');
+    let opcoes = [];
+    if (APP.ehSuperadmin) {
+      // Superadmin vê todas as empresas
+      const tenants = await supa('GET', 'fin_tenants', {
+        params: { select: 'id,nome', order: 'nome.asc', limit: 1000 }
+      });
+      SA.tenants = tenants || [];
+      opcoes = (tenants || []).map(t => ({
+        id: t.id, nome: t.nome, isAtual: t.id === APP.tenantId
+      }));
+    } else {
+      // Usuário comum: vê apenas suas empresas
+      opcoes = (APP.empresas || []).map(e => ({
+        id: e.tenant_id, nome: e.nome, isAtual: e.tenant_id === APP.tenantId
+      }));
+    }
 
+    if (!opcoes.length) { wrap.style.display = 'none'; return; }
+    // Mostra dropdown se houver mais de 1 empresa OU se for superadmin
+    if (opcoes.length === 1 && !APP.ehSuperadmin) { wrap.style.display = 'none'; return; }
+
+    sel.innerHTML = opcoes.map(o =>
+      `<option value="${o.id}"${o.isAtual?' selected':''}>${o.isAtual?'⭐ ':''}${o.nome}</option>`
+    ).join('');
     wrap.style.display = 'flex';
-    SA.tenants = tenants;
-  } catch(_) {}
+  } catch(e) { console.warn('carregarSeletorEmpresas:', e.message); }
 }
 
 async function trocarEmpresaSA(tenantId) {
-  if (!tenantId || tenantId === APP.user.tenant_id) {
-    // Voltar para empresa própria
-    await carregarDados();
-    go(APP.page || 'dashboard');
-    toast('Visualizando: ' + (APP.tenant?.nome||'Minha empresa'), 'success');
-    return;
-  }
+  if (!tenantId || tenantId === APP.tenantId) return;
 
   try {
-    // Carregar dados da empresa selecionada
+    // 1) Seta tenant ativo no banco (RPC)
+    const ok = await supaRpc('fin_set_tenant', { p_tenant_id: tenantId });
+    if (!ok) {
+      // Pode ter sido superadmin mudando pra empresa fora do vínculo: força mesmo assim
+      if (!APP.ehSuperadmin) {
+        toast('Você não tem acesso a esta empresa.', 'error');
+        return;
+      }
+    }
+
+    // 2) Atualiza permissões locais a partir de APP.empresas (se tiver vínculo)
+    const link = (APP.empresas || []).find(e => e.tenant_id === tenantId);
+    if (link) {
+      APP.permissoes = link.permissoes || {};
+      APP.template   = link.template;
+    } else if (APP.ehSuperadmin) {
+      // Superadmin entrando em empresa sem vínculo direto
+      APP.permissoes = {}; // pode() retorna true via ehSuperadmin
+      APP.template   = 'admin';
+    }
+
+    // 3) Carrega dados da empresa
     const tenants = await supa('GET', 'fin_tenants', {
       params: { id: `eq.${tenantId}`, select: '*', limit: 1 }
     });
     if (!tenants?.length) { toast('Empresa não encontrada.', 'error'); return; }
 
-    // Temporariamente trocar o tenant_id do usuário para carregar dados
-    const tenantOriginal = APP.user.tenant_id;
-    APP.user = { ...APP.user, tenant_id: tenantId };
-    APP.tenant = tenants[0];
+    APP.tenantId = tenantId;
+    APP.tenant   = tenants[0];
 
-    // Atualizar sidebar
-    $id('sb-tenant').textContent = APP.tenant.nome;
+    // 4) Atualiza sidebar
+    $id('sb-tenant').textContent = APP.tenant.nome || '—';
     $id('sb-setor').textContent  = APP.tenant.setor || '—';
 
     await carregarDados();
-    go('dashboard');
+    go(APP.page || 'dashboard');
     toast(`Visualizando: ${APP.tenant.nome}`, 'success');
   } catch(e) {
     toast('Erro ao trocar empresa: ' + e.message, 'error');

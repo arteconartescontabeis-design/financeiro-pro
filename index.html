@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -2283,14 +2282,16 @@ async function salvarConta() {
   if (!nome) { toast('Informe o nome.', 'error'); return; }
   const saldo = parseFloat($id('nc-saldo').value) || 0;
   try {
-    await supa('POST', 'fin_contas', { body: {
+    const criada = await supa('POST', 'fin_contas', { returning: true, body: {
       tenant_id: APP.user.tenant_id, nome,
       tipo:      $id('nc-tipo').value,
       banco:     $id('nc-banco').value || null,
       saldo_inicial: saldo, saldo_atual: saldo,
     }});
     closeModal(); toast('Conta criada!', 'success');
-    await carregarDados(); renderContas();
+    // ── Performance · Fase B ──
+    if (Array.isArray(criada) && criada[0]) atualizarLocal(CONTAS, criada[0]);
+    rerenderTelaAtual();
   } catch(e) { toast('Erro: ' + e.message, 'error'); }
 }
 
@@ -2319,13 +2320,15 @@ async function salvarEdicaoConta(id) {
   const nome = $id('ect-nome').value.trim();
   if (!nome) { toast('Informe o nome.', 'error'); return; }
   try {
-    await supa('PATCH', 'fin_contas', { params: { id: `eq.${id}` }, body: {
+    const atualizada = await supa('PATCH', 'fin_contas', { params: { id: `eq.${id}` }, returning: true, body: {
       nome, tipo: $id('ect-tipo').value,
       banco: $id('ect-banco').value||null,
       saldo_atual: parseFloat($id('ect-saldo').value)||0,
     }});
     closeModal(); toast('Conta atualizada!', 'success');
-    await carregarDados(); renderContas();
+    // ── Performance · Fase B ──
+    if (Array.isArray(atualizada) && atualizada[0]) atualizarLocal(CONTAS, atualizada[0]);
+    rerenderTelaAtual();
   } catch(e) { toast('Erro: ' + e.message, 'error'); }
 }
 
@@ -2334,7 +2337,11 @@ async function excluirConta(id) {
   try {
     await supa('PATCH', 'fin_contas', { params: { id: `eq.${id}` }, body: { ativo: false } });
     toast('Conta desativada.', 'success');
-    await carregarDados(); renderContas();
+    // ── Performance · Fase B ──
+    // Soft-delete: ativo=false. O array CONTAS só guarda os ativos,
+    // então removemos localmente pra refletir o filtro.
+    removerLocal(CONTAS, id);
+    rerenderTelaAtual();
   } catch(e) { toast('Erro: ' + e.message, 'error'); }
 }
 
@@ -2634,14 +2641,16 @@ async function salvarCliente() {
   const nome = $id('ncli-nome').value.trim();
   if (!nome) { toast('Informe o nome.', 'error'); return; }
   try {
-    await supa('POST', 'fin_clientes', { body: {
+    const criado = await supa('POST', 'fin_clientes', { returning: true, body: {
       tenant_id: APP.user.tenant_id, nome,
       cpf_cnpj:  $id('ncli-doc').value   || null,
       email:     $id('ncli-email').value || null,
       telefone:  $id('ncli-tel').value   || null,
     }});
     closeModal(); toast('Cliente cadastrado!', 'success');
-    await carregarDados(); renderClientes();
+    // ── Performance · Fase B ──
+    if (Array.isArray(criado) && criado[0]) atualizarLocal(CLIENTES, criado[0]);
+    rerenderTelaAtual();
   } catch(e) { toast('Erro: ' + e.message, 'error'); }
 }
 
@@ -2663,12 +2672,14 @@ async function salvarEdicaoCliente(id) {
   const nome = $id('ecli-nome').value.trim();
   if (!nome) { toast('Informe o nome.', 'error'); return; }
   try {
-    await supa('PATCH', 'fin_clientes', { params: { id: `eq.${id}` }, body: {
+    const atualizado = await supa('PATCH', 'fin_clientes', { params: { id: `eq.${id}` }, returning: true, body: {
       nome, cpf_cnpj: $id('ecli-doc').value||null,
       email: $id('ecli-email').value||null, telefone: $id('ecli-tel').value||null,
     }});
     closeModal(); toast('Cliente atualizado!', 'success');
-    await carregarDados(); renderClientes();
+    // ── Performance · Fase B ──
+    if (Array.isArray(atualizado) && atualizado[0]) atualizarLocal(CLIENTES, atualizado[0]);
+    rerenderTelaAtual();
   } catch(e) { toast('Erro: ' + e.message, 'error'); }
 }
 
@@ -2677,7 +2688,9 @@ async function excluirCliente(id) {
   try {
     await supa('DELETE', 'fin_clientes', { params: { id: `eq.${id}` } });
     toast('Cliente excluído.', 'success');
-    await carregarDados(); renderClientes();
+    // ── Performance · Fase B ──
+    removerLocal(CLIENTES, id);
+    rerenderTelaAtual();
   } catch(e) { toast('Erro: ' + e.message, 'error'); }
 }
 
@@ -2756,14 +2769,16 @@ async function salvarFornecedor() {
   const nome = $id('nfor-nome').value.trim();
   if (!nome) { toast('Informe o nome.', 'error'); return; }
   try {
-    await supa('POST', 'fin_fornecedores', { body: {
+    const criado = await supa('POST', 'fin_fornecedores', { returning: true, body: {
       tenant_id: APP.user.tenant_id, nome,
       cpf_cnpj:  $id('nfor-doc').value   || null,
       email:     $id('nfor-email').value || null,
       telefone:  $id('nfor-tel').value   || null,
     }});
     closeModal(); toast('Fornecedor cadastrado!', 'success');
-    await carregarDados(); renderFornecedores();
+    // ── Performance · Fase B ──
+    if (Array.isArray(criado) && criado[0]) atualizarLocal(FORNECEDORES, criado[0]);
+    rerenderTelaAtual();
   } catch(e) { toast('Erro: ' + e.message, 'error'); }
 }
 
@@ -2785,12 +2800,14 @@ async function salvarEdicaoFornecedor(id) {
   const nome = $id('efor-nome').value.trim();
   if (!nome) { toast('Informe o nome.', 'error'); return; }
   try {
-    await supa('PATCH', 'fin_fornecedores', { params: { id: `eq.${id}` }, body: {
+    const atualizado = await supa('PATCH', 'fin_fornecedores', { params: { id: `eq.${id}` }, returning: true, body: {
       nome, cpf_cnpj: $id('efor-doc').value||null,
       email: $id('efor-email').value||null, telefone: $id('efor-tel').value||null,
     }});
     closeModal(); toast('Fornecedor atualizado!', 'success');
-    await carregarDados(); renderFornecedores();
+    // ── Performance · Fase B ──
+    if (Array.isArray(atualizado) && atualizado[0]) atualizarLocal(FORNECEDORES, atualizado[0]);
+    rerenderTelaAtual();
   } catch(e) { toast('Erro: ' + e.message, 'error'); }
 }
 
@@ -2799,7 +2816,9 @@ async function excluirFornecedor(id) {
   try {
     await supa('DELETE', 'fin_fornecedores', { params: { id: `eq.${id}` } });
     toast('Fornecedor excluído.', 'success');
-    await carregarDados(); renderFornecedores();
+    // ── Performance · Fase B ──
+    removerLocal(FORNECEDORES, id);
+    rerenderTelaAtual();
   } catch(e) { toast('Erro: ' + e.message, 'error'); }
 }
 
@@ -2847,13 +2866,15 @@ async function salvarCategoria() {
   const nome = $id('ncat-nome').value.trim();
   if (!nome) { toast('Informe o nome.', 'error'); return; }
   try {
-    await supa('POST', 'fin_categorias', { body: {
+    const criada = await supa('POST', 'fin_categorias', { returning: true, body: {
       tenant_id: APP.user.tenant_id, nome,
       tipo:  $id('ncat-tipo').value,
       icone: $id('ncat-icone').value || '📁',
     }});
     closeModal(); toast('Categoria criada!', 'success');
-    await carregarDados(); renderCategorias();
+    // ── Performance · Fase B ──
+    if (Array.isArray(criada) && criada[0]) atualizarLocal(CATEGORIAS, criada[0]);
+    rerenderTelaAtual();
   } catch(e) { toast('Erro: ' + e.message, 'error'); }
 }
 

@@ -6846,7 +6846,7 @@ async function renderSuperadmin() {
   //  2. closest('td[data-actions-cell]')         — clique no td/div pai
   //  3. bbox de cada botão na linha (±8px)       — clique fora mas próximo
   // ═══════════════════════════════════════════════════════════
-  window.DEBUG_SA_CLICK = true; // ← trocar pra false depois de confirmar
+  window.DEBUG_SA_CLICK = false; // ← logs de diagnóstico desligados (fix validado em 24/04/2026)
 
   // Remove handler anterior (idempotente a re-renders)
   if (window._saClickHandler) {

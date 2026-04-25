@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -920,8 +921,8 @@ async function carregarDados() {
     supa('GET', 'fin_categorias',    { params: { tenant_id: `eq.${tid}`, ativo: 'eq.true', select: '*', order: 'nome.asc' } }),
     supa('GET', 'fin_clientes',      { params: { tenant_id: `eq.${tid}`, ativo: 'eq.true', select: '*', order: 'nome.asc' } }),
     supa('GET', 'fin_fornecedores',  { params: { tenant_id: `eq.${tid}`, ativo: 'eq.true', select: '*', order: 'nome.asc' } }),
-    supa('GET', 'fin_receitas',      { params: { tenant_id: `eq.${tid}`, select: '*', order: 'vencimento.desc', limit: 200 } }),
-    supa('GET', 'fin_despesas',      { params: { tenant_id: `eq.${tid}`, select: '*', order: 'vencimento.desc', limit: 200 } }),
+    supa('GET', 'fin_receitas',      { params: { tenant_id: `eq.${tid}`, select: '*', order: 'vencimento.desc' } }),
+    supa('GET', 'fin_despesas',      { params: { tenant_id: `eq.${tid}`, select: '*', order: 'vencimento.desc' } }),
     supa('GET', 'fin_metas',         { params: { tenant_id: `eq.${tid}`, select: '*', order: 'prazo.asc' } }).catch(()=>[]),
     supa('GET', 'fin_recorrencias',  { params: { tenant_id: `eq.${tid}`, select: '*', order: 'criado_em.asc' } }).catch(()=>[]),
   ]);
@@ -929,7 +930,7 @@ async function carregarDados() {
   FORNECEDORES = fors; RECEITAS = recs; DESPESAS = desps;
   METAS = metas || []; RECORRENCIAS = recorr || [];
   // Impostos carregado separado (tabela pode não existir)
-  try { IMPOSTOS = await supa('GET', 'fin_impostos', { params: { tenant_id: `eq.${tid}`, select: '*', order: 'vencimento.desc', limit: 200 } }); } catch(_) { IMPOSTOS = []; }
+  try { IMPOSTOS = await supa('GET', 'fin_impostos', { params: { tenant_id: `eq.${tid}`, select: '*', order: 'vencimento.desc' } }); } catch(_) { IMPOSTOS = []; }
   try { ANEXOS = await supa('GET', 'fin_anexos', { params: { tenant_id: `eq.${tid}`, select: '*', order: 'criado_em.desc' } }); } catch(_) { ANEXOS = []; }
 }
 
@@ -1130,6 +1131,72 @@ const STATUS_BADGE = { pendente:'badge-amber', recebido:'badge-green', pago:'bad
 
 function badgeStatus(s) {
   return `<span class="badge ${STATUS_BADGE[s]||'badge-gray'}">${STATUS_LABEL[s]||s}</span>`;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// HELPERS DE MUTAÇÃO LOCAL (Performance — Fase A · 24/04/2026)
+// ─────────────────────────────────────────────────────────────
+// Substituem o padrão `await carregarDados(); renderTela()` por
+// atualização in-memory + re-render imediato. Ganho típico: 1–2s
+// por ação (era 1 round-trip pra Supabase + 19 queries).
+//
+// Uso:
+//   atualizarLocal(RECEITAS, registroNovo);   // upsert
+//   removerLocal(RECEITAS, idRegistro);       // delete
+//   await recarregarApenas('fin_receitas');   // refresh só 1 tabela
+//   rerenderTelaAtual();                      // chama o render visível
+// ═══════════════════════════════════════════════════════════════
+
+/** Upsert local: substitui pelo id, ou adiciona no início se for novo */
+function atualizarLocal(arr, registro) {
+  if (!arr || !registro || !registro.id) return;
+  const idx = arr.findIndex(r => r.id === registro.id);
+  if (idx >= 0) arr[idx] = registro;
+  else arr.unshift(registro);
+}
+
+/** Remove um registro do array local pelo id */
+function removerLocal(arr, id) {
+  if (!arr || !id) return;
+  const idx = arr.findIndex(r => r.id === id);
+  if (idx >= 0) arr.splice(idx, 1);
+}
+
+/** Recarrega apenas UMA tabela do Supabase (não todas as 19) */
+async function recarregarApenas(tabela) {
+  const tid = APP.user?.tenant_id;
+  if (!tid) return;
+  const map = {
+    'fin_receitas':     { var: 'RECEITAS',     order: 'vencimento.desc' },
+    'fin_despesas':     { var: 'DESPESAS',     order: 'vencimento.desc' },
+    'fin_impostos':     { var: 'IMPOSTOS',     order: 'vencimento.desc' },
+    'fin_contas':       { var: 'CONTAS',       extra: { ativo: 'eq.true' } },
+    'fin_categorias':   { var: 'CATEGORIAS',   order: 'nome.asc', extra: { ativo: 'eq.true' } },
+    'fin_clientes':     { var: 'CLIENTES',     order: 'nome.asc', extra: { ativo: 'eq.true' } },
+    'fin_fornecedores': { var: 'FORNECEDORES', order: 'nome.asc', extra: { ativo: 'eq.true' } },
+    'fin_metas':        { var: 'METAS',        order: 'prazo.asc' },
+    'fin_recorrencias': { var: 'RECORRENCIAS', order: 'criado_em.asc' },
+    'fin_anexos':       { var: 'ANEXOS',       order: 'criado_em.desc' },
+  };
+  const cfg = map[tabela];
+  if (!cfg) { console.warn('[recarregarApenas] tabela desconhecida:', tabela); return; }
+  const params = { tenant_id: `eq.${tid}`, select: '*', ...(cfg.extra || {}) };
+  if (cfg.order) params.order = cfg.order;
+  try {
+    const dados = await supa('GET', tabela, { params });
+    window[cfg.var] = dados || [];
+  } catch (e) {
+    console.error('[recarregarApenas] falha em', tabela, e);
+  }
+}
+
+/** Re-renderiza apenas a tela visível agora (não recarrega dados) */
+function rerenderTelaAtual() {
+  const page = APP?.page;
+  const cfg = page && PAGES[page];
+  if (cfg && typeof cfg.render === 'function') {
+    cfg.render();
+  }
 }
 
 // ── DASHBOARD ─────────────────────────────────────────────────
@@ -1837,7 +1904,7 @@ async function salvarReceita() {
   const venc  = $id('nr-venc').value;
   if (!desc || !valor || !venc) { toast('Preencha os campos obrigatórios.', 'error'); return; }
   try {
-    await supa('POST', 'fin_receitas', { body: {
+    const criada = await supa('POST', 'fin_receitas', { returning: true, body: {
       tenant_id:    APP.user.tenant_id,
       descricao:    desc, valor, vencimento: venc,
       cliente_id:   $id('nr-cli').value   || null,
@@ -1847,7 +1914,11 @@ async function salvarReceita() {
       status:       'pendente',
     }});
     closeModal(); toast('Receita cadastrada!', 'success');
-    await carregarDados(); renderReceber();
+    // ── Performance · Fase B ──
+    // Antes: await carregarDados(); renderReceber();  (~1-2s, 19 queries)
+    // Agora: upsert local + rerender da tela (instantâneo)
+    if (Array.isArray(criada) && criada[0]) atualizarLocal(RECEITAS, criada[0]);
+    rerenderTelaAtual();
   } catch(e) { toast('Erro: ' + e.message, 'error'); }
 }
 
@@ -1855,12 +1926,17 @@ async function baixarReceita(id, e) {
   e.stopPropagation();
   const r = RECEITAS.find(x => x.id === id); if (!r) return;
   try {
-    await supa('PATCH', 'fin_receitas', { params: { id: `eq.${id}` }, body: { status: 'recebido', recebido_em: today() } });
+    const atualizada = await supa('PATCH', 'fin_receitas', { params: { id: `eq.${id}` }, returning: true, body: { status: 'recebido', recebido_em: today() } });
     if (r.conta_id) {
       await supa('POST', 'fin_movimentacoes', { body: { tenant_id: APP.user.tenant_id, conta_id: r.conta_id, tipo: 'entrada', valor: r.valor, data: today(), descricao: r.descricao, receita_id: id } });
     }
     toast('Receita baixada!', 'success');
-    await carregarDados(); renderReceber();
+    // ── Performance · Fase B ──
+    // Receita: atualização local. Conta: precisa recarregar pq saldo
+    // é calculado server-side via trigger/view (não dá pra recalcular aqui).
+    if (Array.isArray(atualizada) && atualizada[0]) atualizarLocal(RECEITAS, atualizada[0]);
+    if (r.conta_id) await recarregarApenas('fin_contas');
+    rerenderTelaAtual();
   } catch(e) { toast('Erro: ' + e.message, 'error'); }
 }
 
@@ -1903,7 +1979,7 @@ async function salvarEdicaoReceita(id) {
   const venc  = $id('er-venc').value;
   if (!desc || !valor || !venc) { toast('Preencha os campos obrigatórios.', 'error'); return; }
   try {
-    await supa('PATCH', 'fin_receitas', { params: { id: `eq.${id}` }, body: {
+    const atualizada = await supa('PATCH', 'fin_receitas', { params: { id: `eq.${id}` }, returning: true, body: {
       descricao:    desc, valor, vencimento: venc,
       status:       $id('er-status').value,
       cliente_id:   $id('er-cli').value   || null,
@@ -1912,7 +1988,9 @@ async function salvarEdicaoReceita(id) {
       observacao:   $id('er-obs').value   || null,
     }});
     closeModal(); toast('Receita atualizada!', 'success');
-    await carregarDados(); renderReceber();
+    // ── Performance · Fase B ──
+    if (Array.isArray(atualizada) && atualizada[0]) atualizarLocal(RECEITAS, atualizada[0]);
+    rerenderTelaAtual();
   } catch(e) { toast('Erro: ' + e.message, 'error'); }
 }
 
@@ -1922,7 +2000,9 @@ async function excluirReceita(id, e) {
   try {
     await supa('DELETE', 'fin_receitas', { params: { id: `eq.${id}` } });
     toast('Receita excluída.', 'success');
-    await carregarDados(); renderReceber();
+    // ── Performance · Fase B ──
+    removerLocal(RECEITAS, id);
+    rerenderTelaAtual();
   } catch(e) { toast('Erro: ' + e.message, 'error'); }
 }
 
@@ -2048,7 +2128,7 @@ async function salvarDespesa() {
   const venc  = $id('nd-venc').value;
   if (!desc || !valor || !venc) { toast('Preencha os campos obrigatórios.', 'error'); return; }
   try {
-    await supa('POST', 'fin_despesas', { body: {
+    const criada = await supa('POST', 'fin_despesas', { returning: true, body: {
       tenant_id:     APP.user.tenant_id,
       descricao:     desc, valor, vencimento: venc,
       fornecedor_id: $id('nd-for').value   || null,
@@ -2058,7 +2138,9 @@ async function salvarDespesa() {
       status:        'pendente',
     }});
     closeModal(); toast('Despesa cadastrada!', 'success');
-    await carregarDados(); renderPagar();
+    // ── Performance · Fase B ──
+    if (Array.isArray(criada) && criada[0]) atualizarLocal(DESPESAS, criada[0]);
+    rerenderTelaAtual();
   } catch(e) { toast('Erro: ' + e.message, 'error'); }
 }
 
@@ -2066,12 +2148,15 @@ async function baixarDespesa(id, e) {
   e.stopPropagation();
   const d = DESPESAS.find(x => x.id === id); if (!d) return;
   try {
-    await supa('PATCH', 'fin_despesas', { params: { id: `eq.${id}` }, body: { status: 'pago', pago_em: today() } });
+    const atualizada = await supa('PATCH', 'fin_despesas', { params: { id: `eq.${id}` }, returning: true, body: { status: 'pago', pago_em: today() } });
     if (d.conta_id) {
       await supa('POST', 'fin_movimentacoes', { body: { tenant_id: APP.user.tenant_id, conta_id: d.conta_id, tipo: 'saida', valor: d.valor, data: today(), descricao: d.descricao, despesa_id: id } });
     }
     toast('Despesa baixada!', 'success');
-    await carregarDados(); renderPagar();
+    // ── Performance · Fase B ──
+    if (Array.isArray(atualizada) && atualizada[0]) atualizarLocal(DESPESAS, atualizada[0]);
+    if (d.conta_id) await recarregarApenas('fin_contas');
+    rerenderTelaAtual();
   } catch(e) { toast('Erro: ' + e.message, 'error'); }
 }
 
@@ -2114,7 +2199,7 @@ async function salvarEdicaoDespesa(id) {
   const venc  = $id('ed-venc').value;
   if (!desc || !valor || !venc) { toast('Preencha os campos obrigatórios.', 'error'); return; }
   try {
-    await supa('PATCH', 'fin_despesas', { params: { id: `eq.${id}` }, body: {
+    const atualizada = await supa('PATCH', 'fin_despesas', { params: { id: `eq.${id}` }, returning: true, body: {
       descricao:     desc, valor, vencimento: venc,
       status:        $id('ed-status').value,
       fornecedor_id: $id('ed-for').value   || null,
@@ -2123,7 +2208,9 @@ async function salvarEdicaoDespesa(id) {
       observacao:    $id('ed-obs').value   || null,
     }});
     closeModal(); toast('Despesa atualizada!', 'success');
-    await carregarDados(); renderPagar();
+    // ── Performance · Fase B ──
+    if (Array.isArray(atualizada) && atualizada[0]) atualizarLocal(DESPESAS, atualizada[0]);
+    rerenderTelaAtual();
   } catch(e) { toast('Erro: ' + e.message, 'error'); }
 }
 
@@ -2133,7 +2220,9 @@ async function excluirDespesa(id, e) {
   try {
     await supa('DELETE', 'fin_despesas', { params: { id: `eq.${id}` } });
     toast('Despesa excluída.', 'success');
-    await carregarDados(); renderPagar();
+    // ── Performance · Fase B ──
+    removerLocal(DESPESAS, id);
+    rerenderTelaAtual();
   } catch(e) { toast('Erro: ' + e.message, 'error'); }
 }
 
@@ -6660,7 +6749,7 @@ async function verificarSuperadmin() {
 async function carregarSeletorEmpresas() {
   try {
     const tenants = await supa('GET', 'fin_tenants', {
-      params: { select: 'id,nome', order: 'nome.asc', limit: 200 }
+      params: { select: 'id,nome', order: 'nome.asc', limit: 1000 }
     });
     const sel = $id('sa-empresa-select');
     const wrap = $id('sa-empresa-sel');
@@ -6736,7 +6825,7 @@ function sairSuperadmin() {
 async function carregarTenantsSA() {
   try {
     // Carrega todos os tenants
-    const tenants = await supa('GET', 'fin_tenants', { params: { select: '*', order: 'criado_em.desc', limit: 200 } });
+    const tenants = await supa('GET', 'fin_tenants', { params: { select: '*', order: 'criado_em.desc', limit: 1000 } });
     // Para cada tenant, carrega KPIs
     const ids = tenants.map(t => t.id);
     const [usuarios, receitas, despesas, contas] = await Promise.all([

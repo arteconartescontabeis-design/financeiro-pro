@@ -665,6 +665,10 @@ tbody td { padding: 11px 16px; font-size: 13px; }
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 2H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-2 5h-3v5.5c0 1.38-1.12 2.5-2.5 2.5S10 13.88 10 12.5 11.12 10 12.5 10c.57 0 1.08.19 1.5.51V5h4v2zM4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6z"/></svg>
         Relatórios
       </button>
+      <button class="nav-item" onclick="go('auditoria')" data-page="auditoria" id="nav-auditoria">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zM6 20V4h7v5h5v11H6zm10-9.5l-1.5 4.55L13 11.5h-1l-1.5 3.55L9 10.5H7.5l2 6.5h1.5L12 13.5l1 3.5h1.5l2-6.5H16z"/></svg>
+        Auditoria
+      </button>
       <div class="nav-section">Cadastros</div>
       <button class="nav-item" onclick="go('clientes')" data-page="clientes">
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
@@ -1229,6 +1233,7 @@ const PAGES = {
   configuracoes:{ title: 'Configurações',   render: renderConfiguracoes },
   usuarios:     { title: 'Usuários',         render: () => renderUsuarios() },
   empresas:     { title: 'Empresas',         render: () => renderEmpresas() },
+  auditoria:    { title: 'Auditoria',        render: () => renderAuditoria() },
 };
 
 function openSidebar() {
@@ -7160,6 +7165,556 @@ async function criarEmpresa() {
   } catch(e) {
     const msg = (e.message||'').replace(/.*"message":"([^"]*)".*/, '$1') || e.message;
     toast('Erro: ' + msg, 'error', 6000);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// AUDITORIA — visualização de eventos do log
+// ═══════════════════════════════════════════════════════════════
+const _AUDIT = {
+  filtros: {
+    dataInicio: null,    // string yyyy-mm-dd ou null
+    dataFim:    null,
+    usuarioId:  null,
+    tabela:     null,
+    operacoes:  ['INSERT','UPDATE','DELETE'],
+    busca:      '',
+  },
+  page: 1,
+  perPage: 25,
+  total: 0,
+  eventos: [],
+  usuariosLista: [],
+  tabelasLista: [],
+  kpis: null,
+  expandedId: null,
+};
+
+const _AUDIT_LABELS = {
+  // Tabelas → nome amigável
+  tabelas: {
+    fin_receitas: 'A Receber',
+    fin_despesas: 'A Pagar',
+    fin_movimentacoes: 'Caixa & Bancos',
+    fin_transferencias: 'Transferências',
+    fin_contas: 'Contas',
+    fin_clientes: 'Clientes',
+    fin_fornecedores: 'Fornecedores',
+    fin_categorias: 'Categorias',
+    fin_recorrencias: 'Recorrências',
+    fin_metas: 'Metas',
+    fin_impostos: 'Impostos',
+    fin_config: 'Configurações',
+    fin_anexos: 'Anexos',
+    fin_documentos: 'Documentos',
+    fin_pessoal: 'Dados pessoais',
+    fin_convites: 'Convites',
+  },
+  operacoes: {
+    INSERT: { label: 'Criação',  ico: '➕', cor: 'var(--green)',  bg: 'var(--green-lt)' },
+    UPDATE: { label: 'Alteração',ico: '✏️',  cor: 'var(--amber)',  bg: 'var(--amber-lt)' },
+    DELETE: { label: 'Exclusão', ico: '🗑️',  cor: 'var(--red)',    bg: 'var(--red-lt)' },
+  },
+};
+
+function _auditTabela(t) {
+  return _AUDIT_LABELS.tabelas[t] || t.replace(/^fin_/,'').replace(/_/g,' ');
+}
+
+function _auditDateInicial() {
+  // 30 dias atrás
+  const d = new Date();
+  d.setDate(d.getDate() - 30);
+  return d.toISOString().slice(0,10);
+}
+
+async function renderAuditoria() {
+  // Permissão
+  if (!isAdmin() && !podeVer('configuracoes')) {
+    $id('page-content').innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon">🔒</div>
+        <h3>Acesso restrito</h3>
+        <p style="font-size:13px;color:var(--text-3);margin-top:6px">Você não tem permissão para visualizar a auditoria.</p>
+      </div>`;
+    return;
+  }
+
+  // Inicializa filtros padrão (últimos 30 dias) na primeira vez
+  if (_AUDIT.filtros.dataInicio === null && _AUDIT.filtros.dataFim === null) {
+    _AUDIT.filtros.dataInicio = _auditDateInicial();
+    _AUDIT.filtros.dataFim    = today();
+  }
+
+  $id('topbar-actions').innerHTML = `
+    <button class="btn btn-outline btn-sm" onclick="modalAuditoriaConfig()">⚙️ Configurar tabelas</button>
+    <button class="btn btn-outline btn-sm" onclick="exportarAuditoria('csv')">⬇️ CSV</button>
+    <button class="btn btn-outline btn-sm" onclick="exportarAuditoria('pdf')">⬇️ PDF</button>
+  `;
+
+  $id('page-content').innerHTML = `<div id="audit-root"><div class="empty-state"><div class="spinner-loader" style="width:36px;height:36px;border:3px solid var(--border);border-top-color:var(--gold);border-radius:50%;margin:40px auto;animation:spin 0.8s linear infinite"></div><p style="font-size:13px;color:var(--text-3)">Carregando auditoria…</p></div></div>
+  <style>@keyframes spin{to{transform:rotate(360deg)}}</style>`;
+
+  await Promise.all([
+    _auditCarregarKpis(),
+    _auditCarregarUsuarios(),
+    _auditCarregarTabelas(),
+    _auditCarregarEventos(),
+  ]);
+
+  _renderAuditoriaUI();
+}
+
+async function _auditCarregarKpis() {
+  try {
+    _AUDIT.kpis = await supaRpc('fin_auditoria_kpis', {
+      p_data_inicio: _AUDIT.filtros.dataInicio,
+      p_data_fim:    _AUDIT.filtros.dataFim,
+    });
+  } catch(e) { console.warn('kpis:', e.message); _AUDIT.kpis = null; }
+}
+
+async function _auditCarregarUsuarios() {
+  try { _AUDIT.usuariosLista = await supaRpc('fin_auditoria_usuarios') || []; }
+  catch(e) { _AUDIT.usuariosLista = []; }
+}
+
+async function _auditCarregarTabelas() {
+  try { _AUDIT.tabelasLista = await supaRpc('fin_auditoria_tabelas') || []; }
+  catch(e) { _AUDIT.tabelasLista = []; }
+}
+
+async function _auditCarregarEventos() {
+  try {
+    const params = {
+      p_data_inicio: _AUDIT.filtros.dataInicio || null,
+      p_data_fim:    _AUDIT.filtros.dataFim    || null,
+      p_usuario_id:  _AUDIT.filtros.usuarioId  || null,
+      p_tabela:      _AUDIT.filtros.tabela     || null,
+      p_operacoes:   _AUDIT.filtros.operacoes && _AUDIT.filtros.operacoes.length === 3 ? null : _AUDIT.filtros.operacoes,
+      p_busca:       _AUDIT.filtros.busca      || null,
+      p_limite:      _AUDIT.perPage,
+      p_offset:      (_AUDIT.page - 1) * _AUDIT.perPage,
+    };
+    const linhas = await supaRpc('fin_auditoria_listar', params) || [];
+    _AUDIT.eventos = linhas;
+    _AUDIT.total   = linhas[0]?.total_count || 0;
+  } catch(e) {
+    console.warn('eventos:', e.message);
+    _AUDIT.eventos = []; _AUDIT.total = 0;
+  }
+}
+
+function _renderAuditoriaUI() {
+  const k  = _AUDIT.kpis || {};
+  const totalPag = Math.max(1, Math.ceil(_AUDIT.total / _AUDIT.perPage));
+
+  const html = `
+  <div style="display:flex;flex-direction:column;gap:14px">
+
+  <!-- KPIs -->
+  <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr)">
+    <div class="kpi-card k-gold">
+      <div class="kpi-label">Eventos no período</div>
+      <div class="kpi-value" style="color:var(--gold)">${k.total||0}</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">Hoje</div>
+      <div class="kpi-value">${k.hoje||0}</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">Usuários ativos</div>
+      <div class="kpi-value">${k.usuarios||0}</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">Tabela mais alterada</div>
+      <div class="kpi-value" style="font-size:14px;color:var(--text)">${k.tabela_top?_auditTabela(k.tabela_top):'—'}<br><span style="font-size:10.5px;color:var(--text-3);font-weight:500">${k.tabela_qtd||0} eventos</span></div>
+    </div>
+  </div>
+
+  <!-- Filtros -->
+  <div class="card" style="padding:14px 16px">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px">
+      <div>
+        <label style="font-size:10.5px;color:var(--text-3);font-weight:600;text-transform:uppercase;letter-spacing:.06em">De</label>
+        <input type="date" id="audit-data-ini" value="${_AUDIT.filtros.dataInicio||''}"
+               style="width:100%;padding:7px 10px;border:1.5px solid var(--border);border-radius:7px;font-family:var(--font);font-size:12.5px;background:var(--bg-2);color:var(--text)" oninput="_auditOnFiltro()">
+      </div>
+      <div>
+        <label style="font-size:10.5px;color:var(--text-3);font-weight:600;text-transform:uppercase;letter-spacing:.06em">Até</label>
+        <input type="date" id="audit-data-fim" value="${_AUDIT.filtros.dataFim||''}"
+               style="width:100%;padding:7px 10px;border:1.5px solid var(--border);border-radius:7px;font-family:var(--font);font-size:12.5px;background:var(--bg-2);color:var(--text)" oninput="_auditOnFiltro()">
+      </div>
+      <div>
+        <label style="font-size:10.5px;color:var(--text-3);font-weight:600;text-transform:uppercase;letter-spacing:.06em">Usuário</label>
+        <select id="audit-usuario" oninput="_auditOnFiltro()"
+                style="width:100%;padding:7px 10px;border:1.5px solid var(--border);border-radius:7px;font-family:var(--font);font-size:12.5px;background:var(--bg-2);color:var(--text)">
+          <option value="">Todos</option>
+          ${_AUDIT.usuariosLista.map(u => `<option value="${u.usuario_id}" ${_AUDIT.filtros.usuarioId===u.usuario_id?'selected':''}>${u.nome}</option>`).join('')}
+        </select>
+      </div>
+      <div>
+        <label style="font-size:10.5px;color:var(--text-3);font-weight:600;text-transform:uppercase;letter-spacing:.06em">Tabela</label>
+        <select id="audit-tabela" oninput="_auditOnFiltro()"
+                style="width:100%;padding:7px 10px;border:1.5px solid var(--border);border-radius:7px;font-family:var(--font);font-size:12.5px;background:var(--bg-2);color:var(--text)">
+          <option value="">Todas</option>
+          ${_AUDIT.tabelasLista.map(t => `<option value="${t.tabela}" ${_AUDIT.filtros.tabela===t.tabela?'selected':''}>${_auditTabela(t.tabela)} (${t.qtd})</option>`).join('')}
+        </select>
+      </div>
+      <div>
+        <label style="font-size:10.5px;color:var(--text-3);font-weight:600;text-transform:uppercase;letter-spacing:.06em">Operação</label>
+        <div style="display:flex;gap:8px;padding-top:6px">
+          ${['INSERT','UPDATE','DELETE'].map(op => {
+            const lab = _AUDIT_LABELS.operacoes[op];
+            const checked = _AUDIT.filtros.operacoes.includes(op);
+            return `<label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:11.5px;color:${lab.cor}">
+              <input type="checkbox" ${checked?'checked':''} value="${op}" onchange="_auditOnOpToggle(this)"
+                     style="width:13px;height:13px;cursor:pointer;accent-color:${lab.cor}">${lab.ico}${lab.label}</label>`;
+          }).join('')}
+        </div>
+      </div>
+      <div>
+        <label style="font-size:10.5px;color:var(--text-3);font-weight:600;text-transform:uppercase;letter-spacing:.06em">Busca</label>
+        <input type="text" id="audit-busca" value="${_AUDIT.filtros.busca||''}"
+               placeholder="ID, e-mail, valor…"
+               style="width:100%;padding:7px 10px;border:1.5px solid var(--border);border-radius:7px;font-family:var(--font);font-size:12.5px;background:var(--bg-2);color:var(--text)"
+               oninput="_auditOnBuscaDebounce()">
+      </div>
+    </div>
+    <div style="display:flex;gap:6px;margin-top:10px">
+      <button class="btn btn-sm" onclick="_auditFiltroAtalho('hoje')" style="padding:5px 11px;font-size:11px;background:var(--surface-2);color:var(--text-2);border:1px solid var(--border)">Hoje</button>
+      <button class="btn btn-sm" onclick="_auditFiltroAtalho('7d')"   style="padding:5px 11px;font-size:11px;background:var(--surface-2);color:var(--text-2);border:1px solid var(--border)">7 dias</button>
+      <button class="btn btn-sm" onclick="_auditFiltroAtalho('30d')"  style="padding:5px 11px;font-size:11px;background:var(--surface-2);color:var(--text-2);border:1px solid var(--border)">30 dias</button>
+      <button class="btn btn-sm" onclick="_auditFiltroAtalho('mes')"  style="padding:5px 11px;font-size:11px;background:var(--surface-2);color:var(--text-2);border:1px solid var(--border)">Mês atual</button>
+      <button class="btn btn-sm" onclick="_auditFiltroAtalho('limpar')" style="padding:5px 11px;font-size:11px;background:var(--red-lt);color:var(--red);border:1px solid rgba(192,57,43,.2)">Limpar</button>
+    </div>
+  </div>
+
+  <!-- Lista -->
+  <div class="card" style="padding:0;overflow:hidden">
+    <div style="padding:12px 16px;border-bottom:1px solid var(--border);font-size:13px;font-weight:700;display:flex;justify-content:space-between;align-items:center">
+      <span>Eventos</span>
+      <span style="font-size:11px;color:var(--text-3);font-weight:500">${_AUDIT.total} encontrado(s) · página ${_AUDIT.page}/${totalPag}</span>
+    </div>
+    ${_AUDIT.eventos.length === 0 ? `
+      <div style="padding:48px 16px;text-align:center;color:var(--text-3);font-size:13px">
+        Nenhum evento encontrado com os filtros atuais.
+      </div>
+    ` : `
+    <div id="audit-events-list">
+      ${_AUDIT.eventos.map(e => _renderAuditEvent(e)).join('')}
+    </div>
+    <!-- Paginação -->
+    <div style="padding:12px 16px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+      <div style="font-size:11.5px;color:var(--text-3)">
+        Mostrando ${(_AUDIT.page-1)*_AUDIT.perPage + 1}–${Math.min(_AUDIT.page*_AUDIT.perPage, _AUDIT.total)} de ${_AUDIT.total}
+      </div>
+      <div style="display:flex;gap:4px">
+        <button class="btn btn-sm" onclick="_auditPaginar(-1)" ${_AUDIT.page<=1?'disabled':''} style="padding:5px 10px;font-size:11px;background:var(--surface-2);color:var(--text-2);border:1px solid var(--border)">‹ Anterior</button>
+        <button class="btn btn-sm" onclick="_auditPaginar(1)"  ${_AUDIT.page>=totalPag?'disabled':''} style="padding:5px 10px;font-size:11px;background:var(--surface-2);color:var(--text-2);border:1px solid var(--border)">Próxima ›</button>
+      </div>
+    </div>
+    `}
+  </div>
+
+  </div>`;
+
+  $id('audit-root') ? ($id('audit-root').innerHTML = html) : ($id('page-content').innerHTML = `<div id="audit-root">${html}</div>`);
+}
+
+function _renderAuditEvent(e) {
+  const op       = _AUDIT_LABELS.operacoes[e.operacao] || { label: e.operacao, ico: '•', cor: 'var(--text-2)', bg: 'var(--surface-2)' };
+  const tabela   = _auditTabela(e.tabela);
+  const dt       = new Date(e.criado_em);
+  const dataStr  = dt.toLocaleDateString('pt-BR') + ' ' + dt.toLocaleTimeString('pt-BR', { hour:'2-digit', minute:'2-digit', second:'2-digit' });
+  const usuario  = e.usuario_nome || e.usuario_email || '—';
+  const expanded = _AUDIT.expandedId === e.id;
+  const resumo   = _auditResumo(e);
+
+  return `
+  <div style="border-bottom:1px solid var(--border)">
+    <div onclick="_auditToggle(${e.id})" style="padding:12px 16px;cursor:pointer;transition:background .15s;${expanded?'background:var(--surface-2)':''}"
+         onmouseover="if(${!expanded}) this.style.background='var(--surface-2)'"
+         onmouseout="if(${!expanded}) this.style.background=''">
+      <div style="display:flex;align-items:center;gap:12px">
+        <div style="font-size:18px;flex-shrink:0">${op.ico}</div>
+        <div style="flex:1;min-width:0">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <span style="font-size:10.5px;font-weight:700;color:${op.cor};background:${op.bg};padding:2px 7px;border-radius:5px;text-transform:uppercase;letter-spacing:.04em">${op.label}</span>
+            <span style="font-size:13px;font-weight:600;color:var(--text)">${tabela}</span>
+            <span style="font-size:11px;color:var(--text-3)">·</span>
+            <span style="font-size:11.5px;color:var(--text-2);font-family:var(--mono)">${(e.registro_id||'').slice(0,8)}…</span>
+          </div>
+          <div style="margin-top:3px;font-size:12px;color:var(--text-2)">${resumo}</div>
+        </div>
+        <div style="text-align:right;flex-shrink:0">
+          <div style="font-size:12px;color:var(--text);font-weight:600">${usuario}</div>
+          <div style="font-size:10.5px;color:var(--text-3);font-family:var(--mono)">${dataStr}</div>
+        </div>
+        <span style="color:var(--text-3);font-size:14px;flex-shrink:0;transform:${expanded?'rotate(90deg)':'rotate(0)'};transition:transform .2s">▸</span>
+      </div>
+    </div>
+    ${expanded ? `
+    <div style="padding:14px 16px 18px;background:var(--surface-2);border-top:1px solid var(--border)">
+      ${_renderAuditDiff(e)}
+    </div>` : ''}
+  </div>`;
+}
+
+function _auditResumo(e) {
+  const dados = e.dados_depois || e.dados_antes || {};
+  if (e.operacao === 'INSERT') {
+    if (dados.descricao) return `Criou: <strong>${dados.descricao}</strong>${dados.valor?` — ${fmtMoeda(dados.valor)}`:''}`;
+    if (dados.nome)      return `Criou: <strong>${dados.nome}</strong>`;
+    return 'Novo registro';
+  }
+  if (e.operacao === 'DELETE') {
+    const ant = e.dados_antes || {};
+    if (ant.descricao) return `Excluiu: <strong>${ant.descricao}</strong>${ant.valor?` — ${fmtMoeda(ant.valor)}`:''}`;
+    if (ant.nome)      return `Excluiu: <strong>${ant.nome}</strong>`;
+    return 'Registro removido';
+  }
+  if (e.operacao === 'UPDATE') {
+    const a = e.dados_antes || {}, d = e.dados_depois || {};
+    const mudancas = [];
+    for (const k in d) {
+      if (k === 'atualizado_em' || k === 'tenant_id') continue;
+      if (JSON.stringify(a[k]) !== JSON.stringify(d[k])) mudancas.push(k);
+    }
+    const titulo = d.descricao || d.nome || a.descricao || a.nome || '—';
+    return `Editou <strong>${titulo}</strong>${mudancas.length?` (${mudancas.length} ${mudancas.length===1?'campo':'campos'})`:''}`;
+  }
+  return '—';
+}
+
+function _renderAuditDiff(e) {
+  const a = e.dados_antes  || {};
+  const d = e.dados_depois || {};
+  const todasChaves = new Set([...Object.keys(a), ...Object.keys(d)]);
+  // Ignora campos de sistema
+  const ignorar = new Set(['tenant_id','criado_em','atualizado_em','criado_por']);
+  const linhas = [];
+  for (const k of todasChaves) {
+    if (ignorar.has(k)) continue;
+    const va = a[k], vd = d[k];
+    const mudou = JSON.stringify(va) !== JSON.stringify(vd);
+    if (e.operacao === 'UPDATE' && !mudou) continue;
+    linhas.push({ k, va, vd, mudou });
+  }
+  if (linhas.length === 0) {
+    return `<div style="font-size:12px;color:var(--text-3);font-style:italic">Sem alterações relevantes para exibir.</div>`;
+  }
+
+  const fmt = v => {
+    if (v === null || v === undefined) return '<span style="color:var(--text-3);font-style:italic">vazio</span>';
+    if (typeof v === 'boolean') return v ? '✓ sim' : '✗ não';
+    if (typeof v === 'object') return `<code style="font-size:10.5px;font-family:var(--mono);color:var(--text-2)">${JSON.stringify(v)}</code>`;
+    if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v)) {
+      try { return new Date(v).toLocaleDateString('pt-BR'); } catch(_) { return v; }
+    }
+    return String(v);
+  };
+
+  return `
+  <div style="font-size:11.5px;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;overflow:hidden">
+    <div style="display:grid;grid-template-columns:160px 1fr 1fr;background:var(--surface-2);font-weight:700;font-size:10.5px;color:var(--text-3);text-transform:uppercase;letter-spacing:.06em">
+      <div style="padding:8px 12px">Campo</div>
+      <div style="padding:8px 12px;border-left:1px solid var(--border)">Antes</div>
+      <div style="padding:8px 12px;border-left:1px solid var(--border)">Depois</div>
+    </div>
+    ${linhas.map(l => `
+      <div style="display:grid;grid-template-columns:160px 1fr 1fr;border-top:1px solid var(--border);${l.mudou?'background:rgba(214,228,240,0.3)':''}">
+        <div style="padding:7px 12px;font-weight:600;color:var(--text-2);font-size:11.5px">${l.k}</div>
+        <div style="padding:7px 12px;border-left:1px solid var(--border);color:var(--text-2)">${e.operacao==='INSERT'?'<span style="color:var(--text-3);font-style:italic">—</span>':fmt(l.va)}</div>
+        <div style="padding:7px 12px;border-left:1px solid var(--border);color:${l.mudou?'var(--text)':'var(--text-2)'};font-weight:${l.mudou?'600':'400'}">${e.operacao==='DELETE'?'<span style="color:var(--text-3);font-style:italic">—</span>':fmt(l.vd)}</div>
+      </div>`).join('')}
+  </div>
+  <div style="margin-top:8px;font-size:10.5px;color:var(--text-3);display:flex;gap:14px;flex-wrap:wrap">
+    <span>📍 ID: <code style="font-family:var(--mono);color:var(--text-2)">${e.registro_id||'—'}</code></span>
+    <span>🆔 Evento: <code style="font-family:var(--mono);color:var(--text-2)">#${e.id}</code></span>
+  </div>`;
+}
+
+// ── Filtros / paginação ────────────────────────────────────────
+let _AUDIT_BUSCA_TIMER = null;
+function _auditOnBuscaDebounce() {
+  clearTimeout(_AUDIT_BUSCA_TIMER);
+  _AUDIT_BUSCA_TIMER = setTimeout(() => _auditOnFiltro(), 350);
+}
+async function _auditOnFiltro() {
+  _AUDIT.filtros.dataInicio = $id('audit-data-ini')?.value || null;
+  _AUDIT.filtros.dataFim    = $id('audit-data-fim')?.value || null;
+  _AUDIT.filtros.usuarioId  = $id('audit-usuario')?.value || null;
+  _AUDIT.filtros.tabela     = $id('audit-tabela')?.value || null;
+  _AUDIT.filtros.busca      = $id('audit-busca')?.value || '';
+  _AUDIT.page = 1;
+  _AUDIT.expandedId = null;
+  await Promise.all([_auditCarregarKpis(), _auditCarregarEventos()]);
+  _renderAuditoriaUI();
+}
+function _auditOnOpToggle(cb) {
+  const op = cb.value;
+  if (cb.checked) {
+    if (!_AUDIT.filtros.operacoes.includes(op)) _AUDIT.filtros.operacoes.push(op);
+  } else {
+    _AUDIT.filtros.operacoes = _AUDIT.filtros.operacoes.filter(x => x !== op);
+    if (_AUDIT.filtros.operacoes.length === 0) {
+      _AUDIT.filtros.operacoes = ['INSERT','UPDATE','DELETE'];
+      cb.checked = true;
+      toast('Mantenha ao menos uma operação selecionada.', 'warn');
+    }
+  }
+  _auditOnFiltro();
+}
+function _auditFiltroAtalho(tipo) {
+  const hoje = new Date();
+  const fmt  = d => d.toISOString().slice(0,10);
+  if (tipo === 'hoje') {
+    _AUDIT.filtros.dataInicio = fmt(hoje);
+    _AUDIT.filtros.dataFim    = fmt(hoje);
+  } else if (tipo === '7d') {
+    const d = new Date(); d.setDate(d.getDate()-6);
+    _AUDIT.filtros.dataInicio = fmt(d);
+    _AUDIT.filtros.dataFim    = fmt(hoje);
+  } else if (tipo === '30d') {
+    const d = new Date(); d.setDate(d.getDate()-29);
+    _AUDIT.filtros.dataInicio = fmt(d);
+    _AUDIT.filtros.dataFim    = fmt(hoje);
+  } else if (tipo === 'mes') {
+    const d = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
+    _AUDIT.filtros.dataInicio = fmt(d);
+    _AUDIT.filtros.dataFim    = fmt(hoje);
+  } else if (tipo === 'limpar') {
+    _AUDIT.filtros = {
+      dataInicio: null, dataFim: null, usuarioId: null,
+      tabela: null, operacoes: ['INSERT','UPDATE','DELETE'], busca: ''
+    };
+  }
+  _auditOnFiltro();
+}
+async function _auditPaginar(delta) {
+  _AUDIT.page = Math.max(1, _AUDIT.page + delta);
+  _AUDIT.expandedId = null;
+  await _auditCarregarEventos();
+  _renderAuditoriaUI();
+}
+function _auditToggle(id) {
+  _AUDIT.expandedId = (_AUDIT.expandedId === id) ? null : id;
+  _renderAuditoriaUI();
+}
+
+// ── Configuração: ligar/desligar tabelas ───────────────────────
+async function modalAuditoriaConfig() {
+  let cfg = [];
+  try { cfg = await supaRpc('fin_auditoria_config_listar') || []; }
+  catch(e) { toast('Erro: ' + e.message, 'error'); return; }
+
+  openModal('Configurar auditoria', `
+    <div style="font-size:12px;color:var(--text-2);background:var(--bg-2);padding:11px 13px;border-radius:8px;border:1px solid var(--border);margin-bottom:14px;line-height:1.55">
+      Marque quais tabelas devem ser auditadas. As tabelas marcadas como <strong>padrão</strong> (financeiras) já vêm ativas. Mudanças se aplicam apenas à empresa <strong>${APP.tenant?.nome||'ativa'}</strong>.
+    </div>
+    <div style="display:flex;flex-direction:column;gap:6px;max-height:380px;overflow-y:auto">
+      ${cfg.length === 0 ? '<div style="font-size:12px;color:var(--text-3);text-align:center;padding:24px">Sem tabelas auditáveis configuradas.</div>' : cfg.map(c => `
+        <label style="display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid var(--border);border-radius:7px;cursor:pointer;transition:var(--tr)" onmouseover="this.style.background='var(--surface-2)'" onmouseout="this.style.background=''">
+          <input type="checkbox" ${c.ativo?'checked':''} onchange="_auditConfigSet('${c.tabela}', this.checked)"
+                 style="width:16px;height:16px;cursor:pointer;accent-color:var(--gold)">
+          <div style="flex:1">
+            <div style="font-size:13px;font-weight:600;color:var(--text)">${_auditTabela(c.tabela)}</div>
+            <div style="font-size:11px;color:var(--text-3);font-family:var(--mono)">${c.tabela}${c.padrao?' · <span style="color:var(--gold);font-weight:600;font-family:var(--font)">padrão</span>':''}</div>
+          </div>
+        </label>
+      `).join('')}
+    </div>
+  `,
+  `<button class="btn btn-gold" onclick="closeModal();renderAuditoria()">Concluir</button>`);
+}
+
+async function _auditConfigSet(tabela, ativo) {
+  try {
+    await supaRpc('fin_auditoria_config_set', { p_tabela: tabela, p_ativo: ativo });
+    toast(ativo ? `Auditoria ativada: ${_auditTabela(tabela)}` : `Auditoria desativada: ${_auditTabela(tabela)}`, 'success', 2500);
+  } catch(e) { toast('Erro: ' + e.message, 'error'); }
+}
+
+// ── Exportação ─────────────────────────────────────────────────
+async function exportarAuditoria(formato) {
+  // Carrega TODOS os eventos do filtro atual (limit alto)
+  let dados = [];
+  try {
+    const params = {
+      p_data_inicio: _AUDIT.filtros.dataInicio || null,
+      p_data_fim:    _AUDIT.filtros.dataFim    || null,
+      p_usuario_id:  _AUDIT.filtros.usuarioId  || null,
+      p_tabela:      _AUDIT.filtros.tabela     || null,
+      p_operacoes:   _AUDIT.filtros.operacoes && _AUDIT.filtros.operacoes.length === 3 ? null : _AUDIT.filtros.operacoes,
+      p_busca:       _AUDIT.filtros.busca      || null,
+      p_limite:      5000,
+      p_offset:      0,
+    };
+    dados = await supaRpc('fin_auditoria_listar', params) || [];
+  } catch(e) { toast('Erro ao carregar dados: ' + e.message, 'error'); return; }
+
+  if (dados.length === 0) { toast('Sem dados para exportar com os filtros atuais.', 'warn'); return; }
+
+  const tenantNome = (APP.tenant?.nome || 'empresa').replace(/[^a-zA-Z0-9]/g,'_');
+  const stamp      = new Date().toISOString().slice(0,10);
+
+  if (formato === 'csv') {
+    const cab = ['Data/Hora','Usuário','E-mail','Tabela','Operação','Registro ID','Resumo'];
+    const linhas = dados.map(e => [
+      new Date(e.criado_em).toLocaleString('pt-BR'),
+      (e.usuario_nome||'').replace(/"/g,'""'),
+      (e.usuario_email||'').replace(/"/g,'""'),
+      _auditTabela(e.tabela),
+      _AUDIT_LABELS.operacoes[e.operacao]?.label || e.operacao,
+      e.registro_id || '',
+      _auditResumo(e).replace(/<[^>]+>/g,'').replace(/"/g,'""'),
+    ]);
+    const csv = [cab, ...linhas].map(r => r.map(c => `"${c}"`).join(';')).join('\r\n');
+    const blob = new Blob(['\uFEFF'+csv], { type: 'text/csv;charset=utf-8;' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = `auditoria_${tenantNome}_${stamp}.csv`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    toast(`CSV exportado (${dados.length} eventos)`, 'success');
+    return;
+  }
+
+  if (formato === 'pdf') {
+    // PDF simples via window.print() de uma janela com HTML formatado
+    const win = window.open('', '_blank');
+    if (!win) { toast('Permita popups pra exportar PDF.', 'warn'); return; }
+    const linhas = dados.map(e => {
+      const op = _AUDIT_LABELS.operacoes[e.operacao] || { label: e.operacao };
+      return `<tr>
+        <td>${new Date(e.criado_em).toLocaleString('pt-BR')}</td>
+        <td>${e.usuario_nome||e.usuario_email||'—'}</td>
+        <td>${_auditTabela(e.tabela)}</td>
+        <td>${op.label}</td>
+        <td>${(_auditResumo(e)||'').replace(/<[^>]+>/g,'')}</td>
+      </tr>`;
+    }).join('');
+    win.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Auditoria — ${APP.tenant?.nome||''}</title>
+      <style>
+        body{font-family:'DM Sans',Arial,sans-serif;padding:24px;color:#1a2332}
+        h1{font-size:18px;margin-bottom:4px}
+        .sub{font-size:12px;color:#64748b;margin-bottom:24px}
+        table{width:100%;border-collapse:collapse;font-size:11px}
+        th,td{padding:6px 8px;border-bottom:1px solid #e5e7eb;text-align:left;vertical-align:top}
+        th{background:#f4f6f9;font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:#64748b;font-weight:700}
+        tr:nth-child(even) td{background:#fafbfc}
+        .footer{margin-top:24px;font-size:10px;color:#94a3b8;text-align:center}
+      </style></head><body>
+      <h1>Relatório de Auditoria</h1>
+      <div class="sub">${APP.tenant?.nome||''} · CNPJ ${_formatCNPJ(APP.tenant?.cnpj||'')} · Período: ${_AUDIT.filtros.dataInicio||'—'} a ${_AUDIT.filtros.dataFim||'—'} · ${dados.length} evento(s)</div>
+      <table><thead><tr><th>Data/Hora</th><th>Usuário</th><th>Tabela</th><th>Operação</th><th>Resumo</th></tr></thead><tbody>${linhas}</tbody></table>
+      <div class="footer">Gerado em ${new Date().toLocaleString('pt-BR')} · Financeiro Pro</div>
+      <scr` + `ipt>setTimeout(()=>window.print(),300);</scr` + `ipt>
+    </body></html>`);
+    win.document.close();
+    toast('Relatório aberto. Use Ctrl+P pra salvar como PDF.', 'success', 4000);
+    return;
   }
 }
 

@@ -1259,7 +1259,23 @@ function go(page) {
 const fmtMoeda = v => 'R$\u202f' + parseFloat(v||0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
 const fmtData  = d => d ? new Date(d+'T12:00:00').toLocaleDateString('pt-BR') : '—';
 const today    = () => new Date().toISOString().slice(0,10);
-const getNome  = (arr, id) => (arr.find(x => x.id === id)||{}).nome || '—';
+
+// ── getNome: lookup O(1) por id, com cache invalidado pela referência do array.
+// O cache é uma WeakMap: cada array ganha seu próprio Map(id → nome).
+// Quando carregarDados() reatribui o array (nova referência), o WeakMap descarta
+// o Map antigo automaticamente. Ganho típico em listas com 500+ itens
+// renderizadas N vezes: O(n²) → O(n).
+const _NOME_CACHE = new WeakMap();
+const getNome = (arr, id) => {
+  if (!arr || !id) return '—';
+  let map = _NOME_CACHE.get(arr);
+  if (!map) {
+    map = new Map();
+    for (const x of arr) if (x && x.id) map.set(x.id, x.nome || '—');
+    _NOME_CACHE.set(arr, map);
+  }
+  return map.get(id) || '—';
+};
 
 const STATUS_LABEL = { pendente:'Pendente', recebido:'Recebido', pago:'Pago', vencido:'Vencido', cancelado:'Cancelado' };
 const STATUS_BADGE = { pendente:'badge-amber', recebido:'badge-green', pago:'badge-green', vencido:'badge-red', cancelado:'badge-gray' };
@@ -1288,6 +1304,7 @@ function atualizarLocal(arr, registro) {
   const idx = arr.findIndex(r => r.id === registro.id);
   if (idx >= 0) arr[idx] = registro;
   else arr.unshift(registro);
+  _NOME_CACHE.delete(arr);  // invalida cache de getNome (Fase C)
 }
 
 /** Remove um registro do array local pelo id */
@@ -1295,6 +1312,7 @@ function removerLocal(arr, id) {
   if (!arr || !id) return;
   const idx = arr.findIndex(r => r.id === id);
   if (idx >= 0) arr.splice(idx, 1);
+  _NOME_CACHE.delete(arr);  // invalida cache de getNome (Fase C)
 }
 
 /** Recarrega apenas UMA tabela do Supabase (não todas as 19) */
@@ -2776,10 +2794,16 @@ function modalNovoCliente() {
 async function salvarCliente() {
   const nome = $id('ncli-nome').value.trim();
   if (!nome) { toast('Informe o nome.', 'error'); return; }
+  const docRaw = $id('ncli-doc').value || '';
+  const docLimpo = docRaw.replace(/\D/g, '');
+  // Valida CNPJ se preenchido com 14 dígitos. CPF (11 dígitos) e vazio passam.
+  if (docLimpo.length === 14 && !_validaCNPJ(docLimpo)) {
+    toast('CNPJ inválido. Verifique os dígitos.', 'error'); return;
+  }
   try {
     const criado = await supa('POST', 'fin_clientes', { returning: true, body: {
       tenant_id: APP.tenantId, nome,
-      cpf_cnpj:  $id('ncli-doc').value   || null,
+      cpf_cnpj:  docRaw || null,
       email:     $id('ncli-email').value || null,
       telefone:  $id('ncli-tel').value   || null,
     }});
@@ -2807,9 +2831,14 @@ function editarCliente(id) {
 async function salvarEdicaoCliente(id) {
   const nome = $id('ecli-nome').value.trim();
   if (!nome) { toast('Informe o nome.', 'error'); return; }
+  const docRaw = $id('ecli-doc').value || '';
+  const docLimpo = docRaw.replace(/\D/g, '');
+  if (docLimpo.length === 14 && !_validaCNPJ(docLimpo)) {
+    toast('CNPJ inválido. Verifique os dígitos.', 'error'); return;
+  }
   try {
     const atualizado = await supa('PATCH', 'fin_clientes', { params: { id: `eq.${id}` }, returning: true, body: {
-      nome, cpf_cnpj: $id('ecli-doc').value||null,
+      nome, cpf_cnpj: docRaw||null,
       email: $id('ecli-email').value||null, telefone: $id('ecli-tel').value||null,
     }});
     closeModal(); toast('Cliente atualizado!', 'success');
@@ -2904,10 +2933,15 @@ function modalNovoFornecedor() {
 async function salvarFornecedor() {
   const nome = $id('nfor-nome').value.trim();
   if (!nome) { toast('Informe o nome.', 'error'); return; }
+  const docRaw = $id('nfor-doc').value || '';
+  const docLimpo = docRaw.replace(/\D/g, '');
+  if (docLimpo.length === 14 && !_validaCNPJ(docLimpo)) {
+    toast('CNPJ inválido. Verifique os dígitos.', 'error'); return;
+  }
   try {
     const criado = await supa('POST', 'fin_fornecedores', { returning: true, body: {
       tenant_id: APP.tenantId, nome,
-      cpf_cnpj:  $id('nfor-doc').value   || null,
+      cpf_cnpj:  docRaw || null,
       email:     $id('nfor-email').value || null,
       telefone:  $id('nfor-tel').value   || null,
     }});
@@ -2935,9 +2969,14 @@ function editarFornecedor(id) {
 async function salvarEdicaoFornecedor(id) {
   const nome = $id('efor-nome').value.trim();
   if (!nome) { toast('Informe o nome.', 'error'); return; }
+  const docRaw = $id('efor-doc').value || '';
+  const docLimpo = docRaw.replace(/\D/g, '');
+  if (docLimpo.length === 14 && !_validaCNPJ(docLimpo)) {
+    toast('CNPJ inválido. Verifique os dígitos.', 'error'); return;
+  }
   try {
     const atualizado = await supa('PATCH', 'fin_fornecedores', { params: { id: `eq.${id}` }, returning: true, body: {
-      nome, cpf_cnpj: $id('efor-doc').value||null,
+      nome, cpf_cnpj: docRaw||null,
       email: $id('efor-email').value||null, telefone: $id('efor-tel').value||null,
     }});
     closeModal(); toast('Fornecedor atualizado!', 'success');
@@ -7513,19 +7552,25 @@ async function renderUsuarios() {
             </td>
             <td style="color:var(--text-2);font-size:12.5px">${u.email||'—'}</td>
             <td>
-              ${isMe
-                ? `<span class="badge" style="background:var(--gold-lt);color:var(--gold-dim)">${tpl.label}</span>`
-                : `<select onchange="alterarTemplate('${u.id}', this.value)"
-                    style="padding:5px 10px;border:1.5px solid var(--border-lt);border-radius:7px;font-family:var(--font);font-size:12px;background:var(--bg-2);color:var(--text);outline:none;cursor:pointer">
-                    <option value="admin"      ${u.template==='admin'?'selected':''}>Administrador</option>
-                    <option value="financeiro" ${u.template==='financeiro'?'selected':''}>Operacional</option>
-                    <option value="leitura"    ${u.template==='leitura'?'selected':''}>Visualização</option>
-                  </select>`}
+              ${(() => {
+                // Determina rótulo do perfil. Se template === 'custom' OU
+                // existem permissões salvas que divergem do preset puro,
+                // mostra "Personalizado". Senão usa o label do template.
+                const isCustom = u.template === 'custom'
+                  || (u.permissoes && Object.keys(u.permissoes).length
+                      && _PRESETS[u.template]
+                      && JSON.stringify(u.permissoes) !== JSON.stringify(_PRESETS[u.template]()));
+                const labelPerfil = isCustom ? 'Personalizado' : tpl.label;
+                const corPerfil = u.template === 'admin'
+                  ? 'background:var(--gold-lt);color:var(--gold-dim)'
+                  : (isCustom ? 'background:rgba(155,89,182,.12);color:#7d3c98' : 'background:var(--surface-2);color:var(--text-2)');
+                return `<span class="badge" style="${corPerfil}">${labelPerfil}</span>`;
+              })()}
             </td>
             <td style="font-family:var(--mono);font-size:11px;color:var(--text-3)">${u.criado_em?new Date(u.criado_em).toLocaleDateString('pt-BR'):'—'}</td>
             <td style="text-align:right">
               ${!isMe ? `
-                <button onclick="modalEditarUsuario('${u.id}')" class="btn btn-sm" style="padding:4px 10px;font-size:11px;margin-right:4px;background:var(--surface-2);color:var(--text-2);border:1px solid var(--border)">Editar</button>
+                <button onclick="modalEditarUsuario('${u.id}')" class="btn btn-sm" style="padding:4px 10px;font-size:11px;margin-right:4px;background:var(--surface-2);color:var(--text-2);border:1px solid var(--border)">Editar permissões</button>
                 <button onclick="removerUsuario('${u.id}')" class="btn btn-sm" style="padding:4px 10px;font-size:11px;background:var(--red-lt);color:var(--red);border:1px solid rgba(192,57,43,.2)">Remover</button>
               ` : ''}
             </td>
@@ -7617,6 +7662,36 @@ function _formatCNPJ(cnpj) {
   const c = String(cnpj).replace(/\D/g,'');
   if (c.length !== 14) return cnpj;
   return c.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5');
+}
+
+// Valida CNPJ pelo dígito verificador (algoritmo módulo 11 — Receita Federal).
+// Retorna true se válido. Aceita string com ou sem máscara.
+// Rejeita: comprimento errado, todos dígitos iguais (ex: 00000000000000), DVs incorretos.
+function _validaCNPJ(cnpj) {
+  if (!cnpj) return false;
+  const c = String(cnpj).replace(/\D/g, '');
+  if (c.length !== 14) return false;
+  // Sequências repetidas (00000000000000, 11111111111111, etc.) são inválidas
+  if (/^(\d)\1{13}$/.test(c)) return false;
+
+  const calcDV = (base, pesos) => {
+    let soma = 0;
+    for (let i = 0; i < pesos.length; i++) soma += parseInt(base[i], 10) * pesos[i];
+    const resto = soma % 11;
+    return resto < 2 ? 0 : 11 - resto;
+  };
+
+  // 1º DV: pesos 5,4,3,2,9,8,7,6,5,4,3,2 sobre os 12 primeiros dígitos
+  const pesos1 = [5,4,3,2,9,8,7,6,5,4,3,2];
+  const dv1 = calcDV(c.slice(0, 12), pesos1);
+  if (dv1 !== parseInt(c[12], 10)) return false;
+
+  // 2º DV: pesos 6,5,4,3,2,9,8,7,6,5,4,3,2 sobre os 13 primeiros dígitos
+  const pesos2 = [6,5,4,3,2,9,8,7,6,5,4,3,2];
+  const dv2 = calcDV(c.slice(0, 13), pesos2);
+  if (dv2 !== parseInt(c[13], 10)) return false;
+
+  return true;
 }
 
 async function carregarEmpresas() {
@@ -7755,6 +7830,7 @@ async function criarEmpresa() {
 
   if (!nome)              { toast('Nome é obrigatório.', 'error'); return; }
   if (cnpj.length !== 14) { toast('CNPJ deve ter 14 dígitos.', 'error'); return; }
+  if (!_validaCNPJ(cnpj)) { toast('CNPJ inválido. Verifique os dígitos.', 'error'); return; }
 
   try {
     const r = await supaRpc('fin_criar_empresa', {

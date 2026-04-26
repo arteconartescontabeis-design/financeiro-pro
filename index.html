@@ -5884,6 +5884,38 @@ async function processarExtratoAutoDoc(id, file) {
     return;
   }
 
+  // ═══ VALIDAÇÃO: extrato pertence à empresa ativa? ═══════════════
+  const header = items.header || {};  // só vem em OFX; CSV genérico não tem
+  const validacao = _validarExtratoContraEmpresa(header, items.slice(0,3).map(i => i.descricao));
+
+  let observacaoExtra = '';   // será adicionada ao body de cada lançamento
+  if (!validacao.ok) {
+    // Pausa: pede confirmação ao usuário
+    adicionarFilaItem(id, file.name, 'aguardando',
+      'Extrato divergente — aguardando autorização do usuário…', null);
+
+    const autorizado = await _modalAutorizarDivergencia(file.name, validacao.contexto, items.length);
+    if (!autorizado) {
+      adicionarFilaItem(id, file.name, 'erro',
+        'Importação cancelada pelo usuário (divergência não autorizada).', null);
+      return;
+    }
+
+    // Registra autorização em fin_auditoria
+    try {
+      await supaRpc('fin_registrar_autorizacao', {
+        p_tabela: 'fin_movimentacoes',
+        p_motivo: autorizado.motivo,
+        p_dados:  { ...validacao.contexto, arquivo: file.name, total_lancamentos: items.length }
+      });
+    } catch(e) {
+      console.warn('Falha ao registrar autorização:', e.message);
+    }
+
+    observacaoExtra = ` | ⚠️ Importação autorizada por divergência. Motivo: "${autorizado.motivo}"`;
+  }
+  // ═════════════════════════════════════════════════════════════════
+
   adicionarFilaItem(id, file.name, 'processando', `Criando ${items.length} lançamento(s)...`, null);
 
   let ok = 0, err = 0;
@@ -5895,7 +5927,7 @@ async function processarExtratoAutoDoc(id, file) {
         valor:      Math.abs(item.valor),
         vencimento: item.data,
         status:     'pendente',
-        observacao: `Importado via extrato bancário — ${file.name}`,
+        observacao: `Importado via extrato bancário — ${file.name}${observacaoExtra}`,
       };
       if (item.tipo === 'receita') await supa('POST', 'fin_receitas', { body });
       else                         await supa('POST', 'fin_despesas', { body });
@@ -5905,6 +5937,53 @@ async function processarExtratoAutoDoc(id, file) {
 
   adicionarFilaItem(id, file.name, ok>0?'ok':'erro',
     `${ok} lançamento(s) criado(s)${err?' · '+err+' erro(s)':''}`, null);
+}
+
+// Modal de autorização — retorna {motivo} se autorizado, null se cancelado
+function _modalAutorizarDivergencia(fileName, contexto, totalItens) {
+  return new Promise((resolve) => {
+    const ctx = contexto || {};
+    openModal('⚠️ Extrato de outra empresa?', `
+      <div style="font-size:13px;color:var(--text);background:var(--amber-lt);border:1px solid var(--amber);padding:13px 14px;border-radius:9px;margin-bottom:14px;line-height:1.6">
+        <strong>O sistema não conseguiu confirmar que este extrato pertence à empresa ativa.</strong><br>
+        Se vc autorizar, ${totalItens} lançamento(s) serão criados em <strong>${APP.tenant?.nome||'(empresa ativa)'}</strong>.
+      </div>
+
+      <div style="background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:11px 13px;margin-bottom:14px;font-size:11.5px;line-height:1.7">
+        <div style="font-weight:700;color:var(--text-2);margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em;font-size:10px">Diagnóstico da divergência</div>
+        <div><span style="color:var(--text-3)">Arquivo:</span> <strong style="font-family:var(--mono);font-size:11px">${fileName}</strong></div>
+        <div><span style="color:var(--text-3)">Banco no arquivo:</span> ${ctx.banco_arquivo || '—'}</div>
+        <div><span style="color:var(--text-3)">Conta no arquivo:</span> ${ctx.conta_arquivo || '—'}</div>
+        <div><span style="color:var(--text-3)">Agência no arquivo:</span> ${ctx.agencia_arquivo || '—'}</div>
+        <div style="margin-top:6px;padding-top:6px;border-top:1px solid var(--border)">
+          <span style="color:var(--text-3)">Empresa ativa:</span> <strong>${ctx.empresa_ativa || '—'}</strong><br>
+          <span style="color:var(--text-3)">CNPJ:</span> <strong>${ctx.cnpj_empresa || '—'}</strong>
+        </div>
+      </div>
+
+      <div class="form-field full">
+        <label class="form-label">Motivo da autorização * <span style="font-weight:400;color:var(--text-3);font-size:11px">(mínimo 5 caracteres — ficará no histórico)</span></label>
+        <textarea class="form-input" id="auth-motivo" rows="3" placeholder="Ex: Conta pessoal do sócio usada por engano. Lançamentos serão reclassificados depois."
+          style="resize:vertical;min-height:62px;font-family:var(--font);font-size:12.5px"></textarea>
+      </div>
+    `,
+    `<button class="btn btn-outline" id="auth-cancelar">Cancelar</button>
+     <button class="btn btn-gold" id="auth-confirmar">Autorizar e importar</button>`);
+
+    const btnCancelar  = document.getElementById('auth-cancelar');
+    const btnConfirmar = document.getElementById('auth-confirmar');
+
+    btnCancelar.onclick = () => { closeModal(); resolve(null); };
+    btnConfirmar.onclick = () => {
+      const motivo = (document.getElementById('auth-motivo').value || '').trim();
+      if (motivo.length < 5) {
+        toast('Informe um motivo com pelo menos 5 caracteres.', 'warn');
+        return;
+      }
+      closeModal();
+      resolve({ motivo });
+    };
+  });
 }
 
 
@@ -6321,6 +6400,19 @@ function processarArquivoExtrato(input) {
 }
 
 function parseOFX(text) {
+  // Extrai header (banco/conta) — pode vir de <BANKACCTFROM> ou <CCACCTFROM>
+  const _getHeader = (tag) => {
+    const r = new RegExp('<'+tag+'>([^<\\r\\n]+)','i').exec(text);
+    return r ? r[1].trim() : '';
+  };
+  const header = {
+    bankid: _getHeader('BANKID'),         // Código do banco (ex: 001 = BB, 341 = Itaú)
+    branchid: _getHeader('BRANCHID'),     // Agência
+    acctid:   _getHeader('ACCTID'),       // Conta
+    org:      _getHeader('ORG'),          // Organização (banco)
+    fid:      _getHeader('FID'),          // Identificador da instituição
+  };
+
   const items = [];
   const regex = /<STMTTRN>([\s\S]*?)<\/STMTTRN>/g;
   let m;
@@ -6338,7 +6430,69 @@ function parseOFX(text) {
     if (isNaN(valor)) continue;
     items.push({ data, descricao: memo, valor, tipo: valor>=0?'receita':'despesa' });
   }
+  // Anexa header como propriedade não-enumerável (pra não quebrar quem itera)
+  Object.defineProperty(items, 'header', { value: header, enumerable: false });
   return items;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// VALIDAÇÃO DO EXTRATO contra empresa ativa
+// ═══════════════════════════════════════════════════════════════
+// Tenta confirmar que o extrato pertence à empresa ativa por:
+// 1. Banco + agência + conta batem com fin_contas da empresa
+// 2. Se não bater, tenta nome (ORG/FID) bate com nome da empresa
+// Retorna: { ok, motivo, contexto }
+function _validarExtratoContraEmpresa(header, primeirasMemos) {
+  const tenantNome = (APP.tenant?.nome || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+  const ehEmpresaAtual = (s) => {
+    if (!s) return false;
+    const norm = String(s).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+    return tenantNome && (norm.includes(tenantNome) || tenantNome.includes(norm));
+  };
+
+  // ── Validação 1: banco/conta em fin_contas
+  if (header && (header.bankid || header.acctid)) {
+    const acctClean = (header.acctid||'').replace(/\D/g,'');
+    const branchClean = (header.branchid||'').replace(/\D/g,'');
+    const achouConta = (CONTAS||[]).find(c => {
+      const cBanco = (c.banco||'').replace(/\D/g,'');
+      const cConta = (c.conta||'').replace(/\D/g,'');
+      const cAg    = (c.agencia||'').replace(/\D/g,'');
+      const matchBanco = !header.bankid || cBanco === header.bankid || (c.banco||'').includes(header.bankid);
+      const matchConta = acctClean && cConta === acctClean;
+      const matchAg    = !branchClean || cAg === branchClean;
+      return matchConta && matchBanco && matchAg;
+    });
+    if (achouConta) {
+      return {
+        ok: true,
+        motivo: `Conta ${achouConta.nome} encontrada no cadastro da empresa.`,
+        contexto: { contaId: achouConta.id, nomeConta: achouConta.nome }
+      };
+    }
+  }
+
+  // ── Validação 2: ORG/FID bate com nome da empresa
+  if (header && (ehEmpresaAtual(header.org) || ehEmpresaAtual(header.fid))) {
+    return {
+      ok: true,
+      motivo: `Identificação do banco coincide com o nome da empresa.`,
+      contexto: { fonte: 'org_fid' }
+    };
+  }
+
+  // ── Não bateu — divergência
+  return {
+    ok: false,
+    motivo: 'Extrato não pôde ser associado à empresa ativa por banco/conta nem por nome.',
+    contexto: {
+      banco_arquivo:    header?.bankid || header?.org || '—',
+      conta_arquivo:    header?.acctid || '—',
+      agencia_arquivo:  header?.branchid || '—',
+      empresa_ativa:    APP.tenant?.nome || '—',
+      cnpj_empresa:     APP.tenant?.cnpj || '—',
+    }
+  };
 }
 
 async function confirmarImportacaoExtrato() {
@@ -7630,7 +7784,7 @@ const _AUDIT = {
     dataFim:    null,
     usuarioId:  null,
     tabela:     null,
-    operacoes:  ['INSERT','UPDATE','DELETE'],
+    operacoes:  ['INSERT','UPDATE','DELETE','AUTORIZACAO_DIVERGENCIA'],
     busca:      '',
   },
   page: 1,
@@ -7664,9 +7818,10 @@ const _AUDIT_LABELS = {
     fin_convites: 'Convites',
   },
   operacoes: {
-    INSERT: { label: 'Criação',  ico: '➕', cor: 'var(--green)',  bg: 'var(--green-lt)' },
-    UPDATE: { label: 'Alteração',ico: '✏️',  cor: 'var(--amber)',  bg: 'var(--amber-lt)' },
-    DELETE: { label: 'Exclusão', ico: '🗑️',  cor: 'var(--red)',    bg: 'var(--red-lt)' },
+    INSERT: { label: 'Criação',     ico: '➕', cor: 'var(--green)',  bg: 'var(--green-lt)' },
+    UPDATE: { label: 'Alteração',   ico: '✏️',  cor: 'var(--amber)',  bg: 'var(--amber-lt)' },
+    DELETE: { label: 'Exclusão',    ico: '🗑️',  cor: 'var(--red)',    bg: 'var(--red-lt)' },
+    AUTORIZACAO_DIVERGENCIA: { label: 'Autorização', ico: '🔐', cor: '#7c3aed', bg: '#ede9fe' },
   },
 };
 
@@ -7744,7 +7899,7 @@ async function _auditCarregarEventos() {
       p_data_fim:    _AUDIT.filtros.dataFim    || null,
       p_usuario_id:  _AUDIT.filtros.usuarioId  || null,
       p_tabela:      _AUDIT.filtros.tabela     || null,
-      p_operacoes:   _AUDIT.filtros.operacoes && _AUDIT.filtros.operacoes.length === 3 ? null : _AUDIT.filtros.operacoes,
+      p_operacoes:   _AUDIT.filtros.operacoes && _AUDIT.filtros.operacoes.length === 4 ? null : _AUDIT.filtros.operacoes,
       p_busca:       _AUDIT.filtros.busca      || null,
       p_limite:      _AUDIT.perPage,
       p_offset:      (_AUDIT.page - 1) * _AUDIT.perPage,
@@ -7817,7 +7972,7 @@ function _renderAuditoriaUI() {
       <div>
         <label style="font-size:10.5px;color:var(--text-3);font-weight:600;text-transform:uppercase;letter-spacing:.06em">Operação</label>
         <div style="display:flex;gap:8px;padding-top:6px">
-          ${['INSERT','UPDATE','DELETE'].map(op => {
+          ${['INSERT','UPDATE','DELETE','AUTORIZACAO_DIVERGENCIA'].map(op => {
             const lab = _AUDIT_LABELS.operacoes[op];
             const checked = _AUDIT.filtros.operacoes.includes(op);
             return `<label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:11.5px;color:${lab.cor}">
@@ -7916,6 +8071,12 @@ function _renderAuditEvent(e) {
 
 function _auditResumo(e) {
   const dados = e.dados_depois || e.dados_antes || {};
+  if (e.operacao === 'AUTORIZACAO_DIVERGENCIA') {
+    const motivo = dados.motivo || '—';
+    const ctx = dados.contexto || {};
+    const arquivo = ctx.arquivo || '—';
+    return `Autorizou importação divergente <strong>${arquivo}</strong> — motivo: "${motivo.length>60?motivo.slice(0,60)+'…':motivo}"`;
+  }
   if (e.operacao === 'INSERT') {
     if (dados.descricao) return `Criou: <strong>${dados.descricao}</strong>${dados.valor?` — ${fmtMoeda(dados.valor)}`:''}`;
     if (dados.nome)      return `Criou: <strong>${dados.nome}</strong>`;
@@ -8012,7 +8173,7 @@ function _auditOnOpToggle(cb) {
   } else {
     _AUDIT.filtros.operacoes = _AUDIT.filtros.operacoes.filter(x => x !== op);
     if (_AUDIT.filtros.operacoes.length === 0) {
-      _AUDIT.filtros.operacoes = ['INSERT','UPDATE','DELETE'];
+      _AUDIT.filtros.operacoes = ['INSERT','UPDATE','DELETE','AUTORIZACAO_DIVERGENCIA'];
       cb.checked = true;
       toast('Mantenha ao menos uma operação selecionada.', 'warn');
     }
@@ -8040,7 +8201,7 @@ function _auditFiltroAtalho(tipo) {
   } else if (tipo === 'limpar') {
     _AUDIT.filtros = {
       dataInicio: null, dataFim: null, usuarioId: null,
-      tabela: null, operacoes: ['INSERT','UPDATE','DELETE'], busca: ''
+      tabela: null, operacoes: ['INSERT','UPDATE','DELETE','AUTORIZACAO_DIVERGENCIA'], busca: ''
     };
   }
   _auditOnFiltro();
@@ -8099,7 +8260,7 @@ async function exportarAuditoria(formato) {
       p_data_fim:    _AUDIT.filtros.dataFim    || null,
       p_usuario_id:  _AUDIT.filtros.usuarioId  || null,
       p_tabela:      _AUDIT.filtros.tabela     || null,
-      p_operacoes:   _AUDIT.filtros.operacoes && _AUDIT.filtros.operacoes.length === 3 ? null : _AUDIT.filtros.operacoes,
+      p_operacoes:   _AUDIT.filtros.operacoes && _AUDIT.filtros.operacoes.length === 4 ? null : _AUDIT.filtros.operacoes,
       p_busca:       _AUDIT.filtros.busca      || null,
       p_limite:      5000,
       p_offset:      0,

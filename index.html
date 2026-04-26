@@ -6710,7 +6710,7 @@ async function carregarUsuarios() {
   // Busca usuários do tenant atual via tabela de vínculos
   try {
     const vinculos = await supa('GET', 'fin_usuarios_empresas', {
-      params: { tenant_id: `eq.${APP.tenantId}`, ativo: 'eq.true', select: '*,fin_usuarios(id,nome,email,criado_em)' }
+      params: { tenant_id: `eq.${APP.tenantId}`, ativo: 'eq.true', select: '*,fin_usuarios!fin_usuarios_empresas_usuario_id_fkey(id,nome,email,criado_em)' }
     });
     _usuarios = (vinculos||[]).map(v => ({
       id:         v.fin_usuarios?.id || v.usuario_id,

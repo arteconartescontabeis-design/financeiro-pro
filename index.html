@@ -679,6 +679,10 @@ tbody td { padding: 11px 16px; font-size: 13px; }
         Categorias
       </button>
       <div class="nav-section">Sistema</div>
+      <button class="nav-item" onclick="go('empresas')" data-page="empresas" id="nav-empresas">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 7V3H2v18h20V7H12zM6 19H4v-2h2v2zm0-4H4v-2h2v2zm0-4H4V9h2v2zm0-4H4V5h2v2zm4 12H8v-2h2v2zm0-4H8v-2h2v2zm0-4H8V9h2v2zm0-4H8V5h2v2zm10 12h-8v-2h2v-2h-2v-2h2v-2h-2V9h8v10zm-2-8h-2v2h2v-2zm0 4h-2v2h2v-2z"/></svg>
+        Empresas
+      </button>
       <button class="nav-item" onclick="go('usuarios')" data-page="usuarios">
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
         Usuários
@@ -1224,6 +1228,7 @@ const PAGES = {
   categorias:   { title: 'Categorias',      render: renderCategorias },
   configuracoes:{ title: 'Configurações',   render: renderConfiguracoes },
   usuarios:     { title: 'Usuários',         render: () => renderUsuarios() },
+  empresas:     { title: 'Empresas',         render: () => renderEmpresas() },
 };
 
 function openSidebar() {
@@ -5207,13 +5212,26 @@ async function processarXMLAutoDoc(id, file) {
       return;
     }
 
-    if (cnpjEmpresa && cnpjPrestador && cnpjTomador) {
+    // ═══ VALIDAÇÃO CNPJ ═══════════════════════════════════════
+    // Empresa SEM CNPJ cadastrado: bloqueia a importação (regra rígida)
+    if (!cnpjEmpresa) {
+      adicionarFilaItem(id, file.name, 'erro',
+        `Empresa "${APP.tenant?.nome||'ativa'}" sem CNPJ cadastrado. Configure o CNPJ em "Empresas" antes de importar documentos fiscais.`, null);
+      return;
+    }
+    // CNPJ deve aparecer como prestador OU tomador
+    if (cnpjPrestador || cnpjTomador) {
       if (cnpjEmpresa !== cnpjPrestador && cnpjEmpresa !== cnpjTomador) {
         adicionarFilaItem(id, file.name, 'erro',
-          `NFS-e rejeitada — CNPJ da empresa (${cnpjEmpresa}) não consta como prestador nem tomador deste documento.`, null);
+          `Documento de outra empresa. CNPJ da empresa ativa (${_formatCNPJ(cnpjEmpresa)}) não consta como prestador (${_formatCNPJ(cnpjPrestador)||'—'}) nem tomador (${_formatCNPJ(cnpjTomador)||'—'}).`, null);
         return;
       }
+    } else {
+      adicionarFilaItem(id, file.name, 'erro',
+        `NFS-e sem CNPJ de prestador/tomador identificável. Importação rejeitada por segurança.`, null);
+      return;
     }
+    // ═══════════════════════════════════════════════════════════
 
     // Determinar tipo e contraparte
     let tipo = 'receita';
@@ -5302,6 +5320,28 @@ async function processarXMLAutoDoc(id, file) {
     // Extrair entidades via helper
     const emit = extrairEntidadeXML(doc, 'emit') || {};
     const dest = extrairEntidadeXML(doc, 'dest') || {};
+
+    const cnpjEmit = (emit.cpf_cnpj||'').replace(/\D/g,'');
+    const cnpjDest = (dest.cpf_cnpj||'').replace(/\D/g,'');
+
+    // ═══ VALIDAÇÃO CNPJ ═══════════════════════════════════════
+    if (!cnpjEmpresa) {
+      adicionarFilaItem(id, file.name, 'erro',
+        `Empresa "${APP.tenant?.nome||'ativa'}" sem CNPJ cadastrado. Configure o CNPJ em "Empresas" antes de importar documentos fiscais.`, null);
+      return;
+    }
+    if (cnpjEmit || cnpjDest) {
+      if (cnpjEmpresa !== cnpjEmit && cnpjEmpresa !== cnpjDest) {
+        adicionarFilaItem(id, file.name, 'erro',
+          `Documento de outra empresa. CNPJ da empresa ativa (${_formatCNPJ(cnpjEmpresa)}) não consta como emitente (${_formatCNPJ(cnpjEmit)||'—'}) nem destinatário (${_formatCNPJ(cnpjDest)||'—'}).`, null);
+        return;
+      }
+    } else {
+      adicionarFilaItem(id, file.name, 'erro',
+        `NF-e sem CNPJ de emitente/destinatário identificável. Importação rejeitada por segurança.`, null);
+      return;
+    }
+    // ═══════════════════════════════════════════════════════════
 
     // tpNF: 0 = entrada (despesa: emitente é fornecedor)
     //       1 = saída  (receita: destinatário é cliente)
@@ -5868,6 +5908,24 @@ function processarXMLNFe(input) {
       const desc   = `NF-e nº ${nNF} — ${xNome}`;
 
       if (!vNF) { document.getElementById('nfe-preview').innerHTML = '<div style="color:var(--red);font-size:12px;margin-top:12px">XML inválido ou não é uma NF-e padrão SEFAZ.</div>'; return; }
+
+      // ═══ VALIDAÇÃO CNPJ ═══════════════════════════════════════
+      const cnpjEmpresa = (APP.tenant?.cnpj||'').replace(/\D/g,'');
+      const cnpjEmit    = (CNPJ||'').replace(/\D/g,'');
+      const cnpjDest    = (get('CNPJ') ? '' : get('CPF')) || '';
+      // Pega CNPJ do destinatário (segundo bloco "dest")
+      const allCNPJs    = [...doc.getElementsByTagName('CNPJ')].map(el => el.textContent.trim());
+      const cnpjDestino = allCNPJs[1] || ''; // primeiro é emit, segundo é dest
+
+      if (!cnpjEmpresa) {
+        document.getElementById('nfe-preview').innerHTML = `<div style="color:var(--red);font-size:12px;margin-top:12px;background:var(--red-lt);padding:10px;border-radius:8px;border:1px solid var(--red)">⚠️ Empresa "${APP.tenant?.nome||'ativa'}" sem CNPJ cadastrado. Configure em "Empresas" antes de importar.</div>`;
+        return;
+      }
+      if (cnpjEmit && cnpjDestino && cnpjEmpresa !== cnpjEmit && cnpjEmpresa !== cnpjDestino) {
+        document.getElementById('nfe-preview').innerHTML = `<div style="color:var(--red);font-size:12px;margin-top:12px;background:var(--red-lt);padding:10px;border-radius:8px;border:1px solid var(--red)">⚠️ <strong>Documento de outra empresa.</strong><br>CNPJ ativo: ${_formatCNPJ(cnpjEmpresa)}<br>Emitente: ${_formatCNPJ(cnpjEmit)||'—'}<br>Destinatário: ${_formatCNPJ(cnpjDestino)||'—'}</div>`;
+        return;
+      }
+      // ═══════════════════════════════════════════════════════════
 
       _nfeData = { desc, valor: parseFloat(vNF), data, nNF, xNome, CNPJ, xMun };
 
@@ -6899,6 +6957,174 @@ async function renderUsuarios() {
   </div>`;
 }
 
+// ═══════════════════════════════════════════════════════════════
+// EMPRESAS
+// ═══════════════════════════════════════════════════════════════
+let _empresasList = [];
+
+function _formatCNPJ(cnpj) {
+  if (!cnpj) return '—';
+  const c = String(cnpj).replace(/\D/g,'');
+  if (c.length !== 14) return cnpj;
+  return c.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5');
+}
+
+async function carregarEmpresas() {
+  try {
+    _empresasList = await supa('GET', 'fin_tenants', {
+      params: { select: 'id,nome,cnpj,setor,observacao,criado_em', order: 'nome.asc' }
+    }) || [];
+  } catch(e) {
+    console.warn('carregarEmpresas:', e.message);
+    _empresasList = [];
+  }
+}
+
+async function renderEmpresas() {
+  // Apenas admins ou superadmin podem acessar
+  if (!isAdmin()) {
+    $id('page-content').innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon">🔒</div>
+        <h3>Acesso restrito</h3>
+        <p style="font-size:13px;color:var(--text-3);margin-top:6px">Somente administradores podem acessar a gestão de empresas.</p>
+      </div>`;
+    return;
+  }
+
+  $id('topbar-actions').innerHTML = `
+    <button class="btn btn-gold btn-sm" onclick="modalNovaEmpresa()">+ Nova empresa</button>
+  `;
+
+  await carregarEmpresas();
+
+  $id('page-content').innerHTML = `
+  <div style="display:flex;flex-direction:column;gap:16px;max-width:980px">
+
+  <!-- KPI -->
+  <div class="kpi-grid" style="grid-template-columns:repeat(2,1fr)">
+    <div class="kpi-card k-gold">
+      <div class="kpi-label">Total de empresas</div>
+      <div class="kpi-value" style="color:var(--gold)">${_empresasList.length}</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">Empresa ativa</div>
+      <div class="kpi-value" style="font-size:18px;color:var(--text)">${APP.tenant?.nome || '—'}</div>
+    </div>
+  </div>
+
+  <!-- Aviso -->
+  <div style="background:rgba(26,82,118,.04);border:1px solid rgba(26,82,118,.18);border-radius:10px;padding:13px 16px;font-size:12px;color:var(--text-2);line-height:1.7">
+    <strong style="color:var(--gold)">Sobre empresas:</strong>
+    Cada empresa tem dados financeiros isolados. O CNPJ é obrigatório e usado pela validação de importações (XML/NFe rejeita documentos de outra empresa).
+  </div>
+
+  <!-- Tabela -->
+  <div class="card" style="padding:0;overflow:hidden">
+    <div style="padding:12px 16px;border-bottom:1px solid var(--border);font-size:13px;font-weight:700">Empresas cadastradas</div>
+    <table>
+      <thead><tr>
+        <th>Empresa</th><th>CNPJ</th><th>Setor</th><th>Cadastro</th><th></th>
+      </tr></thead>
+      <tbody>
+        ${_empresasList.length === 0 ? `
+          <tr><td colspan="5" style="text-align:center;color:var(--text-3);padding:24px;font-size:12.5px">Nenhuma empresa cadastrada.</td></tr>
+        ` : _empresasList.map(t => {
+          const ehAtiva = t.id === APP.tenantId;
+          return `<tr style="${ehAtiva?'background:var(--surface-2)':''}">
+            <td>
+              <div style="display:flex;align-items:center;gap:10px">
+                <div style="width:32px;height:32px;border-radius:7px;background:${ehAtiva?'linear-gradient(135deg,var(--gold-dim),var(--gold))':'var(--surface-2)'};display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:${ehAtiva?'#fff':'var(--text-2)'}">
+                  ${(t.nome||'E')[0].toUpperCase()}
+                </div>
+                <div>
+                  <div style="font-size:13px;font-weight:600;color:var(--text)">${t.nome||'—'}${ehAtiva?' <span style="font-size:10px;color:var(--gold);font-weight:700">(ativa)</span>':''}</div>
+                  ${t.observacao?`<div style="font-size:10.5px;color:var(--text-3);margin-top:2px">${t.observacao}</div>`:''}
+                </div>
+              </div>
+            </td>
+            <td style="font-family:var(--mono);font-size:12px;color:var(--text-2)">${_formatCNPJ(t.cnpj)}</td>
+            <td style="color:var(--text-2);font-size:12.5px">${t.setor||'—'}</td>
+            <td style="font-family:var(--mono);font-size:11px;color:var(--text-3)">${t.criado_em?new Date(t.criado_em).toLocaleDateString('pt-BR'):'—'}</td>
+            <td style="text-align:right">
+              ${!ehAtiva ? `<button onclick="trocarEmpresaSA('${t.id}')" class="btn btn-sm" style="padding:4px 10px;font-size:11px;background:var(--surface-2);color:var(--text-2);border:1px solid var(--border)">Acessar →</button>` : `<span style="font-size:11px;color:var(--gold);font-weight:600">Você está aqui</span>`}
+            </td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>
+  </div>
+
+  </div>`;
+}
+
+function modalNovaEmpresa() {
+  openModal('Nova empresa', `
+    <div style="font-size:12px;color:var(--text-2);background:var(--bg-2);padding:11px 13px;border-radius:8px;border:1px solid var(--border);margin-bottom:14px;line-height:1.55">
+      Cadastre uma nova empresa. O CNPJ é <strong>obrigatório</strong> e será usado para validação de importações de documentos.<br>
+      Você ficará vinculado(a) a essa empresa como administrador automaticamente.
+    </div>
+    <div class="form-grid">
+      <div class="form-field full"><label class="form-label">Nome / Razão social *</label>
+        <input class="form-input" id="ne-nome" placeholder="Nome da empresa">
+      </div>
+      <div class="form-field full"><label class="form-label">CNPJ *</label>
+        <input class="form-input" id="ne-cnpj" placeholder="00.000.000/0000-00" maxlength="18"
+               oninput="this.value=this.value.replace(/\\D/g,'').replace(/^(\\d{2})(\\d)/,'$1.$2').replace(/^(\\d{2})\\.(\\d{3})(\\d)/,'$1.$2.$3').replace(/\\.(\\d{3})(\\d)/,'.$1/$2').replace(/(\\d{4})(\\d)/,'$1-$2')">
+        <div style="font-size:10.5px;color:var(--text-3);margin-top:4px">14 dígitos. Pontos/barra/traço opcionais.</div>
+      </div>
+      <div class="form-field full"><label class="form-label">Setor</label>
+        <select class="form-select" id="ne-setor">
+          <option value="">— selecione —</option>
+          <option value="Contabilidade">Contabilidade</option>
+          <option value="Comércio">Comércio</option>
+          <option value="Indústria">Indústria</option>
+          <option value="Serviços">Serviços</option>
+          <option value="Tecnologia">Tecnologia</option>
+          <option value="Saúde">Saúde</option>
+          <option value="Educação">Educação</option>
+          <option value="Transporte">Transporte</option>
+          <option value="Construção">Construção</option>
+          <option value="Outros">Outros</option>
+        </select>
+      </div>
+      <div class="form-field full"><label class="form-label">Observação</label>
+        <input class="form-input" id="ne-obs" placeholder="Opcional">
+      </div>
+    </div>
+  `,
+  `<button class="btn btn-outline" onclick="closeModal()">Cancelar</button>
+   <button class="btn btn-gold" onclick="criarEmpresa()">Cadastrar</button>`);
+}
+
+async function criarEmpresa() {
+  const nome  = $id('ne-nome').value.trim();
+  const cnpj  = $id('ne-cnpj').value.replace(/\D/g,'');
+  const setor = $id('ne-setor').value || null;
+  const obs   = $id('ne-obs').value.trim() || null;
+
+  if (!nome)              { toast('Nome é obrigatório.', 'error'); return; }
+  if (cnpj.length !== 14) { toast('CNPJ deve ter 14 dígitos.', 'error'); return; }
+
+  try {
+    const r = await supaRpc('fin_criar_empresa', {
+      p_nome: nome, p_cnpj: cnpj, p_setor: setor, p_observacao: obs
+    });
+    if (!r || !r.sucesso) throw new Error('Falha ao criar empresa');
+    closeModal();
+    toast(`Empresa "${nome}" cadastrada!`, 'success');
+    // Recarrega lista de empresas no dropdown header
+    try {
+      APP.empresas = await supaRpc('fin_minhas_empresas') || APP.empresas;
+      await carregarSeletorEmpresas();
+    } catch(_) {}
+    await renderEmpresas();
+  } catch(e) {
+    const msg = (e.message||'').replace(/.*"message":"([^"]*)".*/, '$1') || e.message;
+    toast('Erro: ' + msg, 'error', 6000);
+  }
+}
+
 // ── MODAL: NOVO USUÁRIO (CADASTRO DIRETO) ───────────────────────
 function modalNovoUsuario() {
   openModal('Novo usuário', `
@@ -7006,9 +7232,126 @@ async function criarUsuarioDireto() {
 }
 
 // ── MODAL: EDITAR USUÁRIO ──────────────────────────────────────
+// ── MÓDULOS PARA MATRIZ DE PERMISSÕES ──────────────────────────
+const _MODULOS_PERMS = [
+  { key: 'dashboard',     label: 'Dashboard / BI' },
+  { key: 'receber',       label: 'A Receber' },
+  { key: 'pagar',         label: 'A Pagar' },
+  { key: 'caixa_bancos',  label: 'Caixa & Bancos' },
+  { key: 'cadastros',     label: 'Cadastros (clientes/fornecedores)' },
+  { key: 'recorrencias',  label: 'Recorrências' },
+  { key: 'metas',         label: 'Metas' },
+  { key: 'impostos',      label: 'Impostos' },
+  { key: 'dre',           label: 'DRE' },
+  { key: 'fluxo_caixa',   label: 'Fluxo de Caixa' },
+  { key: 'importacao_ia', label: 'Importação IA' },
+  { key: 'configuracoes', label: 'Configurações' },
+  { key: 'usuarios',      label: 'Usuários' },
+];
+const _ACOES_PERMS = [
+  { key: 'v', label: 'Ver' },
+  { key: 'c', label: 'Criar' },
+  { key: 'e', label: 'Editar' },
+  { key: 'x', label: 'Excluir' },
+];
+
+// Templates pré-definidos (reflete o SQL fin_template_permissoes)
+const _PRESETS = {
+  admin: () => Object.fromEntries(_MODULOS_PERMS.map(m =>
+    [m.key, { v:true, c:true, e:true, x:true }])),
+  financeiro: () => {
+    const p = {};
+    _MODULOS_PERMS.forEach(m => p[m.key] = { v:false, c:false, e:false, x:false });
+    p.dashboard.v = true;
+    ['receber','pagar','caixa_bancos','cadastros','recorrencias','impostos'].forEach(k =>
+      p[k] = { v:true, c:true, e:true, x:false });
+    p.metas.v = true;
+    p.dre.v = true;
+    p.fluxo_caixa.v = true;
+    p.importacao_ia.v = true; p.importacao_ia.c = true;
+    return p;
+  },
+  leitura: () => {
+    const p = {};
+    _MODULOS_PERMS.forEach(m => p[m.key] = { v:false, c:false, e:false, x:false });
+    ['dashboard','receber','pagar','caixa_bancos','cadastros','recorrencias','metas','impostos','dre','fluxo_caixa']
+      .forEach(k => p[k].v = true);
+    return p;
+  }
+};
+
+function _renderMatrizPermissoes(perms) {
+  // perms = objeto JSONB atual
+  return `
+    <div style="font-size:11px;color:var(--text-3);margin:14px 0 8px;text-transform:uppercase;letter-spacing:.06em;font-weight:700">
+      Matriz de permissões
+    </div>
+    <div style="background:var(--bg-2);border:1px solid var(--border);border-radius:9px;overflow:hidden">
+      <table style="width:100%;font-size:12px">
+        <thead style="background:var(--surface-2)">
+          <tr>
+            <th style="text-align:left;padding:8px 10px;font-weight:700;color:var(--text-2)">Módulo</th>
+            ${_ACOES_PERMS.map(a => `<th style="text-align:center;padding:8px 6px;font-weight:700;color:var(--text-2);width:60px">${a.label}</th>`).join('')}
+          </tr>
+        </thead>
+        <tbody>
+          ${_MODULOS_PERMS.map((m,i) => {
+            const mp = perms[m.key] || {};
+            return `<tr style="border-top:1px solid var(--border)">
+              <td style="padding:7px 10px;color:var(--text)">${m.label}</td>
+              ${_ACOES_PERMS.map(a => `
+                <td style="text-align:center;padding:5px 6px">
+                  <input type="checkbox" id="perm-${m.key}-${a.key}"
+                         ${mp[a.key]?'checked':''}
+                         style="width:16px;height:16px;cursor:pointer;accent-color:var(--gold)">
+                </td>`).join('')}
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>
+    <div style="font-size:11px;color:var(--text-3);margin-top:8px;line-height:1.5">
+      💡 Marque/desmarque conforme necessário. Os botões de "Aplicar template" preenchem rapidamente as opções padrão.
+    </div>
+  `;
+}
+
+function _coletarMatriz() {
+  const perms = {};
+  _MODULOS_PERMS.forEach(m => {
+    perms[m.key] = {};
+    _ACOES_PERMS.forEach(a => {
+      const cb = $id(`perm-${m.key}-${a.key}`);
+      perms[m.key][a.key] = !!(cb && cb.checked);
+    });
+  });
+  return perms;
+}
+
+function _aplicarPreset(nome) {
+  const preset = _PRESETS[nome] && _PRESETS[nome]();
+  if (!preset) return;
+  _MODULOS_PERMS.forEach(m => {
+    _ACOES_PERMS.forEach(a => {
+      const cb = $id(`perm-${m.key}-${a.key}`);
+      if (cb) cb.checked = !!(preset[m.key] && preset[m.key][a.key]);
+    });
+  });
+  // Atualiza visualmente o select de template
+  const sel = $id('eu-template');
+  if (sel) sel.value = nome;
+  toast(`Template "${nome}" aplicado. Ajuste os checkboxes conforme necessário antes de salvar.`, 'success', 4000);
+}
+
 function modalEditarUsuario(usuarioId) {
   const u = _usuarios.find(x => x.id === usuarioId);
   if (!u) return;
+  // Se o usuário tem permissões personalizadas no banco, usa elas;
+  // senão, parte do preset do template atual
+  const permsAtuais = (u.permissoes && Object.keys(u.permissoes).length)
+    ? u.permissoes
+    : (_PRESETS[u.template] ? _PRESETS[u.template]() : _PRESETS.leitura());
+
   openModal('Editar usuário', `
     <div class="form-grid">
       <div class="form-field full"><label class="form-label">Nome</label>
@@ -7018,14 +7361,26 @@ function modalEditarUsuario(usuarioId) {
           style="background:var(--surface-2);color:var(--text-3)">
         <div style="font-size:10.5px;color:var(--text-3);margin-top:4px">E-mail não pode ser alterado.</div>
       </div>
-      <div class="form-field full"><label class="form-label">Perfil</label>
+      <div class="form-field full"><label class="form-label">Perfil base</label>
         <select class="form-select" id="eu-template">
           <option value="admin"      ${u.template==='admin'?'selected':''}>Administrador</option>
           <option value="financeiro" ${u.template==='financeiro'?'selected':''}>Operacional</option>
           <option value="leitura"    ${u.template==='leitura'?'selected':''}>Visualização</option>
+          <option value="custom"     ${u.template==='custom'?'selected':''}>Personalizado</option>
         </select>
       </div>
     </div>
+
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
+      <button type="button" class="btn btn-sm" onclick="_aplicarPreset('admin')"
+        style="padding:5px 11px;font-size:11px;background:var(--gold-lt);color:var(--gold-dim);border:1px solid var(--gold-lt)">⚡ Aplicar Administrador</button>
+      <button type="button" class="btn btn-sm" onclick="_aplicarPreset('financeiro')"
+        style="padding:5px 11px;font-size:11px;background:var(--amber-lt);color:var(--amber);border:1px solid var(--amber-lt)">⚡ Aplicar Operacional</button>
+      <button type="button" class="btn btn-sm" onclick="_aplicarPreset('leitura')"
+        style="padding:5px 11px;font-size:11px;background:var(--surface-2);color:var(--text-2);border:1px solid var(--border)">⚡ Aplicar Visualização</button>
+    </div>
+
+    ${_renderMatrizPermissoes(permsAtuais)}
   `,
   `<button class="btn btn-outline" onclick="closeModal()">Cancelar</button>
    <button class="btn btn-gold" onclick="salvarEdicaoUsuario('${u.id}')">Salvar</button>`);
@@ -7033,13 +7388,32 @@ function modalEditarUsuario(usuarioId) {
 
 async function salvarEdicaoUsuario(usuarioId) {
   const nome = $id('eu-nome').value.trim();
-  const tpl  = $id('eu-template').value;
+  let tpl  = $id('eu-template').value;
   if (!nome) { toast('Nome é obrigatório.', 'error'); return; }
+
+  // Coleta permissões da matriz
+  const perms = _coletarMatriz();
+
+  // Detecta se permissões batem com algum preset; senão marca como custom
+  let isCustom = true;
+  for (const presetName of ['admin','financeiro','leitura']) {
+    const preset = _PRESETS[presetName]();
+    let bate = true;
+    for (const m of _MODULOS_PERMS) {
+      for (const a of _ACOES_PERMS) {
+        if ((perms[m.key]||{})[a.key] !== (preset[m.key]||{})[a.key]) { bate = false; break; }
+      }
+      if (!bate) break;
+    }
+    if (bate) { tpl = presetName; isCustom = false; break; }
+  }
+  if (isCustom) tpl = 'custom';
+
   try {
-    // Atualiza nome em fin_usuarios
     await supa('PATCH', 'fin_usuarios', { params: { id: `eq.${usuarioId}` }, body: { nome } });
-    // Atualiza template/permissões via RPC
-    await supaRpc('fin_atualizar_permissoes', { p_usuario_id: usuarioId, p_template: tpl });
+    await supaRpc('fin_atualizar_permissoes', {
+      p_usuario_id: usuarioId, p_template: tpl, p_permissoes: perms
+    });
     closeModal();
     toast('Usuário atualizado!', 'success');
     await renderUsuarios();
@@ -7318,9 +7692,12 @@ async function renderSuperadmin() {
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;flex-wrap:wrap;gap:12px">
     <div>
       <h1 style="font-size:22px;font-weight:700;color:#f1f5f9;margin-bottom:4px">Empresas Cadastradas</h1>
-      <div style="font-size:13px;color:#64748b">${SA.tenants.length} empresa(s) ativa(s) no sistema</div>
+      <div style="font-size:13px;color:#64748b">${SA.tenants.length} empresa(s) ativa(s) no sistema · painel de monitoramento</div>
     </div>
-    <button onclick="modalCadastrarEmpresa()" style="padding:10px 20px;border-radius:10px;border:none;background:#1a5276;color:#fff;font-size:13px;font-weight:700;cursor:pointer;font-family:'DM Sans',sans-serif;display:flex;align-items:center;gap:8px">+ Cadastrar Empresa</button>
+    <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:#64748b;background:#0f172a;padding:8px 12px;border-radius:8px;border:1px solid #334155">
+      <span style="font-size:14px">👁️</span>
+      <span>Somente leitura</span>
+    </div>
   </div>
 
   <!-- KPIs consolidados -->
@@ -7350,12 +7727,11 @@ async function renderSuperadmin() {
           <th style="padding:12px 16px;text-align:right;font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.06em">Despesas</th>
           <th style="padding:12px 16px;text-align:right;font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.06em">Saldo</th>
           <th style="padding:12px 16px;text-align:left;font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.06em">Cadastro</th>
-          <th style="padding:12px 16px"></th>
         </tr>
       </thead>
       <tbody>
         ${SA.tenants.length === 0
-          ? `<tr><td colspan="8" style="padding:40px;text-align:center;color:#64748b">Nenhuma empresa cadastrada</td></tr>`
+          ? `<tr><td colspan="7" style="padding:40px;text-align:center;color:#64748b">Nenhuma empresa cadastrada</td></tr>`
           : SA.tenants.map(t => `
             <tr style="border-top:1px solid #334155;transition:background .15s" onmouseover="this.style.background='#0f172a'" onmouseout="this.style.background=''">
               <td style="padding:14px 16px">
@@ -7370,12 +7746,6 @@ async function renderSuperadmin() {
               <td style="padding:14px 16px;text-align:right;font-family:'DM Mono',monospace;font-size:12px;color:#ef4444;font-weight:700">${fmtMoeda(t._despesas)}</td>
               <td style="padding:14px 16px;text-align:right;font-family:'DM Mono',monospace;font-size:12px;font-weight:700;color:${t._saldo>=0?'#22c55e':'#ef4444'}">${fmtMoeda(t._saldo)}</td>
               <td style="padding:14px 16px;font-size:11px;color:#64748b;font-family:'DM Mono',monospace">${t.criado_em?new Date(t.criado_em).toLocaleDateString('pt-BR'):'—'}</td>
-              <td data-actions-cell="true" data-tenant-id="${t.id}" data-tenant-nome="${(t.nome||'').replace(/"/g,'&quot;')}" style="padding:14px 16px;white-space:nowrap;cursor:pointer">
-                <div style="display:flex;gap:8px">
-                  <button type="button" data-action="gerenciar" data-tenant-id="${t.id}" style="padding:8px 16px;border-radius:7px;border:1px solid #334155;background:none;color:#cbd5e1;font-size:12px;font-weight:600;cursor:pointer;font-family:'DM Sans',sans-serif;min-width:90px;pointer-events:auto">Gerenciar</button>
-                  <button type="button" data-action="novo-usuario" data-tenant-id="${t.id}" data-tenant-nome="${(t.nome||'').replace(/"/g,'&quot;')}" style="padding:8px 16px;border-radius:7px;border:none;background:#1a5276;color:#fff;font-size:12px;font-weight:600;cursor:pointer;font-family:'DM Sans',sans-serif;min-width:90px;pointer-events:auto">+ Usuário</button>
-                </div>
-              </td>
             </tr>`).join('')}
       </tbody>
     </table>

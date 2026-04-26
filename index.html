@@ -6944,26 +6944,48 @@ async function criarUsuarioDireto() {
   if (!email) { toast('E-mail é obrigatório.', 'error'); return; }
   if (!senha || senha.length < 6) { toast('Senha precisa ter no mínimo 6 caracteres.', 'error'); return; }
 
+  // ⚠️ IMPORTANTE: signup do Supabase troca a sessão atual.
+  // Salvamos o token de admin antes e restauramos depois.
+  const adminToken = APP.token;
+  const adminUser  = APP.user;
+  const adminTenant = APP.tenantId;
+
   try {
-    // 1) Cria conta no Supabase Auth (envia email de confirmação automaticamente)
+    // 1) Cria conta no Supabase Auth (envia email de confirmação)
+    //    Isso muda APP.token implicitamente se houver auto-detect_session
     const su = await supaAuth('POST', 'signup', { email, password: senha });
-    if (!su.user && !su.id && su.error_description) {
+
+    if (su.code === 429 || (su.error && /rate/i.test(su.error))) {
+      throw new Error('Muitas tentativas em pouco tempo. Aguarde alguns minutos.');
+    }
+    if (su.error_description) {
       throw new Error(su.error_description);
     }
+
     const newAuthId = su.user?.id || su.id;
     if (!newAuthId) {
-      throw new Error('Falha ao obter ID do novo usuário');
+      throw new Error(su.msg || 'Falha ao obter ID do novo usuário no Auth');
     }
 
-    // 2) Cria registro em fin_usuarios (vinculado ao tenant atual)
+    // 2) RESTAURAR token de admin ANTES de fazer INSERTs
+    //    (signup pode ter retornado uma session do novo usuário; precisamos do JWT do admin)
+    APP.token    = adminToken;
+    APP.user     = adminUser;
+    APP.tenantId = adminTenant;
+
+    // Re-seta o tenant na sessão Postgres
+    try { await supaRpc('fin_set_tenant', { p_tenant_id: adminTenant }); } catch(_) {}
+
+    // 3) INSERT em fin_usuarios (executando como admin)
     const usCriados = await supa('POST', 'fin_usuarios', {
       body: { tenant_id: APP.tenantId, auth_id: newAuthId, nome, email,
               perfil: tpl === 'admin' ? 'admin' : 'usuario' },
       returning: true
     });
     const novoUserId = usCriados[0]?.id;
+    if (!novoUserId) throw new Error('Falha ao criar registro em fin_usuarios');
 
-    // 3) Cria vínculo em fin_usuarios_empresas com permissões do template
+    // 4) INSERT em fin_usuarios_empresas com permissões do template
     const perms = await supaRpc('fin_template_permissoes', { p_template: tpl });
     await supa('POST', 'fin_usuarios_empresas', {
       body: { usuario_id: novoUserId, tenant_id: APP.tenantId,
@@ -6972,10 +6994,14 @@ async function criarUsuarioDireto() {
     });
 
     closeModal();
-    toast(`Usuário criado! Senha: ${senha}`, 'success', 8000);
+    toast(`Usuário criado! Senha: ${senha} (anote ou copie)`, 'success', 10000);
     await renderUsuarios();
   } catch(e) {
-    toast('Erro: ' + e.message, 'error');
+    // Em caso de falha, garante que admin continua logado
+    APP.token    = adminToken;
+    APP.user     = adminUser;
+    APP.tenantId = adminTenant;
+    toast('Erro: ' + e.message, 'error', 6000);
   }
 }
 

@@ -573,22 +573,14 @@ tbody td { padding: 11px 16px; font-size: 13px; }
       </div>
     </div>
     <div class="auth-card">
-      <div class="auth-tabs">
-        <button class="auth-tab active" onclick="authTab('login')">Entrar</button>
-        <button class="auth-tab" onclick="authTab('register')">Criar conta</button>
-      </div>
       <div id="auth-login">
         <div class="field"><label>E-mail</label><input type="email" id="l-email" placeholder="seu@email.com" autocomplete="email"></div>
         <div class="field"><label>Senha</label><input type="password" id="l-senha" placeholder="••••••••" autocomplete="current-password"></div>
         <button class="btn-primary" id="btn-login" onclick="doLogin()">Entrar</button>
         <div class="auth-err" id="login-err"></div>
-      </div>
-      <div id="auth-register" style="display:none">
-        <div class="field"><label>Seu nome</label><input type="text" id="r-nome" placeholder="Nome completo"></div>
-        <div class="field"><label>E-mail</label><input type="email" id="r-email" placeholder="seu@email.com" autocomplete="email"></div>
-        <div class="field"><label>Senha</label><input type="password" id="r-senha" placeholder="mínimo 6 caracteres" autocomplete="new-password"></div>
-        <button class="btn-primary" id="btn-register" onclick="doRegister()">Criar conta</button>
-        <div class="auth-err" id="register-err"></div>
+        <div style="margin-top:18px;text-align:center;font-size:11.5px;color:var(--text-3);line-height:1.55">
+          Acesso restrito. Para obter uma conta, solicite ao<br>administrador da empresa um link de convite.
+        </div>
       </div>
     </div>
   </div>
@@ -879,14 +871,9 @@ function openModal(title, body, footer = '') {
 function closeModal() { $id('modal-overlay').classList.remove('open'); }
 
 // ── AUTH ──────────────────────────────────────────────────────
-function authTab(tab) {
-  $id('auth-login').style.display    = tab === 'login'    ? '' : 'none';
-  $id('auth-register').style.display = tab === 'register' ? '' : 'none';
-  document.querySelectorAll('.auth-tab').forEach((b,i) => b.classList.toggle('active', (i===0&&tab==='login')||(i===1&&tab==='register')));
-}
+// (Cadastro de novos usuários agora é feito via aba Usuários ou link de convite)
 
 $id('l-senha').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
-$id('r-senha').addEventListener('keydown', e => { if (e.key === 'Enter') doRegister(); });
 
 async function doLogin() {
   const email = $id('l-email').value.trim();
@@ -899,32 +886,27 @@ async function doLogin() {
     const data = await supaAuth('POST', 'token?grant_type=password', { email, password: senha });
     if (!data.access_token) throw new Error(data.error_description || 'Credenciais inválidas.');
     APP.token = data.access_token;
+
+    // Após login, verifica se há convite pendente no localStorage
+    // (caso o usuário tenha vindo da página de convite e o projeto exija confirmação por email)
+    try {
+      const convitePendente = localStorage.getItem('fin_convite_pendente');
+      if (convitePendente) {
+        try {
+          await supaRpc('fin_aceitar_convite', { p_token: convitePendente });
+          localStorage.removeItem('fin_convite_pendente');
+          toast('Convite aceito — bem-vindo(a)!', 'success');
+        } catch(e) {
+          console.warn('aceitar convite pendente:', e.message);
+          // Não bloqueia o login se falhar
+        }
+      }
+    } catch(_) {}
+
     await inicializar();
   } catch(e) {
     $id('login-err').textContent = e.message;
     btn.disabled = false; btn.textContent = 'Entrar';
-  }
-}
-
-async function doRegister() {
-  const nome  = $id('r-nome').value.trim();
-  const email = $id('r-email').value.trim();
-  const senha = $id('r-senha').value;
-  const btn   = $id('btn-register');
-  $id('register-err').textContent = '';
-  if (!nome || !email || !senha) { $id('register-err').textContent = 'Preencha todos os campos.'; return; }
-  if (senha.length < 6) { $id('register-err').textContent = 'Senha mínimo 6 caracteres.'; return; }
-  btn.disabled = true; btn.textContent = 'Criando...';
-  try {
-    const data = await supaAuth('POST', 'signup', { email, password: senha });
-    if (!data.access_token) throw new Error(data.error_description || 'Erro ao criar conta.');
-    APP.token = data.access_token;
-    APP.nomeTemp = nome;
-    APP.emailTemp = email;
-    iniciarOnboarding();
-  } catch(e) {
-    $id('register-err').textContent = e.message;
-    btn.disabled = false; btn.textContent = 'Criar conta';
   }
 }
 
@@ -6715,53 +6697,93 @@ function guardAdmin(fn) {
 }
 
 // ── USUÁRIOS ──────────────────────────────────────────────────
-let _usuarios = [];
+let _usuarios = [];   // usuários do tenant atual (de fin_usuarios_empresas → join fin_usuarios)
+let _convites = [];   // convites pendentes/usados/expirados
+
+const _TEMPLATES = {
+  admin:      { label: 'Administrador', desc: 'Acesso total a todos os módulos', cor: 'var(--gold-dim)' },
+  financeiro: { label: 'Operacional',   desc: 'Cria/edita lançamentos, sem configurações', cor: 'var(--amber)' },
+  leitura:    { label: 'Visualização',  desc: 'Somente leitura', cor: 'var(--text-2)' },
+};
 
 async function carregarUsuarios() {
+  // Busca usuários do tenant atual via tabela de vínculos
   try {
-    _usuarios = await supa('GET', 'fin_usuarios', {
-      params: { tenant_id: `eq.${APP.tenantId}`, select: '*', order: 'criado_em.asc' }
+    const vinculos = await supa('GET', 'fin_usuarios_empresas', {
+      params: { tenant_id: `eq.${APP.tenantId}`, ativo: 'eq.true', select: '*,fin_usuarios(id,nome,email,criado_em)' }
     });
-  } catch(_) { _usuarios = [APP.user]; }
+    _usuarios = (vinculos||[]).map(v => ({
+      id:         v.fin_usuarios?.id || v.usuario_id,
+      vinculo_id: v.id,
+      nome:       v.fin_usuarios?.nome || '—',
+      email:      v.fin_usuarios?.email || '—',
+      criado_em:  v.fin_usuarios?.criado_em || v.criado_em,
+      template:   v.template,
+      permissoes: v.permissoes,
+      is_default: v.is_default,
+    }));
+  } catch(e) {
+    console.warn('carregarUsuarios:', e.message);
+    // Fallback: busca direta em fin_usuarios pelo tenant
+    try {
+      const us = await supa('GET', 'fin_usuarios', {
+        params: { tenant_id: `eq.${APP.tenantId}`, select: '*', order: 'criado_em.asc' }
+      });
+      _usuarios = us.map(u => ({ ...u, template: u.perfil === 'admin' ? 'admin' : 'leitura' }));
+    } catch(_) { _usuarios = [APP.user]; }
+  }
+}
+
+async function carregarConvites() {
+  try { _convites = await supaRpc('fin_listar_convites') || []; }
+  catch(e) { console.warn('carregarConvites:', e.message); _convites = []; }
 }
 
 async function renderUsuarios() {
-  if (!isAdmin()) {
+  if (!isAdmin() && !podeVer('usuarios')) {
     $id('page-content').innerHTML = `
       <div class="empty-state">
         <div class="empty-icon">🔒</div>
         <h3>Acesso restrito</h3>
-        <p style="font-size:13px;color:var(--text-3);margin-top:6px">Somente administradores podem gerenciar usuários.</p>
+        <p style="font-size:13px;color:var(--text-3);margin-top:6px">Você não tem permissão para gerenciar usuários.</p>
       </div>`;
     return;
   }
 
-  $id('topbar-actions').innerHTML = `<button class="btn btn-gold btn-sm" onclick="modalConvidarUsuario()">+ Convidar usuário</button>`;
-  await carregarUsuarios();
+  $id('topbar-actions').innerHTML = `
+    <button class="btn btn-outline btn-sm" onclick="modalGerarConvite()">🔗 Gerar link de convite</button>
+    <button class="btn btn-gold btn-sm" onclick="modalNovoUsuario()">+ Novo usuário</button>
+  `;
 
-  const admins  = _usuarios.filter(u=>u.perfil==='admin');
-  const viewers = _usuarios.filter(u=>u.perfil==='viewer'||u.perfil==='visualizador');
+  await carregarUsuarios();
+  await carregarConvites();
+
+  const admins  = _usuarios.filter(u => u.template === 'admin').length;
+  const finOps  = _usuarios.filter(u => u.template === 'financeiro').length;
+  const viewers = _usuarios.filter(u => u.template === 'leitura').length;
+  const ativos  = _convites.filter(c => c.status === 'ativo');
 
   $id('page-content').innerHTML = `
-  <div style="display:flex;flex-direction:column;gap:16px;max-width:720px">
+  <div style="display:flex;flex-direction:column;gap:16px;max-width:880px">
 
   <!-- KPIs -->
-  <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr)">
-    <div class="kpi-card k-gold"><div class="kpi-label">Total de Usuários</div><div class="kpi-value" style="color:var(--gold)">${_usuarios.length}</div></div>
-    <div class="kpi-card k-green"><div class="kpi-label">Administradores</div><div class="kpi-value" style="color:var(--green)">${admins.length}</div></div>
-    <div class="kpi-card"><div class="kpi-label">Visualizadores</div><div class="kpi-value">${viewers.length}</div></div>
+  <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr)">
+    <div class="kpi-card k-gold"><div class="kpi-label">Total de usuários</div><div class="kpi-value" style="color:var(--gold)">${_usuarios.length}</div></div>
+    <div class="kpi-card k-green"><div class="kpi-label">Administradores</div><div class="kpi-value" style="color:var(--green)">${admins}</div></div>
+    <div class="kpi-card"><div class="kpi-label">Operacional</div><div class="kpi-value">${finOps}</div></div>
+    <div class="kpi-card"><div class="kpi-label">Convites ativos</div><div class="kpi-value">${ativos.length}</div></div>
   </div>
 
   <!-- Como funciona -->
-  <div style="background:rgba(201,168,76,.06);border:1px solid rgba(201,168,76,.2);border-radius:10px;padding:13px 16px;font-size:12px;color:var(--text-2);line-height:1.7">
-    <strong style="color:var(--gold)">Como funciona:</strong>
-    Novos usuários precisam criar uma conta em <strong style="color:var(--text)">"Criar conta"</strong> na tela de login usando o e-mail convidado.
-    Após o cadastro, um admin deve alterar o perfil deles aqui.
-    <br><strong style="color:var(--text-2)">Admin:</strong> acesso total. <strong style="color:var(--text-2)">Viewer:</strong> somente leitura — não pode criar, editar ou excluir.
+  <div style="background:rgba(26,82,118,.04);border:1px solid rgba(26,82,118,.18);border-radius:10px;padding:13px 16px;font-size:12px;color:var(--text-2);line-height:1.7">
+    <strong style="color:var(--gold)">Como adicionar usuários:</strong><br>
+    <strong>+ Novo usuário</strong> → cria a conta diretamente (você define a senha e o email de confirmação é enviado automaticamente).<br>
+    <strong>🔗 Link de convite</strong> → o convidado define a própria senha em uma página externa segura.
   </div>
 
   <!-- Tabela de usuários -->
   <div class="card" style="padding:0;overflow:hidden">
+    <div style="padding:12px 16px;border-bottom:1px solid var(--border);font-size:13px;font-weight:700">Usuários da empresa</div>
     <table>
       <thead><tr>
         <th>Usuário</th><th>E-mail</th><th>Perfil</th><th>Desde</th><th></th>
@@ -6769,10 +6791,11 @@ async function renderUsuarios() {
       <tbody>
         ${_usuarios.map(u => {
           const isMe = u.id === APP.user.id;
+          const tpl  = _TEMPLATES[u.template] || _TEMPLATES.leitura;
           return `<tr>
             <td>
               <div style="display:flex;align-items:center;gap:10px">
-                <div style="width:32px;height:32px;border-radius:50%;background:${u.perfil==='admin'?'linear-gradient(135deg,var(--gold-dim),var(--gold))':'var(--surface-2)'};display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:${u.perfil==='admin'?'#ffffff':'var(--text-2)'}">
+                <div style="width:32px;height:32px;border-radius:50%;background:${u.template==='admin'?'linear-gradient(135deg,var(--gold-dim),var(--gold))':'var(--surface-2)'};display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:${u.template==='admin'?'#ffffff':'var(--text-2)'}">
                   ${(u.nome||'U')[0].toUpperCase()}
                 </div>
                 <div>
@@ -6783,16 +6806,20 @@ async function renderUsuarios() {
             <td style="color:var(--text-2);font-size:12.5px">${u.email||'—'}</td>
             <td>
               ${isMe
-                ? `<span class="badge badge-gold">${u.perfil||'admin'}</span>`
-                : `<select onchange="alterarPerfil('${u.id}',this.value)"
+                ? `<span class="badge" style="background:var(--gold-lt);color:var(--gold-dim)">${tpl.label}</span>`
+                : `<select onchange="alterarTemplate('${u.id}', this.value)"
                     style="padding:5px 10px;border:1.5px solid var(--border-lt);border-radius:7px;font-family:var(--font);font-size:12px;background:var(--bg-2);color:var(--text);outline:none;cursor:pointer">
-                    <option value="admin"      ${u.perfil==='admin'?'selected':''}>Admin</option>
-                    <option value="viewer"     ${u.perfil==='viewer'||u.perfil==='visualizador'?'selected':''}>Viewer</option>
+                    <option value="admin"      ${u.template==='admin'?'selected':''}>Administrador</option>
+                    <option value="financeiro" ${u.template==='financeiro'?'selected':''}>Operacional</option>
+                    <option value="leitura"    ${u.template==='leitura'?'selected':''}>Visualização</option>
                   </select>`}
             </td>
             <td style="font-family:var(--mono);font-size:11px;color:var(--text-3)">${u.criado_em?new Date(u.criado_em).toLocaleDateString('pt-BR'):'—'}</td>
-            <td>
-              ${!isMe ? `<button onclick="removerUsuario('${u.id}')" class="btn btn-sm" style="padding:4px 10px;font-size:11px;background:var(--red-lt);color:var(--red);border:1px solid rgba(224,92,92,.2)">Remover</button>` : ''}
+            <td style="text-align:right">
+              ${!isMe ? `
+                <button onclick="modalEditarUsuario('${u.id}')" class="btn btn-sm" style="padding:4px 10px;font-size:11px;margin-right:4px;background:var(--surface-2);color:var(--text-2);border:1px solid var(--border)">Editar</button>
+                <button onclick="removerUsuario('${u.id}')" class="btn btn-sm" style="padding:4px 10px;font-size:11px;background:var(--red-lt);color:var(--red);border:1px solid rgba(192,57,43,.2)">Remover</button>
+              ` : ''}
             </td>
           </tr>`;
         }).join('')}
@@ -6800,26 +6827,70 @@ async function renderUsuarios() {
     </table>
   </div>
 
+  <!-- Convites pendentes -->
+  ${_convites.length > 0 ? `
+  <div class="card" style="padding:0;overflow:hidden">
+    <div style="padding:12px 16px;border-bottom:1px solid var(--border);font-size:13px;font-weight:700;display:flex;justify-content:space-between;align-items:center">
+      <span>Convites enviados</span>
+      <span style="font-size:11px;color:var(--text-3);font-weight:500">${_convites.length} no total</span>
+    </div>
+    <table>
+      <thead><tr>
+        <th>Para</th><th>Perfil</th><th>Criado</th><th>Expira</th><th>Status</th><th></th>
+      </tr></thead>
+      <tbody>
+        ${_convites.map(c => {
+          const tpl = _TEMPLATES[c.template] || _TEMPLATES.leitura;
+          const statusColor = c.status==='ativo'?'var(--green)':c.status==='usado'?'var(--text-3)':'var(--red)';
+          const statusBg    = c.status==='ativo'?'var(--green-lt)':c.status==='usado'?'var(--surface-2)':'var(--red-lt)';
+          return `<tr>
+            <td>
+              <div style="font-size:12.5px;font-weight:600">${c.nome||'—'}</div>
+              <div style="font-size:11px;color:var(--text-3)">${c.email}</div>
+            </td>
+            <td><span class="badge" style="background:var(--surface-2);color:${tpl.cor};font-size:10.5px">${tpl.label}</span></td>
+            <td style="font-family:var(--mono);font-size:11px;color:var(--text-3)">${new Date(c.criado_em).toLocaleDateString('pt-BR')}</td>
+            <td style="font-family:var(--mono);font-size:11px;color:var(--text-3)">${new Date(c.expira_em).toLocaleDateString('pt-BR')}</td>
+            <td><span class="badge" style="background:${statusBg};color:${statusColor};font-size:10.5px;text-transform:capitalize">${c.status}</span></td>
+            <td style="text-align:right">
+              ${c.status==='ativo'?`
+                <button onclick="copiarLinkConvite('${c.token}')" class="btn btn-sm" style="padding:4px 10px;font-size:11px;margin-right:4px;background:var(--surface-2);color:var(--text);border:1px solid var(--border)">📋 Copiar link</button>
+                <button onclick="revogarConvite('${c.token}')" class="btn btn-sm" style="padding:4px 10px;font-size:11px;background:var(--red-lt);color:var(--red);border:1px solid rgba(192,57,43,.2)">Revogar</button>
+              `:''}
+            </td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>
+  </div>` : ''}
+
   <!-- Diferença de permissões -->
   <div class="card">
     <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:14px">Permissões por perfil</div>
     <table>
-      <thead><tr><th>Funcionalidade</th><th style="text-align:center">Admin</th><th style="text-align:center">Viewer</th></tr></thead>
+      <thead><tr>
+        <th>Funcionalidade</th>
+        <th style="text-align:center">Administrador</th>
+        <th style="text-align:center">Operacional</th>
+        <th style="text-align:center">Visualização</th>
+      </tr></thead>
       <tbody>
         ${[
-          ['Visualizar dados e relatórios', true, true],
-          ['Criar receitas e despesas', true, false],
-          ['Editar lançamentos', true, false],
-          ['Excluir lançamentos', true, false],
-          ['Gerenciar metas e recorrências', true, false],
-          ['Gerenciar impostos', true, false],
-          ['Cadastrar clientes e fornecedores', true, false],
-          ['Gerenciar usuários', true, false],
-        ].map(([f, adm, view]) => `
+          ['Visualizar dados e relatórios', '✓', '✓', '✓'],
+          ['Criar receitas e despesas',    '✓', '✓', '✗'],
+          ['Editar lançamentos',           '✓', '✓', '✗'],
+          ['Excluir lançamentos',          '✓', '✗', '✗'],
+          ['Gerenciar metas',              '✓', '✗', '✗'],
+          ['Gerenciar recorrências',       '✓', '✓', '✗'],
+          ['Importação por IA',            '✓', '✓', '✗'],
+          ['Configurações',                '✓', '✗', '✗'],
+          ['Gerenciar usuários',           '✓', '✗', '✗'],
+        ].map(([f, adm, fin, lei]) => `
           <tr>
             <td style="color:var(--text-2)">${f}</td>
-            <td style="text-align:center"><span style="color:var(--green);font-size:14px">${adm?'✓':'—'}</span></td>
-            <td style="text-align:center"><span style="color:${view?'var(--green)':'var(--text-3)'};font-size:14px">${view?'✓':'✗'}</span></td>
+            <td style="text-align:center"><span style="color:${adm==='✓'?'var(--green)':'var(--text-3)'};font-size:14px">${adm}</span></td>
+            <td style="text-align:center"><span style="color:${fin==='✓'?'var(--green)':'var(--text-3)'};font-size:14px">${fin}</span></td>
+            <td style="text-align:center"><span style="color:${lei==='✓'?'var(--green)':'var(--text-3)'};font-size:14px">${lei}</span></td>
           </tr>`).join('')}
       </tbody>
     </table>
@@ -6828,55 +6899,219 @@ async function renderUsuarios() {
   </div>`;
 }
 
-function modalConvidarUsuario() {
-  openModal('Convidar Usuário', `
-    <div style="font-size:12.5px;color:var(--text-2);margin-bottom:16px;line-height:1.6;background:var(--bg-2);padding:12px;border-radius:9px;border:1px solid var(--border)">
-      Compartilhe o link do sistema com o usuário. Após criar a conta, altere o perfil dele nesta página.
-      <br><strong style="color:var(--gold)">URL:</strong>
-      <span style="font-family:var(--mono);font-size:11px;color:var(--text-3)">${window.location.origin+window.location.pathname}</span>
+// ── MODAL: NOVO USUÁRIO (CADASTRO DIRETO) ───────────────────────
+function modalNovoUsuario() {
+  openModal('Novo usuário', `
+    <div style="font-size:12px;color:var(--text-2);background:var(--bg-2);padding:11px 13px;border-radius:8px;border:1px solid var(--border);margin-bottom:14px;line-height:1.55">
+      Crie a conta agora definindo nome, e-mail e senha. O usuário receberá um e-mail de confirmação automático do Supabase. Após confirmar, ele já poderá entrar no sistema.
     </div>
     <div class="form-grid">
-      <div class="form-field full"><label class="form-label">Nome do usuário</label><input class="form-input" id="inv-nome" placeholder="Nome completo"></div>
-      <div class="form-field full"><label class="form-label">E-mail</label><input class="form-input" type="email" id="inv-email" placeholder="email@exemplo.com"></div>
-      <div class="form-field full"><label class="form-label">Perfil inicial</label>
-        <select class="form-select" id="inv-perfil">
-          <option value="viewer">Viewer (somente leitura)</option>
-          <option value="admin">Admin (acesso total)</option>
+      <div class="form-field full"><label class="form-label">Nome completo *</label>
+        <input class="form-input" id="nu-nome" placeholder="Nome do usuário"></div>
+      <div class="form-field full"><label class="form-label">E-mail *</label>
+        <input class="form-input" type="email" id="nu-email" placeholder="email@empresa.com.br"></div>
+      <div class="form-field full"><label class="form-label">Senha temporária *</label>
+        <input class="form-input" type="text" id="nu-senha" placeholder="Mínimo 6 caracteres" value="${_gerarSenhaAleatoria()}">
+        <div style="font-size:10.5px;color:var(--text-3);margin-top:4px">Compartilhe esta senha com o usuário. Ele poderá trocá-la depois.</div>
+      </div>
+      <div class="form-field full"><label class="form-label">Perfil *</label>
+        <select class="form-select" id="nu-template">
+          <option value="leitura">Visualização — somente leitura</option>
+          <option value="financeiro" selected>Operacional — opera lançamentos do dia-a-dia</option>
+          <option value="admin">Administrador — acesso total</option>
         </select>
       </div>
     </div>
-    <div style="margin-top:12px;font-size:11.5px;color:var(--text-3);line-height:1.6">
-      Copie e envie o link acima para o novo usuário. Após criarem a conta, eles aparecerão aqui e você pode ajustar o perfil.
-    </div>`,
-    `<button class="btn btn-outline" onclick="closeModal()">Fechar</button>
-     <button class="btn btn-gold" onclick="copiarLinkConvite()">Copiar link</button>`
-  );
+  `,
+  `<button class="btn btn-outline" onclick="closeModal()">Cancelar</button>
+   <button class="btn btn-gold" onclick="criarUsuarioDireto()">Criar usuário</button>`);
 }
 
-function copiarLinkConvite() {
-  const url = window.location.origin + window.location.pathname;
-  navigator.clipboard.writeText(url).then(() => {
-    toast('Link copiado!', 'success');
-    closeModal();
-  }).catch(() => toast('Copie manualmente: ' + url, 'warn'));
+function _gerarSenhaAleatoria() {
+  const cs = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let s = '';
+  for (let i=0; i<10; i++) s += cs[Math.floor(Math.random()*cs.length)];
+  return s;
 }
 
-async function alterarPerfil(id, perfil) {
+async function criarUsuarioDireto() {
+  const nome  = $id('nu-nome').value.trim();
+  const email = $id('nu-email').value.trim().toLowerCase();
+  const senha = $id('nu-senha').value;
+  const tpl   = $id('nu-template').value;
+
+  if (!nome)  { toast('Nome é obrigatório.', 'error'); return; }
+  if (!email) { toast('E-mail é obrigatório.', 'error'); return; }
+  if (!senha || senha.length < 6) { toast('Senha precisa ter no mínimo 6 caracteres.', 'error'); return; }
+
   try {
-    await supa('PATCH', 'fin_usuarios', { params: { id: `eq.${id}` }, body: { perfil } });
-    toast(`Perfil alterado para ${perfil}!`, 'success');
-    await carregarUsuarios();
-    renderUsuarios();
+    // 1) Cria conta no Supabase Auth (envia email de confirmação automaticamente)
+    const su = await supaAuth('POST', 'signup', { email, password: senha });
+    if (!su.user && !su.id && su.error_description) {
+      throw new Error(su.error_description);
+    }
+    const newAuthId = su.user?.id || su.id;
+    if (!newAuthId) {
+      throw new Error('Falha ao obter ID do novo usuário');
+    }
+
+    // 2) Cria registro em fin_usuarios (vinculado ao tenant atual)
+    const usCriados = await supa('POST', 'fin_usuarios', {
+      body: { tenant_id: APP.tenantId, auth_id: newAuthId, nome, email,
+              perfil: tpl === 'admin' ? 'admin' : 'usuario' },
+      returning: true
+    });
+    const novoUserId = usCriados[0]?.id;
+
+    // 3) Cria vínculo em fin_usuarios_empresas com permissões do template
+    const perms = await supaRpc('fin_template_permissoes', { p_template: tpl });
+    await supa('POST', 'fin_usuarios_empresas', {
+      body: { usuario_id: novoUserId, tenant_id: APP.tenantId,
+              template: tpl, permissoes: perms,
+              is_default: true, ativo: true }
+    });
+
+    closeModal();
+    toast(`Usuário criado! Senha: ${senha}`, 'success', 8000);
+    await renderUsuarios();
+  } catch(e) {
+    toast('Erro: ' + e.message, 'error');
+  }
+}
+
+// ── MODAL: EDITAR USUÁRIO ──────────────────────────────────────
+function modalEditarUsuario(usuarioId) {
+  const u = _usuarios.find(x => x.id === usuarioId);
+  if (!u) return;
+  openModal('Editar usuário', `
+    <div class="form-grid">
+      <div class="form-field full"><label class="form-label">Nome</label>
+        <input class="form-input" id="eu-nome" value="${u.nome||''}"></div>
+      <div class="form-field full"><label class="form-label">E-mail</label>
+        <input class="form-input" type="email" id="eu-email" value="${u.email||''}" disabled
+          style="background:var(--surface-2);color:var(--text-3)">
+        <div style="font-size:10.5px;color:var(--text-3);margin-top:4px">E-mail não pode ser alterado.</div>
+      </div>
+      <div class="form-field full"><label class="form-label">Perfil</label>
+        <select class="form-select" id="eu-template">
+          <option value="admin"      ${u.template==='admin'?'selected':''}>Administrador</option>
+          <option value="financeiro" ${u.template==='financeiro'?'selected':''}>Operacional</option>
+          <option value="leitura"    ${u.template==='leitura'?'selected':''}>Visualização</option>
+        </select>
+      </div>
+    </div>
+  `,
+  `<button class="btn btn-outline" onclick="closeModal()">Cancelar</button>
+   <button class="btn btn-gold" onclick="salvarEdicaoUsuario('${u.id}')">Salvar</button>`);
+}
+
+async function salvarEdicaoUsuario(usuarioId) {
+  const nome = $id('eu-nome').value.trim();
+  const tpl  = $id('eu-template').value;
+  if (!nome) { toast('Nome é obrigatório.', 'error'); return; }
+  try {
+    // Atualiza nome em fin_usuarios
+    await supa('PATCH', 'fin_usuarios', { params: { id: `eq.${usuarioId}` }, body: { nome } });
+    // Atualiza template/permissões via RPC
+    await supaRpc('fin_atualizar_permissoes', { p_usuario_id: usuarioId, p_template: tpl });
+    closeModal();
+    toast('Usuário atualizado!', 'success');
+    await renderUsuarios();
   } catch(e) { toast('Erro: ' + e.message, 'error'); }
 }
 
-async function removerUsuario(id) {
-  if (!confirm('Remover este usuário do sistema? O acesso será revogado.')) return;
+// ── ALTERAR TEMPLATE INLINE (select da tabela) ─────────────────
+async function alterarTemplate(usuarioId, template) {
   try {
-    await supa('DELETE', 'fin_usuarios', { params: { id: `eq.${id}` } });
-    toast('Usuário removido.', 'success');
+    await supaRpc('fin_atualizar_permissoes', { p_usuario_id: usuarioId, p_template: template });
+    toast('Perfil atualizado!', 'success');
     await carregarUsuarios();
-    renderUsuarios();
+  } catch(e) { toast('Erro: ' + e.message, 'error'); renderUsuarios(); }
+}
+
+// ── REMOVER USUÁRIO ────────────────────────────────────────────
+async function removerUsuario(usuarioId) {
+  if (!confirm('Remover este usuário do acesso a esta empresa? O usuário em si não será excluído do sistema.')) return;
+  try {
+    await supaRpc('fin_remover_usuario_empresa', { p_usuario_id: usuarioId });
+    toast('Usuário removido desta empresa.', 'success');
+    await renderUsuarios();
+  } catch(e) { toast('Erro: ' + e.message, 'error'); }
+}
+
+// ── MODAL: GERAR CONVITE (LINK) ────────────────────────────────
+function modalGerarConvite() {
+  openModal('Gerar link de convite', `
+    <div style="font-size:12px;color:var(--text-2);background:var(--bg-2);padding:11px 13px;border-radius:8px;border:1px solid var(--border);margin-bottom:14px;line-height:1.55">
+      Gera um link único (válido por 7 dias) que você pode enviar por WhatsApp/email. O convidado abre o link e define a própria senha.
+    </div>
+    <div class="form-grid">
+      <div class="form-field full"><label class="form-label">Nome do convidado *</label>
+        <input class="form-input" id="gc-nome" placeholder="Nome completo"></div>
+      <div class="form-field full"><label class="form-label">E-mail *</label>
+        <input class="form-input" type="email" id="gc-email" placeholder="email@empresa.com.br"></div>
+      <div class="form-field full"><label class="form-label">Perfil que ele(a) terá</label>
+        <select class="form-select" id="gc-template">
+          <option value="leitura">Visualização — somente leitura</option>
+          <option value="financeiro" selected>Operacional — opera lançamentos do dia-a-dia</option>
+          <option value="admin">Administrador — acesso total</option>
+        </select>
+      </div>
+    </div>
+  `,
+  `<button class="btn btn-outline" onclick="closeModal()">Cancelar</button>
+   <button class="btn btn-gold" onclick="gerarConvite()">Gerar link</button>`);
+}
+
+async function gerarConvite() {
+  const nome  = $id('gc-nome').value.trim();
+  const email = $id('gc-email').value.trim().toLowerCase();
+  const tpl   = $id('gc-template').value;
+
+  if (!nome || !email) { toast('Preencha nome e e-mail.', 'error'); return; }
+
+  try {
+    const r = await supaRpc('fin_gerar_convite', { p_email: email, p_nome: nome, p_template: tpl });
+    const baseUrl = window.location.origin + window.location.pathname.replace(/[^/]+$/, '');
+    const linkConvite = `${baseUrl}cadastro_usuario.html?token=${r.token}`;
+
+    openModal('Convite criado ✓', `
+      <div style="font-size:13px;color:var(--text-2);margin-bottom:14px;line-height:1.6">
+        Convite gerado para <strong style="color:var(--text)">${nome}</strong> (${email}).<br>
+        <span style="color:var(--text-3);font-size:11.5px">Válido por 7 dias. Após uso ou expiração, o link deixa de funcionar.</span>
+      </div>
+      <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:9px;padding:10px 12px;margin-bottom:14px;word-break:break-all;font-family:var(--mono);font-size:11.5px;color:var(--text)">
+        ${linkConvite}
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-gold btn-sm" onclick="navigator.clipboard.writeText('${linkConvite}').then(()=>toast('Link copiado!','success'))">📋 Copiar link</button>
+        <button class="btn btn-outline btn-sm" onclick="window.open('https://wa.me/?text='+encodeURIComponent('Olá ${nome}, segue seu acesso ao Financeiro Pro: ${linkConvite}'),'_blank')">📱 Enviar por WhatsApp</button>
+        <button class="btn btn-outline btn-sm" onclick="window.open('mailto:${email}?subject=' + encodeURIComponent('Acesso Financeiro Pro') + '&body=' + encodeURIComponent('Olá ${nome},\\n\\nVocê foi convidado(a) para acessar o Financeiro Pro. Use o link abaixo para criar sua senha:\\n\\n${linkConvite}\\n\\nO link é válido por 7 dias.'),'_blank')">✉️ Abrir e-mail</button>
+      </div>
+    `,
+    `<button class="btn btn-gold" onclick="closeModal();renderUsuarios()">Concluir</button>`);
+  } catch(e) {
+    toast('Erro: ' + (e.message||'').replace(/.*"message":"([^"]*)".*/, '$1') || e.message, 'error', 6000);
+  }
+}
+
+async function copiarLinkConvite(token) {
+  const baseUrl = window.location.origin + window.location.pathname.replace(/[^/]+$/, '');
+  const link = `${baseUrl}cadastro_usuario.html?token=${token}`;
+  try {
+    await navigator.clipboard.writeText(link);
+    toast('Link copiado!', 'success');
+  } catch(_) {
+    prompt('Copie o link manualmente:', link);
+  }
+}
+
+async function revogarConvite(token) {
+  if (!confirm('Revogar este convite? O link deixará de funcionar.')) return;
+  try {
+    await supaRpc('fin_revogar_convite', { p_token: token });
+    toast('Convite revogado.', 'success');
+    await renderUsuarios();
   } catch(e) { toast('Erro: ' + e.message, 'error'); }
 }
 

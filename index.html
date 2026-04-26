@@ -4546,6 +4546,49 @@ function renderDocImportar() {
   <!-- Fila de processamento -->
   <div id="doc-fila" style="display:flex;flex-direction:column;gap:10px"></div>
 
+  <!-- ═══ IMPORTAÇÃO EM LOTE VIA CSV ═══════════════════════════ -->
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:18px 20px">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+      <div>
+        <div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:3px">📋 Importação em lote (CSV)</div>
+        <div style="font-size:12px;color:var(--text-3)">Importe vários lançamentos de uma só vez. Clientes/fornecedores são cadastrados automaticamente pelo CPF/CNPJ.</div>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+      <div style="border:1.5px dashed var(--green);border-radius:10px;padding:14px;background:var(--green-lt)">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+          <span style="font-size:20px">📈</span>
+          <strong style="color:var(--green);font-size:13px">Receitas (Contas a Receber)</strong>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <label class="btn btn-sm" style="cursor:pointer;padding:6px 12px;font-size:11.5px;background:var(--green);color:#fff;border:none;font-weight:600">
+            📤 Importar
+            <input type="file" accept=".csv,.txt" style="display:none" onchange="csvLoteSelecionar(this,'receita')">
+          </label>
+          <button class="btn btn-sm" onclick="csvLoteBaixarTemplate('receita')" style="padding:6px 12px;font-size:11.5px;background:var(--surface);color:var(--green);border:1px solid var(--green);font-weight:600">⬇️ Template</button>
+        </div>
+      </div>
+      <div style="border:1.5px dashed var(--red);border-radius:10px;padding:14px;background:var(--red-lt)">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+          <span style="font-size:20px">📉</span>
+          <strong style="color:var(--red);font-size:13px">Despesas (Contas a Pagar)</strong>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <label class="btn btn-sm" style="cursor:pointer;padding:6px 12px;font-size:11.5px;background:var(--red);color:#fff;border:none;font-weight:600">
+            📤 Importar
+            <input type="file" accept=".csv,.txt" style="display:none" onchange="csvLoteSelecionar(this,'despesa')">
+          </label>
+          <button class="btn btn-sm" onclick="csvLoteBaixarTemplate('despesa')" style="padding:6px 12px;font-size:11.5px;background:var(--surface);color:var(--red);border:1px solid var(--red);font-weight:600">⬇️ Template</button>
+        </div>
+      </div>
+    </div>
+    <div style="margin-top:10px;font-size:10.5px;color:var(--text-3);line-height:1.55">
+      <strong>Colunas esperadas:</strong> data; descricao; valor; cliente_nome (ou fornecedor_nome); cliente_cpf_cnpj (ou fornecedor_cpf_cnpj); categoria; observacao
+      &middot; Separador: <code style="font-family:var(--mono);background:var(--surface-2);padding:1px 4px;border-radius:3px">;</code> (ponto-e-vírgula)
+      &middot; Codificação: <code style="font-family:var(--mono);background:var(--surface-2);padding:1px 4px;border-radius:3px">UTF-8</code>
+    </div>
+  </div>
+
   <!-- Como funciona -->
   <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px">
     ${[
@@ -4607,6 +4650,403 @@ function renderDocHistorico() {
           </tr>`).join('')}
         </tbody>
       </table></div>`}`;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// IMPORTAÇÃO EM LOTE VIA CSV (receitas / despesas)
+// ═══════════════════════════════════════════════════════════════
+
+const _CSV_LOTE = {
+  tipo: null,        // 'receita' | 'despesa'
+  fileName: '',
+  linhas: [],        // [{ data, descricao, valor, contraparte_nome, contraparte_cpf_cnpj, categoria, observacao, _erros: [] }]
+  cabecalhoOriginal: [],
+};
+
+// Mapa de aliases de cabeçalho — aceita variações comuns
+const _CSV_ALIASES = {
+  'data':                ['data','vencimento','dt','date'],
+  'descricao':           ['descricao','descrição','desc','historico','histórico','description'],
+  'valor':               ['valor','valor_total','total','vlr','vlr_total','amount'],
+  'contraparte_nome':    ['cliente_nome','fornecedor_nome','cliente','fornecedor','nome','razao_social','razão_social','beneficiario','beneficiário'],
+  'contraparte_cpf_cnpj':['cliente_cpf_cnpj','fornecedor_cpf_cnpj','cpf_cnpj','cpf','cnpj','documento','doc'],
+  'categoria':           ['categoria','category','plano_contas'],
+  'observacao':          ['observacao','observação','obs','obs.','nota','notes','memo'],
+};
+
+function _csvNormalizarCab(c) {
+  return (c||'').trim().toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g,'')   // remove acentos
+    .replace(/[^a-z0-9]/g,'_')                          // separadores → _
+    .replace(/^_+|_+$/g,'');
+}
+
+function _csvDetectarColuna(cabRaw, alvo) {
+  const norm = _csvNormalizarCab(cabRaw);
+  const aliases = _CSV_ALIASES[alvo] || [];
+  return aliases.some(a => _csvNormalizarCab(a) === norm);
+}
+
+function _csvParseValor(s) {
+  if (s === null || s === undefined) return NaN;
+  let v = String(s).trim();
+  if (!v) return NaN;
+  v = v.replace(/R\$\s?/gi,'').replace(/\s/g,'');
+  // Formato BR: "1.234,56" → "1234.56"
+  if (v.includes(',')) v = v.replace(/\./g,'').replace(',', '.');
+  return parseFloat(v);
+}
+
+function _csvParseData(s) {
+  if (!s) return null;
+  const v = String(s).trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(v)) return v.slice(0,10);
+  // dd/mm/yyyy
+  const m = v.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
+  if (m) {
+    let [,d,mo,y] = m;
+    if (y.length === 2) y = '20'+y;
+    return `${y}-${mo.padStart(2,'0')}-${d.padStart(2,'0')}`;
+  }
+  return null;
+}
+
+function _csvParseLinha(linha, sep) {
+  // Parser simples respeitando aspas duplas
+  const cols = [];
+  let cur = '', dentroAspas = false;
+  for (let i = 0; i < linha.length; i++) {
+    const ch = linha[i];
+    if (ch === '"') {
+      if (dentroAspas && linha[i+1] === '"') { cur += '"'; i++; }
+      else dentroAspas = !dentroAspas;
+    } else if (ch === sep && !dentroAspas) {
+      cols.push(cur); cur = '';
+    } else { cur += ch; }
+  }
+  cols.push(cur);
+  return cols.map(c => c.trim());
+}
+
+// ── BAIXAR TEMPLATE (CSV vazio com cabeçalho) ─────────────────
+function csvLoteBaixarTemplate(tipo) {
+  const ehReceita = tipo === 'receita';
+  const cab = ehReceita
+    ? ['data','descricao','valor','cliente_nome','cliente_cpf_cnpj','categoria','observacao']
+    : ['data','descricao','valor','fornecedor_nome','fornecedor_cpf_cnpj','categoria','observacao'];
+  const csv = '\uFEFF' + cab.join(';') + '\r\n';
+  const blob = new Blob([csv], { type:'text/csv;charset=utf-8;' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url;
+  a.download = `template_${ehReceita?'receitas':'despesas'}.csv`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  toast(`Template de ${ehReceita?'receitas':'despesas'} baixado`, 'success');
+}
+
+// ── SELECIONAR ARQUIVO E PARSEAR ──────────────────────────────
+async function csvLoteSelecionar(input, tipo) {
+  const file = input.files?.[0];
+  if (!file) return;
+  input.value = ''; // permite reimportar mesmo arquivo
+
+  let texto;
+  try {
+    texto = await file.text();
+  } catch(e) {
+    toast('Não consegui ler o arquivo: ' + e.message, 'error');
+    return;
+  }
+
+  // Detectar separador (`;` é prioridade pra BR, depois `,`, depois `\t`)
+  const primeiraLinha = texto.split(/\r?\n/)[0] || '';
+  const sep = primeiraLinha.includes(';') ? ';' :
+              primeiraLinha.includes('\t') ? '\t' : ',';
+
+  const linhasRaw = texto.split(/\r?\n/).filter(l => l.trim());
+  if (linhasRaw.length < 2) {
+    toast('Arquivo CSV vazio ou só com cabeçalho.', 'warn');
+    return;
+  }
+
+  const cabRaw = _csvParseLinha(linhasRaw[0], sep).map(c =>
+    c.replace(/^\uFEFF/, '') // remove BOM
+  );
+
+  // Mapear índices das colunas
+  const idx = {};
+  for (const alvo in _CSV_ALIASES) {
+    idx[alvo] = cabRaw.findIndex(c => _csvDetectarColuna(c, alvo));
+  }
+
+  // Validar colunas obrigatórias
+  const obrig = ['data','descricao','valor'];
+  const faltam = obrig.filter(c => idx[c] < 0);
+  if (faltam.length > 0) {
+    toast(`Colunas obrigatórias faltando: ${faltam.join(', ')}. Use o template como base.`, 'error', 7000);
+    return;
+  }
+
+  // Parsear cada linha
+  const parsed = [];
+  for (let i = 1; i < linhasRaw.length; i++) {
+    const cols = _csvParseLinha(linhasRaw[i], sep);
+    const erros = [];
+
+    const dataStr = idx.data >= 0 ? cols[idx.data] : '';
+    const data = _csvParseData(dataStr);
+    if (!data) erros.push(`Data inválida: "${dataStr}"`);
+
+    const descricao = idx.descricao >= 0 ? cols[idx.descricao] : '';
+    if (!descricao) erros.push('Descrição vazia');
+
+    const valor = _csvParseValor(idx.valor >= 0 ? cols[idx.valor] : '');
+    if (isNaN(valor) || valor <= 0) erros.push(`Valor inválido: "${cols[idx.valor]||''}"`);
+
+    parsed.push({
+      _linha: i + 1,
+      data, descricao, valor,
+      contraparte_nome:     idx.contraparte_nome     >= 0 ? cols[idx.contraparte_nome]     : '',
+      contraparte_cpf_cnpj: idx.contraparte_cpf_cnpj >= 0 ? cols[idx.contraparte_cpf_cnpj] : '',
+      categoria:            idx.categoria            >= 0 ? cols[idx.categoria]            : '',
+      observacao:           idx.observacao           >= 0 ? cols[idx.observacao]           : '',
+      _erros: erros,
+    });
+  }
+
+  _CSV_LOTE.tipo               = tipo;
+  _CSV_LOTE.fileName           = file.name;
+  _CSV_LOTE.linhas             = parsed;
+  _CSV_LOTE.cabecalhoOriginal  = cabRaw;
+
+  modalCsvLotePreview();
+}
+
+// ── MODAL DE PRÉ-VISUALIZAÇÃO ─────────────────────────────────
+function modalCsvLotePreview() {
+  const tipo = _CSV_LOTE.tipo;
+  const ehReceita = tipo === 'receita';
+  const linhas = _CSV_LOTE.linhas;
+  const valid = linhas.filter(l => l._erros.length === 0);
+  const invalid = linhas.filter(l => l._erros.length > 0);
+
+  const totalValor = valid.reduce((s,l) => s + (l.valor||0), 0);
+
+  const corPrincipal = ehReceita ? 'var(--green)' : 'var(--red)';
+  const corLt = ehReceita ? 'var(--green-lt)' : 'var(--red-lt)';
+
+  openModal(`Importar ${ehReceita?'receitas':'despesas'} em lote`, `
+    <div style="font-size:12px;color:var(--text-2);background:${corLt};padding:11px 13px;border-radius:8px;border:1px solid ${corPrincipal};margin-bottom:14px;line-height:1.55">
+      Arquivo: <strong>${_CSV_LOTE.fileName}</strong><br>
+      ${valid.length} linha(s) válida(s) · <strong style="color:${corPrincipal}">${fmtMoeda(totalValor)}</strong> total
+      ${invalid.length>0 ? ` · <span style="color:var(--red)">${invalid.length} com erro</span>` : ''}
+    </div>
+
+    ${invalid.length > 0 ? `
+      <details style="margin-bottom:12px;background:var(--red-lt);border:1px solid rgba(192,57,43,.2);border-radius:8px;padding:8px 12px">
+        <summary style="cursor:pointer;font-size:12px;font-weight:600;color:var(--red)">⚠️ ${invalid.length} linha(s) serão ignoradas (clique para ver)</summary>
+        <div style="margin-top:8px;max-height:140px;overflow-y:auto;font-size:11.5px;color:var(--text-2)">
+          ${invalid.map(l => `<div style="padding:4px 0;border-bottom:1px solid rgba(192,57,43,.15)">
+            <strong>Linha ${l._linha}:</strong> ${l._erros.join(' · ')}
+          </div>`).join('')}
+        </div>
+      </details>
+    ` : ''}
+
+    <div style="max-height:340px;overflow:auto;border:1px solid var(--border);border-radius:8px;background:var(--bg-2)">
+      <table style="width:100%;font-size:11.5px;border-collapse:collapse">
+        <thead style="background:var(--surface-2);position:sticky;top:0;z-index:1">
+          <tr>
+            <th style="padding:8px;text-align:left;font-size:10px;color:var(--text-3);text-transform:uppercase">#</th>
+            <th style="padding:8px;text-align:left;font-size:10px;color:var(--text-3);text-transform:uppercase">Data</th>
+            <th style="padding:8px;text-align:left;font-size:10px;color:var(--text-3);text-transform:uppercase">Descrição</th>
+            <th style="padding:8px;text-align:right;font-size:10px;color:var(--text-3);text-transform:uppercase">Valor</th>
+            <th style="padding:8px;text-align:left;font-size:10px;color:var(--text-3);text-transform:uppercase">${ehReceita?'Cliente':'Fornecedor'}</th>
+            <th style="padding:8px;text-align:left;font-size:10px;color:var(--text-3);text-transform:uppercase">Categoria</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${linhas.slice(0, 200).map(l => {
+            const tem = l._erros.length === 0;
+            return `<tr style="${tem?'':'background:rgba(192,57,43,.05)'};border-top:1px solid var(--border)">
+              <td style="padding:6px 8px;font-family:var(--mono);color:var(--text-3)">${l._linha}</td>
+              <td style="padding:6px 8px;color:${tem?'var(--text)':'var(--red)'}">${l.data?fmtData(l.data):'<em style="color:var(--red)">inválida</em>'}</td>
+              <td style="padding:6px 8px;color:${tem?'var(--text)':'var(--red)'};max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${l.descricao||'<em style="color:var(--red)">vazia</em>'}</td>
+              <td style="padding:6px 8px;text-align:right;font-family:var(--mono);font-weight:600;color:${tem?corPrincipal:'var(--red)'}">${tem?fmtMoeda(l.valor):'inválido'}</td>
+              <td style="padding:6px 8px;color:var(--text-2)">
+                ${l.contraparte_nome||'<span style="color:var(--text-3)">—</span>'}
+                ${l.contraparte_cpf_cnpj?`<div style="font-family:var(--mono);font-size:10px;color:var(--text-3)">${l.contraparte_cpf_cnpj}</div>`:''}
+              </td>
+              <td style="padding:6px 8px;color:var(--text-2)">${l.categoria||'<span style="color:var(--text-3)">—</span>'}</td>
+            </tr>`;
+          }).join('')}
+          ${linhas.length > 200 ? `<tr><td colspan="6" style="padding:10px;text-align:center;color:var(--text-3);font-size:11px;font-style:italic">… e mais ${linhas.length-200} linha(s)</td></tr>` : ''}
+        </tbody>
+      </table>
+    </div>
+
+    <div style="margin-top:10px;font-size:10.5px;color:var(--text-3);line-height:1.55">
+      💡 ${ehReceita?'Clientes':'Fornecedores'} serão buscados por nome (sem acento, case-insensitive). Se não encontrados, serão cadastrados automaticamente com o nome e CPF/CNPJ informados.
+    </div>
+  `,
+  `<button class="btn btn-outline" onclick="closeModal()">Cancelar</button>
+   <button class="btn btn-gold" onclick="csvLoteImportar()" ${valid.length===0?'disabled':''}>Importar ${valid.length} ${valid.length===1?'lançamento':'lançamentos'}</button>`);
+}
+
+// ── EXECUTAR IMPORTAÇÃO ───────────────────────────────────────
+async function csvLoteImportar() {
+  const tipo      = _CSV_LOTE.tipo;
+  const ehReceita = tipo === 'receita';
+  const linhas    = _CSV_LOTE.linhas.filter(l => l._erros.length === 0);
+  if (linhas.length === 0) { toast('Nenhuma linha válida.', 'warn'); return; }
+
+  const tabela    = ehReceita ? 'fin_receitas' : 'fin_despesas';
+  const arrayLocal = ehReceita ? RECEITAS : DESPESAS;
+  const tabContra = ehReceita ? 'fin_clientes' : 'fin_fornecedores';
+  const colunaContra = ehReceita ? 'cliente_id' : 'fornecedor_id';
+
+  closeModal();
+  // Modal de progresso
+  openModal('Importando…', `
+    <div style="text-align:center;padding:24px 12px">
+      <div class="spinner-loader" style="width:38px;height:38px;border:3px solid var(--border);border-top-color:var(--gold);border-radius:50%;margin:0 auto 14px;animation:spin 0.8s linear infinite"></div>
+      <div id="csv-progresso" style="font-size:13px;color:var(--text);font-weight:600">Iniciando…</div>
+      <div id="csv-progresso-detail" style="font-size:11px;color:var(--text-3);margin-top:4px">0 / ${linhas.length}</div>
+    </div>`, '');
+
+  const setProgresso = (msg, n) => {
+    const elM = $id('csv-progresso');
+    const elD = $id('csv-progresso-detail');
+    if (elM) elM.textContent = msg;
+    if (elD) elD.textContent = `${n} / ${linhas.length}`;
+  };
+
+  // Cache de contrapartes recém-criadas (pra evitar duplicar dentro do mesmo CSV)
+  const cacheContra = {}; // { 'nome normalizado': id }
+
+  // Helper: buscar/criar contraparte
+  const _normNome = s => (s||'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+
+  async function resolverContraparte(nome, cpfCnpj) {
+    if (!nome) return null;
+    const chave = _normNome(nome);
+    if (cacheContra[chave]) return cacheContra[chave];
+
+    // 1) Buscar nos arrays locais
+    const arrLocal = ehReceita ? CLIENTES : FORNECEDORES;
+    const achouLocal = arrLocal.find(c => _normNome(c.nome) === chave);
+    if (achouLocal) { cacheContra[chave] = achouLocal.id; return achouLocal.id; }
+
+    // 2) Buscar no banco (case-insensitive)
+    try {
+      const r = await supa('GET', tabContra, {
+        params: { tenant_id: `eq.${APP.tenantId}`, nome: `ilike.${nome.replace(/[%_]/g,'')}`, limit: 1, select: 'id,nome' }
+      });
+      if (Array.isArray(r) && r[0]) {
+        cacheContra[chave] = r[0].id;
+        // Adiciona ao array local pra evitar nova busca
+        if (ehReceita) atualizarLocal(CLIENTES, r[0]);
+        else           atualizarLocal(FORNECEDORES, r[0]);
+        return r[0].id;
+      }
+    } catch(_) {}
+
+    // 3) Não achou — criar
+    try {
+      const body = {
+        tenant_id: APP.tenantId,
+        nome: nome.trim(),
+      };
+      const cpfClean = (cpfCnpj||'').replace(/\D/g,'');
+      if (cpfClean) body.cpf_cnpj = cpfClean;
+      const novo = await supa('POST', tabContra, { body, returning: true });
+      if (novo && novo[0]?.id) {
+        cacheContra[chave] = novo[0].id;
+        if (ehReceita) atualizarLocal(CLIENTES, novo[0]);
+        else           atualizarLocal(FORNECEDORES, novo[0]);
+        return novo[0].id;
+      }
+    } catch(e) {
+      console.warn('Falha criando contraparte:', nome, e.message);
+    }
+    return null;
+  }
+
+  // Helper: resolver categoria por nome
+  function resolverCategoria(nome) {
+    if (!nome) return null;
+    const chave = _normNome(nome);
+    const tipoCat = ehReceita ? 'receita' : 'despesa';
+    return CATEGORIAS.find(c =>
+      _normNome(c.nome) === chave && (c.tipo === tipoCat || c.tipo === 'ambos')
+    )?.id || null;
+  }
+
+  let sucesso = 0;
+  let erros   = [];
+
+  for (let i = 0; i < linhas.length; i++) {
+    const l = linhas[i];
+    setProgresso(`Processando linha ${l._linha}…`, i);
+
+    const contraId = await resolverContraparte(l.contraparte_nome, l.contraparte_cpf_cnpj);
+    const categoriaId = resolverCategoria(l.categoria);
+
+    const body = {
+      tenant_id: APP.tenantId,
+      descricao: l.descricao,
+      valor:     l.valor,
+      vencimento: l.data,
+      status: 'pendente',
+    };
+    if (contraId)    body[colunaContra] = contraId;
+    if (categoriaId) body.categoria_id  = categoriaId;
+    if (l.observacao) body.observacao   = `${l.observacao} | Importado via CSV em lote`;
+    else              body.observacao   = `Importado via CSV em lote (${_CSV_LOTE.fileName})`;
+
+    try {
+      const r = await supa('POST', tabela, { body, returning: true });
+      if (r && r[0]) {
+        sucesso++;
+        atualizarLocal(arrayLocal, r[0]);
+      }
+    } catch(e) {
+      erros.push({ linha: l._linha, msg: e.message });
+    }
+  }
+
+  closeModal();
+
+  // Re-renderiza tela atual (se for A Receber/A Pagar)
+  try { rerenderTelaAtual && rerenderTelaAtual(); } catch(_) {}
+
+  // Resultado final
+  openModal('Resultado da importação', `
+    <div style="text-align:center;padding:14px 6px">
+      <div style="font-size:48px;margin-bottom:8px">${sucesso > 0 ? '✅' : '⚠️'}</div>
+      <div style="font-size:18px;font-weight:700;color:var(--text);margin-bottom:6px">
+        ${sucesso} de ${linhas.length} ${sucesso===1?'lançamento criado':'lançamentos criados'}
+      </div>
+      ${erros.length === 0 ? `
+        <div style="font-size:12px;color:var(--text-3)">Tudo certo! Os ${ehReceita?'recebíveis':'pagamentos'} já estão na lista.</div>
+      ` : `
+        <div style="font-size:12px;color:var(--red);margin-bottom:10px">${erros.length} linha(s) com erro</div>
+        <details style="text-align:left;background:var(--red-lt);border:1px solid rgba(192,57,43,.2);border-radius:8px;padding:10px 12px">
+          <summary style="cursor:pointer;font-size:12px;font-weight:600;color:var(--red)">Ver detalhes</summary>
+          <div style="margin-top:8px;max-height:200px;overflow-y:auto;font-size:11px;color:var(--text-2)">
+            ${erros.map(e => `<div style="padding:3px 0;border-bottom:1px solid rgba(192,57,43,.15)"><strong>Linha ${e.linha}:</strong> ${e.msg}</div>`).join('')}
+          </div>
+        </details>
+      `}
+    </div>
+  `,
+  `<button class="btn btn-gold" onclick="closeModal()">Fechar</button>`);
+
+  // Limpa cache do lote
+  _CSV_LOTE.tipo = null;
+  _CSV_LOTE.fileName = '';
+  _CSV_LOTE.linhas = [];
 }
 
 // ── PROCESSAMENTO DE ARQUIVOS ──────────────────────────────────

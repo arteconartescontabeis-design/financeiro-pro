@@ -5647,8 +5647,46 @@ async function processarPDFAutoDoc(id, file) {
   adicionarFilaItem(id, file.name, 'processando', `Criando ${dadosLista.length} lançamento(s)...`, null);
   let ok = 0;
 
-  // CNPJ da empresa — usado pra escolher a contraparte correta
+  // CNPJ da empresa — usado pra escolher a contraparte correta E pra validar
   const cnpjEmpresaPDF = (APP.tenant?.cnpj||'').replace(/\D/g,'');
+
+  // ═══ VALIDAÇÃO CNPJ (PDF/IA) ═════════════════════════════════
+  // Bloqueia se a empresa ativa não tem CNPJ cadastrado
+  if (!cnpjEmpresaPDF) {
+    adicionarFilaItem(id, file.name, 'erro',
+      `Empresa "${APP.tenant?.nome||'ativa'}" sem CNPJ cadastrado. Configure em "Empresas" antes de importar documentos fiscais.`, null);
+    return;
+  }
+
+  // Coleta todos os CNPJs encontrados pela IA no documento (prestador/tomador
+  // do objeto raiz e de todos os itens da lista, se houver)
+  const cnpjsDoc = new Set();
+  const _add = v => {
+    const c = (v||'').replace(/\D/g,'');
+    if (c.length === 14) cnpjsDoc.add(c);
+  };
+  for (const d of dadosLista) {
+    _add(d?.cnpj_prestador);
+    _add(d?.cnpj_tomador);
+    _add(d?.prestador?.cpf_cnpj);
+    _add(d?.tomador?.cpf_cnpj);
+    _add(d?.prestador?.cnpj);
+    _add(d?.tomador?.cnpj);
+  }
+
+  if (cnpjsDoc.size === 0) {
+    adicionarFilaItem(id, file.name, 'erro',
+      `Documento sem CNPJ identificável (prestador/tomador). Importação rejeitada por segurança.`, null);
+    return;
+  }
+
+  if (!cnpjsDoc.has(cnpjEmpresaPDF)) {
+    const lista = [...cnpjsDoc].map(c => _formatCNPJ(c)).join(', ');
+    adicionarFilaItem(id, file.name, 'erro',
+      `Documento de outra empresa. CNPJ ativo (${_formatCNPJ(cnpjEmpresaPDF)}) não consta no documento. CNPJs encontrados: ${lista}.`, null);
+    return;
+  }
+  // ═══════════════════════════════════════════════════════════════
 
   for (const dados of dadosLista) {
     const tipo      = dados.tipo;

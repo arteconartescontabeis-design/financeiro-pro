@@ -4906,6 +4906,16 @@ async function csvLoteImportar() {
   const tabContra = ehReceita ? 'fin_clientes' : 'fin_fornecedores';
   const colunaContra = ehReceita ? 'cliente_id' : 'fornecedor_id';
 
+  // ═══ FIX CRÍTICO: garantir que o backend está no tenant correto ═══
+  // Sem isso, fin_tenant_atual() pode retornar tenant antigo (is_default
+  // do JWT) e o RLS bloqueia INSERTs com erro 42501.
+  try {
+    await supaRpc('fin_set_tenant', { p_tenant_id: APP.tenantId });
+  } catch(e) {
+    console.warn('Falha ao sincronizar tenant antes da importação:', e.message);
+  }
+  // ═════════════════════════════════════════════════════════════════════
+
   closeModal();
   // Modal de progresso
   openModal('Importando…', `

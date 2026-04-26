@@ -4909,8 +4909,11 @@ async function csvLoteImportar() {
   // ═══ FIX CRÍTICO: garantir que o backend está no tenant correto ═══
   // Sem isso, fin_tenant_atual() pode retornar tenant antigo (is_default
   // do JWT) e o RLS bloqueia INSERTs com erro 42501.
+  // Usa fin_set_tenant_persistente que muda is_default no banco
+  // (persiste entre fetchs, ao contrário de fin_set_tenant que só vale
+  // dentro da transação atual).
   try {
-    await supaRpc('fin_set_tenant', { p_tenant_id: APP.tenantId });
+    await supaRpc('fin_set_tenant_persistente', { p_tenant_id: APP.tenantId });
   } catch(e) {
     console.warn('Falha ao sincronizar tenant antes da importação:', e.message);
   }
@@ -8627,8 +8630,16 @@ async function trocarEmpresaSA(tenantId) {
   if (!tenantId || tenantId === APP.tenantId) return;
 
   try {
-    // 1) Seta tenant ativo no banco (RPC)
-    const ok = await supaRpc('fin_set_tenant', { p_tenant_id: tenantId });
+    // 1) Seta tenant ativo no banco (RPC persistente — muda is_default)
+    let ok = false;
+    try {
+      const r = await supaRpc('fin_set_tenant_persistente', { p_tenant_id: tenantId });
+      ok = !!(r && r.sucesso);
+    } catch(_) {
+      // Fallback: tenta a função antiga (compat)
+      try { ok = await supaRpc('fin_set_tenant', { p_tenant_id: tenantId }); }
+      catch(_) { ok = false; }
+    }
     if (!ok) {
       // Pode ter sido superadmin mudando pra empresa fora do vínculo: força mesmo assim
       if (!APP.ehSuperadmin) {

@@ -5717,6 +5717,7 @@ async function processarXMLAutoDoc(id, file) {
       return;
     }
     // CNPJ deve aparecer como prestador OU tomador
+    let autorizacaoSemCNPJ = null;
     if (cnpjPrestador || cnpjTomador) {
       if (cnpjEmpresa !== cnpjPrestador && cnpjEmpresa !== cnpjTomador) {
         adicionarFilaItem(id, file.name, 'erro',
@@ -5724,9 +5725,13 @@ async function processarXMLAutoDoc(id, file) {
         return;
       }
     } else {
-      adicionarFilaItem(id, file.name, 'erro',
-        `NFS-e sem CNPJ de prestador/tomador identificável. Importação rejeitada por segurança.`, null);
-      return;
+      // Sem CNPJ identificável → abrir modal de autorização
+      autorizacaoSemCNPJ = await _autorizarSemCNPJ(file.name, 'NFS-e');
+      if (!autorizacaoSemCNPJ) {
+        adicionarFilaItem(id, file.name, 'erro',
+          `Importação cancelada — documento sem CNPJ não autorizado.`, null);
+        return;
+      }
     }
     // ═══════════════════════════════════════════════════════════
 
@@ -5734,26 +5739,29 @@ async function processarXMLAutoDoc(id, file) {
     let tipo = 'receita';
     if (cnpjEmpresa && cnpjTomador && cnpjTomador === cnpjEmpresa) tipo = 'despesa';
     if (cnpjEmpresa && cnpjPrestador && cnpjPrestador !== cnpjEmpresa) tipo = 'despesa';
+    // Sem CNPJ autorizado → default despesa (recibo, comprovante, etc)
+    if (autorizacaoSemCNPJ) tipo = 'despesa';
 
     const contraparte = tipo === 'receita' ? tomador : prestador;
     const categoriaEntidade = tipo === 'receita' ? 'cliente' : 'fornecedor';
 
-    // Resolver entidade (criar/atualizar/conflito)
+    // Resolver entidade (criar/atualizar/conflito) — pula se autorização sem CNPJ
     adicionarFilaItem(id, file.name, 'processando', 'Verificando cadastro da entidade...', null);
     let entidadeResolvida = null;
-    if (contraparte.cpf_cnpj) {
+    if (!autorizacaoSemCNPJ && contraparte.cpf_cnpj) {
       entidadeResolvida = await resolveEntidadeXML(contraparte, categoriaEntidade, 'xml_nfse');
     }
 
-    const desc = `NFS-e nº ${numero} — ${contraparte.nome || '—'}`;
+    const desc = `NFS-e nº ${numero} — ${contraparte.nome || (autorizacaoSemCNPJ ? 'Sem identificação' : '—')}`;
 
+    const obsAutorizacao = autorizacaoSemCNPJ ? ` | ⚠️ Autorizado sem CNPJ. Motivo: "${autorizacaoSemCNPJ.motivo}"` : '';
     const body = {
       tenant_id:  APP.tenantId,
       descricao:  desc,
       valor,
       vencimento: data,
       status:     'pendente',
-      observacao: `${discriminacao.slice(0,200)} | Prestador: ${prestador.nome||'—'} | Tomador: ${tomador.nome||'—'} | Importado via NFS-e XML`,
+      observacao: `${discriminacao.slice(0,200)} | Prestador: ${prestador.nome||'—'} | Tomador: ${tomador.nome||'—'} | Importado via NFS-e XML${obsAutorizacao}`,
     };
     // Vincular entidade ao lançamento
     if (entidadeResolvida) {
@@ -5834,33 +5842,42 @@ async function processarXMLAutoDoc(id, file) {
         return;
       }
     } else {
-      adicionarFilaItem(id, file.name, 'erro',
-        `NF-e sem CNPJ de emitente/destinatário identificável. Importação rejeitada por segurança.`, null);
-      return;
+      // Sem CNPJ identificável → modal de autorização
+      var autorizacaoNFe = await _autorizarSemCNPJ(file.name, 'NF-e');
+      if (!autorizacaoNFe) {
+        adicionarFilaItem(id, file.name, 'erro',
+          `Importação cancelada — documento sem CNPJ não autorizado.`, null);
+        return;
+      }
     }
     // ═══════════════════════════════════════════════════════════
 
     // tpNF: 0 = entrada (despesa: emitente é fornecedor)
     //       1 = saída  (receita: destinatário é cliente)
-    const tipo = tpNF === '0' ? 'despesa' : 'receita';
+    // Sem CNPJ autorizado → tratar como despesa por default
+    const tipo = (typeof autorizacaoNFe !== 'undefined' && autorizacaoNFe)
+                 ? 'despesa'
+                 : (tpNF === '0' ? 'despesa' : 'receita');
     const contraparte = tipo === 'despesa' ? emit : dest;
     const categoriaEntidade = tipo === 'despesa' ? 'fornecedor' : 'cliente';
 
-    // Resolver entidade
+    // Resolver entidade — pula se autorização sem CNPJ
     adicionarFilaItem(id, file.name, 'processando', 'Verificando cadastro da entidade...', null);
     let entidadeResolvida = null;
-    if (contraparte.cpf_cnpj) {
-      entidadeResolvida = await resolveEntidadeXML(contraparte, categoriaEntidade, 'xml_nfe');
+    if (typeof autorizacaoNFe === 'undefined' || !autorizacaoNFe) {
+      if (contraparte.cpf_cnpj) {
+        entidadeResolvida = await resolveEntidadeXML(contraparte, categoriaEntidade, 'xml_nfe');
+      }
     }
 
-    const desc = `NF-e nº ${nNF} — ${contraparte.nome || '—'}`;
+    const desc = `NF-e nº ${nNF} — ${contraparte.nome || ((typeof autorizacaoNFe !== 'undefined' && autorizacaoNFe) ? 'Sem identificação' : '—')}`;
     const body = {
       tenant_id: APP.tenantId,
       descricao: desc,
       valor: vNF,
       vencimento: data,
       status: 'pendente',
-      observacao: `CNPJ: ${contraparte.cpf_cnpj||'—'} | Importado via NF-e XML`,
+      observacao: `CNPJ: ${contraparte.cpf_cnpj||'—'} | Importado via NF-e XML${(typeof autorizacaoNFe !== 'undefined' && autorizacaoNFe) ? ` | ⚠️ Autorizado sem CNPJ. Motivo: "${autorizacaoNFe.motivo}"` : ''}`,
     };
     if (entidadeResolvida) {
       if (categoriaEntidade === 'cliente')     body.cliente_id = entidadeResolvida.id;
@@ -6023,6 +6040,101 @@ function _modalAutorizarDivergencia(fileName, contexto, totalItens) {
       resolve({ motivo });
     };
   });
+}
+
+// ── Modal: autorizar importação de documento SEM CNPJ identificável (v12) ──
+// Usado quando o documento (NFSe / NFe / PDF) não traz CNPJ extraível.
+// Diferente do _modalAutorizarDivergencia (CNPJ existe mas não bate),
+// aqui o caso é "documento informal" — recibo, comprovante, doc avulso.
+// Lista de motivos pré-definidos + campo livre opcional.
+// Resolve com { motivo, motivo_codigo } se autorizado, ou null se cancelado.
+const _MOTIVOS_SEM_CNPJ = [
+  { codigo: 'recibo_servico',     label: 'Recibo de serviço sem CNPJ (Uber, autônomo, etc)' },
+  { codigo: 'comprovante_pgto',   label: 'Comprovante de pagamento (sem nota fiscal)' },
+  { codigo: 'documento_informal', label: 'Documento informal / avulso' },
+  { codigo: 'recibo_aluguel',     label: 'Recibo de aluguel ou condomínio' },
+  { codigo: 'reembolso_funci',    label: 'Reembolso de despesa de funcionário' },
+  { codigo: 'doc_estrangeiro',    label: 'Documento de fornecedor estrangeiro (sem CNPJ)' },
+  { codigo: 'outro',              label: 'Outro motivo (descreva abaixo)' },
+];
+
+function _modalAutorizarSemCNPJ(fileName, tipoDoc) {
+  return new Promise((resolve) => {
+    const opcoes = _MOTIVOS_SEM_CNPJ.map((m, i) =>
+      `<label style="display:flex;align-items:flex-start;gap:8px;padding:8px 10px;border:1px solid var(--border);border-radius:7px;cursor:pointer;font-size:12.5px;line-height:1.4;background:var(--bg-2);transition:var(--tr)" onmouseover="this.style.borderColor='var(--gold)'" onmouseout="this.style.borderColor='var(--border)'">
+         <input type="radio" name="auth-sc-motivo" value="${m.codigo}" ${i===0?'checked':''} style="margin-top:2px;accent-color:var(--gold);cursor:pointer">
+         <span>${m.label}</span>
+       </label>`).join('');
+
+    openModal('⚠️ Documento sem CNPJ identificável', `
+      <div style="font-size:13px;color:var(--text);background:var(--amber-lt);border:1px solid var(--amber);padding:13px 14px;border-radius:9px;margin-bottom:14px;line-height:1.6">
+        <strong>Não foi possível identificar o CNPJ do prestador/emitente neste ${tipoDoc}.</strong><br>
+        Você pode autorizar a importação selecionando o motivo abaixo. A autorização ficará registrada no histórico de auditoria.
+      </div>
+
+      <div style="background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:11px 13px;margin-bottom:14px;font-size:11.5px;line-height:1.7">
+        <div style="font-weight:700;color:var(--text-2);margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em;font-size:10px">Documento</div>
+        <div><span style="color:var(--text-3)">Arquivo:</span> <strong style="font-family:var(--mono);font-size:11px">${fileName}</strong></div>
+        <div><span style="color:var(--text-3)">Tipo:</span> ${tipoDoc}</div>
+        <div style="margin-top:6px;padding-top:6px;border-top:1px solid var(--border)">
+          <span style="color:var(--text-3)">Empresa ativa:</span> <strong>${APP.tenant?.nome || '—'}</strong>
+        </div>
+      </div>
+
+      <div class="form-field full">
+        <label class="form-label">Motivo *</label>
+        <div style="display:flex;flex-direction:column;gap:6px">${opcoes}</div>
+      </div>
+
+      <div class="form-field full" style="margin-top:10px">
+        <label class="form-label">Observação adicional <span style="font-weight:400;color:var(--text-3);font-size:11px">(opcional, ficará no histórico)</span></label>
+        <textarea class="form-input" id="auth-sc-obs" rows="2" placeholder="Ex: Recibo do motorista no aeroporto"
+          style="resize:vertical;min-height:50px;font-family:var(--font);font-size:12.5px"></textarea>
+      </div>
+    `,
+    `<button class="btn btn-outline" id="auth-sc-cancelar">Cancelar</button>
+     <button class="btn btn-gold" id="auth-sc-confirmar">Autorizar e importar</button>`);
+
+    const btnCancelar  = document.getElementById('auth-sc-cancelar');
+    const btnConfirmar = document.getElementById('auth-sc-confirmar');
+
+    btnCancelar.onclick = () => { closeModal(); resolve(null); };
+    btnConfirmar.onclick = () => {
+      const radio = document.querySelector('input[name="auth-sc-motivo"]:checked');
+      const codigo = radio ? radio.value : '';
+      const item = _MOTIVOS_SEM_CNPJ.find(m => m.codigo === codigo);
+      if (!item) { toast('Selecione um motivo.', 'warn'); return; }
+      const obs = (document.getElementById('auth-sc-obs').value || '').trim();
+      const motivo = obs ? `${item.label} — ${obs}` : item.label;
+      closeModal();
+      resolve({ motivo, motivo_codigo: codigo });
+    };
+  });
+}
+
+// Wrapper: abre o modal acima e registra na auditoria se autorizado.
+// Retorna { motivo } se autorizado, null se cancelado.
+async function _autorizarSemCNPJ(fileName, tipoDoc, dadosExtras) {
+  const autorizado = await _modalAutorizarSemCNPJ(fileName, tipoDoc);
+  if (!autorizado) return null;
+  try {
+    await supaRpc('fin_registrar_autorizacao', {
+      p_tabela: 'fin_movimentacoes',
+      p_motivo: autorizado.motivo,
+      p_dados:  {
+        tipo_autorizacao: 'sem_cnpj',
+        tipo_documento:   tipoDoc,
+        arquivo:          fileName,
+        motivo_codigo:    autorizado.motivo_codigo,
+        empresa_ativa:    APP.tenant?.nome || null,
+        cnpj_empresa:     APP.tenant?.cnpj || null,
+        ...(dadosExtras || {})
+      }
+    });
+  } catch(e) {
+    console.warn('Falha ao registrar autorização sem CNPJ:', e.message);
+  }
+  return { motivo: autorizado.motivo };
 }
 
 
@@ -6251,12 +6363,14 @@ async function processarPDFAutoDoc(id, file) {
   }
 
   if (cnpjsDoc.size === 0) {
-    adicionarFilaItem(id, file.name, 'erro',
-      `Documento sem CNPJ identificável (prestador/tomador). Importação rejeitada por segurança.`, null);
-    return;
-  }
-
-  if (!cnpjsDoc.has(cnpjEmpresaPDF)) {
+    // Sem CNPJ identificável → modal de autorização
+    var autorizacaoPDF = await _autorizarSemCNPJ(file.name, 'PDF/IA');
+    if (!autorizacaoPDF) {
+      adicionarFilaItem(id, file.name, 'erro',
+        `Importação cancelada — documento sem CNPJ não autorizado.`, null);
+      return;
+    }
+  } else if (!cnpjsDoc.has(cnpjEmpresaPDF)) {
     const lista = [...cnpjsDoc].map(c => _formatCNPJ(c)).join(', ');
     adicionarFilaItem(id, file.name, 'erro',
       `Documento de outra empresa. CNPJ ativo (${_formatCNPJ(cnpjEmpresaPDF)}) não consta no documento. CNPJs encontrados: ${lista}.`, null);
@@ -6308,7 +6422,7 @@ async function processarPDFAutoDoc(id, file) {
       valor,
       vencimento,
       status:     'pendente',
-      observacao: `${dados.observacao||''} | Beneficiário: ${dados.beneficiario||'—'} | Importado via PDF+IA`,
+      observacao: `${dados.observacao||''} | Beneficiário: ${dados.beneficiario||'—'} | Importado via PDF+IA${(typeof autorizacaoPDF !== 'undefined' && autorizacaoPDF) ? ` | ⚠️ Autorizado sem CNPJ. Motivo: "${autorizacaoPDF.motivo}"` : ''}`,
     };
     if (entidadeResolvida) {
       if (categoriaEnt === 'cliente')   body.cliente_id = entidadeResolvida.id;

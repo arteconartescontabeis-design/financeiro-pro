@@ -6189,7 +6189,7 @@ async function processarPDFAutoDoc(id, file) {
             },
             {
               type: 'text',
-              text: 'Analise este documento fiscal brasileiro (NFS-e, NF-e, boleto, recibo ou comprovante) e extraia as informacoes. Responda APENAS com JSON valido, sem explicacoes, no formato: {"tipo":"despesa ou receita","descricao":"NFS-e nº XXX - Nome ou descricao","valor":0.00,"vencimento":"YYYY-MM-DD","beneficiario":"nome do prestador ou emissor","numero_nf":"numero da nota se houver","cnpj_prestador":"cnpj sem pontuacao","cnpj_tomador":"cnpj sem pontuacao","observacao":"discriminacao do servico ou detalhes","prestador":{"cnpj":"","nome":"","nome_fantasia":"","ie":"","im":"","logradouro":"","numero":"","complemento":"","bairro":"","municipio":"","uf":"","cep":"","email":"","telefone":""},"tomador":{"cnpj":"","nome":"","nome_fantasia":"","ie":"","im":"","logradouro":"","numero":"","complemento":"","bairro":"","municipio":"","uf":"","cep":"","email":"","telefone":""}}. Regras: NFS-e emitida por voce=receita, NFS-e recebida de terceiro=despesa, boleto=despesa, comprovante de recebimento=receita. valor deve ser numero sem simbolos. Se nao houver vencimento use a data de emissao ou hoje. Para prestador e tomador, extraia TODOS os dados de identificacao e endereco que aparecerem no documento — se algum campo nao estiver visivel, deixe string vazia. CNPJ/CPF sempre sem pontuacao, CEP sem hifen, UF com 2 letras maiusculas.'
+              text: 'Analise este documento fiscal brasileiro (NFS-e, NF-e, boleto, recibo, comprovante ou extrato bancário) e extraia as informacoes. Responda APENAS com JSON valido, sem explicacoes, no formato: {"tipo":"despesa ou receita","descricao":"NFS-e nº XXX - Nome ou descricao","valor":0.00,"vencimento":"YYYY-MM-DD","beneficiario":"nome do prestador ou emissor","numero_nf":"numero da nota se houver","cnpj_prestador":"cnpj sem pontuacao","cnpj_tomador":"cnpj sem pontuacao","observacao":"discriminacao do servico ou detalhes","prestador":{"cnpj":"","nome":"","nome_fantasia":"","ie":"","im":"","logradouro":"","numero":"","complemento":"","bairro":"","municipio":"","uf":"","cep":"","email":"","telefone":""},"tomador":{"cnpj":"","nome":"","nome_fantasia":"","ie":"","im":"","logradouro":"","numero":"","complemento":"","bairro":"","municipio":"","uf":"","cep":"","email":"","telefone":""}}. Regras: NFS-e emitida por voce=receita, NFS-e recebida de terceiro=despesa, boleto=despesa, comprovante de recebimento=receita. valor deve ser numero sem simbolos. Se nao houver vencimento use a data de emissao ou hoje. Para prestador e tomador, extraia TODOS os dados de identificacao e endereco que aparecerem no documento — se algum campo nao estiver visivel, deixe string vazia. CNPJ/CPF sempre sem pontuacao, CEP sem hifen, UF com 2 letras maiusculas. REGRAS CRITICAS DE CNPJ (siga rigorosamente): (1) NUNCA invente, deduza ou misture CNPJs de partes diferentes do documento — se nao tiver certeza absoluta de qual CNPJ pertence a qual parte, deixe vazio. (2) Em extratos bancarios e comprovantes PIX/TED/DOC: o titular da conta exibido no cabecalho/topo do documento e o tomador (se transacao=credito/recebimento) ou prestador (se transacao=debito/pagamento). O CNPJ do titular vem SEMPRE do cabecalho, nunca de linhas de transacao individuais. (3) Pagador/recebedor que e pessoa fisica (CPF de 11 digitos) deve ter cnpj vazio — NAO converta CPF em CNPJ inventando 3 digitos extras. (4) Se voce identificar o NOME de uma parte mas nao tiver o CNPJ dela visivel no documento, retorne nome preenchido e cnpj vazio — e melhor cnpj vazio do que cnpj errado. (5) Se o documento nao for fiscal (recibo informal, comprovante simples, anotacao), e normal nao haver CNPJ — deixe ambos vazios sem inventar.'
             }
           ]
         }]
@@ -6362,16 +6362,33 @@ async function processarPDFAutoDoc(id, file) {
     _add(d?.tomador?.cnpj);
   }
 
-  if (cnpjsDoc.size === 0) {
-    // Sem CNPJ identificável → modal de autorização
+  // ── Sanity check: filtra CNPJs alucinados pela IA (DV inválido OU
+  //    inexistentes em fin_tenants). Quando a IA mistura nome de uma
+  //    parte com CNPJ de outra, gera "fantasmas" que não existem no
+  //    sistema. Ao filtrar, esses casos caem no fluxo "sem CNPJ" (modal
+  //    de autorização) em vez de rejeitarem como "outra empresa".
+  const cnpjsAlucinados = [];
+  const cnpjsValidados = new Set();
+  for (const c of cnpjsDoc) {
+    const existe = await _cnpjExisteComoTenant(c);
+    if (existe) cnpjsValidados.add(c);
+    else        cnpjsAlucinados.push(c);
+  }
+  if (cnpjsAlucinados.length) {
+    console.warn(`[PDF/IA] CNPJs descartados (DV inválido ou não cadastrados):`,
+                 cnpjsAlucinados.map(c => _formatCNPJ(c)).join(', '));
+  }
+
+  if (cnpjsValidados.size === 0) {
+    // Nenhum CNPJ confiável → modal de autorização
     var autorizacaoPDF = await _autorizarSemCNPJ(file.name, 'PDF/IA');
     if (!autorizacaoPDF) {
       adicionarFilaItem(id, file.name, 'erro',
-        `Importação cancelada — documento sem CNPJ não autorizado.`, null);
+        `Importação cancelada — documento sem CNPJ identificável não autorizado.`, null);
       return;
     }
-  } else if (!cnpjsDoc.has(cnpjEmpresaPDF)) {
-    const lista = [...cnpjsDoc].map(c => _formatCNPJ(c)).join(', ');
+  } else if (!cnpjsValidados.has(cnpjEmpresaPDF)) {
+    const lista = [...cnpjsValidados].map(c => _formatCNPJ(c)).join(', ');
     adicionarFilaItem(id, file.name, 'erro',
       `Documento de outra empresa. CNPJ ativo (${_formatCNPJ(cnpjEmpresaPDF)}) não consta no documento. CNPJs encontrados: ${lista}.`, null);
     return;
@@ -7806,6 +7823,29 @@ function _validaCNPJ(cnpj) {
   if (dv2 !== parseInt(c[13], 10)) return false;
 
   return true;
+}
+
+// Sanity check: o CNPJ extraído pela IA realmente existe em algum tenant?
+// Usado pra detectar CNPJs alucinados antes de rejeitar documento como
+// "outra empresa". Cache em memória pra economizar chamadas.
+//   - cnpj válido + existe em fin_tenants  → true
+//   - cnpj válido mas não existe          → false (provavelmente alucinação)
+//   - cnpj inválido (DV ou formato)       → false (sem chamar RPC)
+const _CNPJ_TENANT_CACHE = new Map();
+async function _cnpjExisteComoTenant(cnpj) {
+  const c = (cnpj || '').replace(/\D/g, '');
+  if (c.length !== 14) return false;
+  if (!_validaCNPJ(c))  return false;  // DV inválido = certeza de alucinação
+  if (_CNPJ_TENANT_CACHE.has(c)) return _CNPJ_TENANT_CACHE.get(c);
+  try {
+    const existe = await supaRpc('fin_cnpj_tenant_existe', { p_cnpj: c });
+    const valor = existe === true;
+    _CNPJ_TENANT_CACHE.set(c, valor);
+    return valor;
+  } catch(e) {
+    console.warn('[CNPJ check] RPC falhou, assumindo existe (fallback seguro):', e.message);
+    return true;  // fallback conservador: se RPC falhar, deixa o fluxo seguir
+  }
 }
 
 async function carregarEmpresas() {

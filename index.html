@@ -6189,7 +6189,7 @@ async function processarPDFAutoDoc(id, file) {
             },
             {
               type: 'text',
-              text: 'Analise este documento brasileiro (NFS-e, NF-e, boleto, recibo, comprovante OU extrato bancário) e extraia as informacoes. Responda APENAS com JSON valido, sem explicacoes. FORMATO DE RESPOSTA: (a) Para documentos com UM lancamento (NFS-e, NF-e, boleto, comprovante avulso): retorne um OBJETO no formato {"tipo":"despesa ou receita","descricao":"NFS-e nº XXX - Nome ou descricao","valor":0.00,"vencimento":"YYYY-MM-DD","beneficiario":"nome do prestador ou emissor","numero_nf":"numero da nota se houver","cnpj_prestador":"cnpj sem pontuacao","cnpj_tomador":"cnpj sem pontuacao","observacao":"discriminacao do servico ou detalhes","prestador":{"cnpj":"","nome":"","nome_fantasia":"","ie":"","im":"","logradouro":"","numero":"","complemento":"","bairro":"","municipio":"","uf":"","cep":"","email":"","telefone":""},"tomador":{"cnpj":"","nome":"","nome_fantasia":"","ie":"","im":"","logradouro":"","numero":"","complemento":"","bairro":"","municipio":"","uf":"","cep":"","email":"","telefone":""}}. (b) Para EXTRATOS BANCARIOS, comprovantes com lista de transacoes ou documentos com MULTIPLOS lancamentos: retorne {"lancamentos":[item1, item2, ...]} onde cada item segue o mesmo formato acima — UM ITEM POR LINHA DO EXTRATO. Identifique o documento como extrato quando houver tabela/lista com colunas Data + Descricao + Valor (positivo ou negativo) + Saldo, ou quando houver multiplas transacoes em sequencia. Regras: NFS-e emitida por voce=receita, NFS-e recebida de terceiro=despesa, boleto=despesa, comprovante de recebimento=receita. EM EXTRATOS BANCARIOS: valor positivo (entrada/credito/PIX_CRED/RECEBIMENTO)=receita; valor negativo (saida/debito/TARIFA/PAGAMENTO/LIQUIDACAO/COMPRA)=despesa. SEMPRE retorne valor como numero POSITIVO no JSON, mesmo que apareca negativo no documento — o tipo (receita/despesa) ja indica o sentido. Para cada lancamento do extrato, use a Data da transacao como vencimento. Se nao houver vencimento use a data de emissao ou hoje. Para prestador e tomador, extraia TODOS os dados de identificacao e endereco que aparecerem no documento — se algum campo nao estiver visivel, deixe string vazia. CNPJ/CPF sempre sem pontuacao, CEP sem hifen, UF com 2 letras maiusculas. REGRAS CRITICAS DE CNPJ (siga rigorosamente): (1) NUNCA invente, deduza ou misture CNPJs de partes diferentes do documento — se nao tiver certeza absoluta de qual CNPJ pertence a qual parte, deixe vazio. (2) Em extratos bancarios e comprovantes PIX/TED/DOC: o titular da conta exibido no cabecalho/topo do documento e o tomador (se transacao=credito/recebimento) ou prestador (se transacao=debito/pagamento). O CNPJ do titular vem SEMPRE do cabecalho, nunca de linhas de transacao individuais. (3) Pagador/recebedor que e pessoa fisica (CPF de 11 digitos) deve ter cnpj vazio — NAO converta CPF em CNPJ inventando 3 digitos extras. (4) Se voce identificar o NOME de uma parte mas nao tiver o CNPJ dela visivel no documento, retorne nome preenchido e cnpj vazio — e melhor cnpj vazio do que cnpj errado. (5) Se o documento nao for fiscal (recibo informal, comprovante simples, anotacao, transacao avulsa do extrato), e normal nao haver CNPJ — deixe ambos vazios sem inventar. (6) Em transacoes individuais de um extrato, NORMALMENTE nao ha CNPJ explicito da contraparte — deixe vazio em vez de chutar. O CNPJ do titular do extrato (cabecalho) deve ir em cnpj_tomador (para creditos) ou cnpj_prestador (para debitos).'
+              text: 'Analise este documento brasileiro (NFS-e, NF-e, boleto, recibo, comprovante OU extrato bancário) e extraia as informacoes. Responda APENAS com JSON valido, sem explicacoes. FORMATO DE RESPOSTA: (a) Para documentos com UM lancamento (NFS-e, NF-e, boleto, comprovante avulso): retorne um OBJETO no formato {"tipo":"despesa ou receita","descricao":"NFS-e nº XXX - Nome ou descricao","valor":0.00,"vencimento":"YYYY-MM-DD","beneficiario":"nome do prestador ou emissor","numero_nf":"numero da nota se houver","cnpj_prestador":"cnpj sem pontuacao","cnpj_tomador":"cnpj sem pontuacao","observacao":"discriminacao do servico ou detalhes","prestador":{"cnpj":"","nome":"","nome_fantasia":"","ie":"","im":"","logradouro":"","numero":"","complemento":"","bairro":"","municipio":"","uf":"","cep":"","email":"","telefone":""},"tomador":{"cnpj":"","nome":"","nome_fantasia":"","ie":"","im":"","logradouro":"","numero":"","complemento":"","bairro":"","municipio":"","uf":"","cep":"","email":"","telefone":""}}. (b) Para EXTRATOS BANCARIOS, comprovantes com lista de transacoes ou documentos com MULTIPLOS lancamentos: retorne {"lancamentos":[item1, item2, ...]} onde cada item segue o mesmo formato acima — UM ITEM POR LINHA DO EXTRATO. ATENCAO ESPECIAL EXTRATO: incluir TODAS as linhas de transacao do extrato, mesmo as pequenas (tarifas de R$1, R$2, manutencao, IOF, etc) — nao filtrar nada, nao agrupar, nao consolidar. Cada linha vira um item separado. Identifique o documento como extrato quando houver tabela/lista com colunas Data + Descricao + Valor (positivo ou negativo) + Saldo, ou quando houver multiplas transacoes em sequencia. Regras: NFS-e emitida por voce=receita, NFS-e recebida de terceiro=despesa, boleto=despesa, comprovante de recebimento=receita. EM EXTRATOS BANCARIOS: valor positivo (entrada/credito/PIX_CRED/RECEBIMENTO/LIQ.COBRANCA)=receita; valor negativo (saida/debito/TARIFA/PAGAMENTO/LIQUIDACAO/COMPRA/MANUTENCAO/APLIC.FINANC)=despesa. SEMPRE retorne valor como numero POSITIVO no JSON, mesmo que apareca negativo no documento — o tipo (receita/despesa) ja indica o sentido. Para cada lancamento do extrato, use a Data da transacao como vencimento. Se nao houver vencimento use a data de emissao ou hoje. Para prestador e tomador, extraia TODOS os dados de identificacao e endereco que aparecerem no documento — se algum campo nao estiver visivel, deixe string vazia. CNPJ/CPF sempre sem pontuacao, CEP sem hifen, UF com 2 letras maiusculas. REGRAS CRITICAS DE CNPJ (siga rigorosamente): (1) NUNCA invente, deduza ou misture CNPJs de partes diferentes do documento — se nao tiver certeza absoluta de qual CNPJ pertence a qual parte, deixe vazio. (2) Em extratos bancarios e comprovantes PIX/TED/DOC: o titular da conta exibido no cabecalho/topo do documento e o tomador (se transacao=credito/recebimento) ou prestador (se transacao=debito/pagamento). O CNPJ do titular vem SEMPRE do cabecalho, nunca de linhas de transacao individuais. (3) Pagador/recebedor que e pessoa fisica (CPF de 11 digitos) deve ter cnpj vazio — NAO converta CPF em CNPJ inventando 3 digitos extras. (4) Se voce identificar o NOME de uma parte mas nao tiver o CNPJ dela visivel no documento, retorne nome preenchido e cnpj vazio — e melhor cnpj vazio do que cnpj errado. (5) Se o documento nao for fiscal (recibo informal, comprovante simples, anotacao, transacao avulsa do extrato), e normal nao haver CNPJ — deixe ambos vazios sem inventar. (6) Em transacoes individuais de um extrato, NORMALMENTE nao ha CNPJ explicito da contraparte — deixe vazio em vez de chutar. O CNPJ do titular do extrato (cabecalho) deve ir em cnpj_tomador (para creditos) ou cnpj_prestador (para debitos). (7) ALGUMAS linhas de extrato exibem o CNPJ da contraparte logo apos a palavra PIX/TED/DOC (ex: "RECEBIMENTO PIX 13619673000176 J. F. BIJUTERIAS" — aqui 13619673000176 EH o CNPJ do pagador). Nesse caso, extraia esse CNPJ corretamente para o lado da contraparte. LEMBRETE FINAL: a resposta DEVE ser um JSON valido completo. Para extratos com mais de uma transacao, SEMPRE use {"lancamentos":[...]} — nunca retorne so a primeira linha como objeto unico.'
             }
           ]
         }]
@@ -6309,8 +6309,8 @@ async function processarPDFAutoDoc(id, file) {
     let listaItens = [];
     if (Array.isArray(dados)) {
       listaItens = dados.map(normalizarItem);
-    } else if (dados.lancamentos || dados.transacoes || dados.items || dados.itens) {
-      const arr = dados.lancamentos||dados.transacoes||dados.items||dados.itens;
+    } else if (dados.lancamentos || dados.transacoes || dados.items || dados.itens || dados.movimentacoes || dados.movimentos || dados.entries || dados.linhas || dados.list || dados.data) {
+      const arr = dados.lancamentos||dados.transacoes||dados.items||dados.itens||dados.movimentacoes||dados.movimentos||dados.entries||dados.linhas||dados.list||dados.data;
       listaItens = (Array.isArray(arr) ? arr : [arr]).map(normalizarItem);
     } else {
       listaItens = [normalizarItem(dados)];
@@ -6322,8 +6322,12 @@ async function processarPDFAutoDoc(id, file) {
 
     console.log('Itens normalizados:', listaItens.length, JSON.stringify(listaItens.slice(0,2)));
     console.log('[DIAG] Valores encontrados:', listaItens.map(x=>x.valor).join(', '));
-    dadosLista = listaItens.filter(d => d.valor > 0);
-    if (!dadosLista.length) throw new Error('IA não encontrou valores válidos no documento.');
+    dadosLista = listaItens.filter(d => Math.abs(parseFloat(d.valor) || 0) > 0);
+    if (!dadosLista.length) {
+      // Diagnóstico melhorado: mostra o que a IA devolveu pra facilitar debug
+      console.error('[PDF/IA] Nenhum lançamento com valor > 0. listaItens:', JSON.stringify(listaItens, null, 2));
+      throw new Error('IA não encontrou valores válidos no documento. Veja console (F12) para detalhes.');
+    }
 
   } catch(e) {
     console.error('PDF processing error:', e);
@@ -6445,11 +6449,12 @@ async function processarPDFAutoDoc(id, file) {
       if (categoriaEnt === 'cliente')   body.cliente_id = entidadeResolvida.id;
       else                              body.fornecedor_id = entidadeResolvida.id;
     }
-    // Categorização automática: detecta tarifa bancária pela descrição
-    // e cria/reusa a categoria "Tarifas Bancárias" automaticamente.
-    const nomeCatAuto = _detectarTarifaBancaria(descricao);
-    if (nomeCatAuto && tipo === 'despesa') {
-      const catId = await _garantirCategoria(nomeCatAuto, 'despesa');
+    // Categorização automática: detecta tarifa, tributo, aplicação ou
+    // recebimento de cobrança pela descrição e cria/reusa a categoria.
+    const catAuto = _detectarCategoriaAuto(descricao, tipo);
+    if (catAuto) {
+      const tipoCat = catAuto.tipo === 'ambos' ? tipo : catAuto.tipo;
+      const catId = await _garantirCategoria(catAuto.nome, tipoCat);
       if (catId) body.categoria_id = catId;
     }
 
@@ -7856,25 +7861,45 @@ async function _cnpjExisteComoTenant(cnpj) {
 }
 
 // Detecta se uma descrição de lançamento é de tarifa bancária ou movimentação
-// interna do banco (cobrança automática, plano de capital, manutenção etc).
-// Retorna o nome sugerido da categoria, ou null se não for tarifa.
-const _PADROES_TARIFA = [
-  /\bTARIFA\b/i,
-  /\bCESTA\b/i,
-  /\bMANUTEN[CÇ][AÃ]O\b/i,
-  /\bIOF\b/i,
-  /\bANUIDADE\b/i,
-  /\bBAIXA\s+DE\s+T[ÍI]TULO/i,
-  /\bPLANO\s+(INT\s+)?CAPITAL/i,
-  /\bINTEGR\.?\s*CAPITAL/i,
-  /\bENCERRAMENTO\s+DE\s+CONTA/i,
-  /\bDOC\s+ELET/i,
-  /\bTED\s+ELET/i,
+// interna do banco. Retorna o nome da categoria ou null se não identificar.
+const _CATEGORIAS_AUTO = [
+  // Tarifas/encargos (despesa)
+  { nome: 'Tarifas Bancárias',  tipo: 'despesa', padroes: [
+    /\bTARIFA\b/i, /\bCESTA\b/i, /\bMANUTEN[CÇ][AÃ]O\b/i, /\bIOF\b/i,
+    /\bANUIDADE\b/i, /\bBAIXA\s+DE\s+T[ÍI]TULO/i, /\bPLANO\s+(INT\s+)?CAPITAL/i,
+    /\bINTEGR\.?\s*CAPITAL/i, /\bENCERRAMENTO\s+DE\s+CONTA/i,
+    /\bDOC\s+ELET/i, /\bTED\s+ELET/i,
+  ]},
+  // Tributos (despesa) — Receita Federal, INSS, ISS, ICMS etc.
+  { nome: 'Tributos',           tipo: 'despesa', padroes: [
+    /\bRECEITA\s+FEDERAL\b/i, /\bDARF\b/i, /\bDAS\b/i, /\bGPS\b/i,
+    /\bINSS\b/i, /\bISS\b/i, /\bICMS\b/i, /\bIPVA\b/i, /\bIPTU\b/i,
+    /\bSIMPLES\s+NACIONAL\b/i, /\bFGTS\b/i,
+  ]},
+  // Aplicações financeiras (despesa OU receita — neutro, deixa o tipo do lançamento decidir)
+  { nome: 'Aplicações Financeiras', tipo: 'ambos', padroes: [
+    /\bAPLIC\.?\s*FINANC/i, /\bRESGATE\s+APLIC/i, /\bFUNDOS\s+CAPTACAO/i,
+    /\bRENDIMENTO\s+APLIC/i,
+  ]},
+  // Cobranças recebidas (receita) — boletos liquidados
+  { nome: 'Recebimentos de Cobrança', tipo: 'receita', padroes: [
+    /\bLIQ\.?\s*COBRANCA/i, /\bLIQUIDAC[AÃ]O\s+(?:DE\s+)?COBRANC/i,
+  ]},
 ];
-function _detectarTarifaBancaria(descricao) {
+
+function _detectarCategoriaAuto(descricao, tipo) {
   const d = String(descricao || '');
-  for (const re of _PADROES_TARIFA) if (re.test(d)) return 'Tarifas Bancárias';
+  for (const cat of _CATEGORIAS_AUTO) {
+    if (cat.tipo !== 'ambos' && cat.tipo !== tipo) continue;
+    for (const re of cat.padroes) if (re.test(d)) return cat;
+  }
   return null;
+}
+
+// Mantida para compatibilidade com código que chama o nome antigo
+function _detectarTarifaBancaria(descricao) {
+  const cat = _detectarCategoriaAuto(descricao, 'despesa');
+  return cat && cat.nome === 'Tarifas Bancárias' ? cat.nome : null;
 }
 
 // Garante que a categoria existe no tenant ativo. Se não existir, cria.

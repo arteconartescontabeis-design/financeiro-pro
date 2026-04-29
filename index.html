@@ -5116,8 +5116,8 @@ function handleDocInput(input) {
 function adicionarFilaItem(id, nome, status, msg, tipo) {
   const fila = $id('doc-fila');
   if (!fila) return;
-  const cores = { processando:'var(--amber)', ok:'var(--green)', erro:'var(--red)' };
-  const icons = { processando:'⏳', ok:'✅', erro:'❌' };
+  const cores = { processando:'var(--amber)', ok:'var(--green)', erro:'var(--red)', cancelado:'var(--text-3)' };
+  const icons = { processando:'⏳', ok:'✅', erro:'❌', cancelado:'⊘' };
   const el = document.getElementById('fila-'+id);
   const html_item = `
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;display:flex;align-items:center;gap:12px">
@@ -6137,6 +6137,61 @@ async function _autorizarSemCNPJ(fileName, tipoDoc, dadosExtras) {
   return { motivo: autorizado.motivo };
 }
 
+// Detecta se o nome do arquivo sugere extrato bancário.
+// PDF de extrato é um caso ruim pra IA: muitas linhas, formato variável,
+// IA tende a errar (retorna primeira linha ou "se perde" no prompt).
+// OFX/CSV é determinístico e o caminho oficial — esta detecção sugere
+// ao usuário trocar antes de gastar chamada de API.
+const _PADROES_EXTRATO_NOME = [
+  /\bextrato\b/i,
+  /\bextracto\b/i,           // PT-PT
+  /(^|[\s_\-.])statement([\s_\-.]|$)/i,  // EN — underscore conta como boundary
+  /(^|[\s_\-.])account[_\s\-]?stmt([\s_\-.]|$)/i,
+  /(^|[\s_\-.])(ext|stmt)[_\-]\d/i,    // ext_2026, stmt_04 etc
+  /^extrato/i,
+  /sicredi.*extrato|extrato.*sicredi/i,
+];
+function _pareceExtrato(file) {
+  if (!file || !file.name) return false;
+  const nome = String(file.name);
+  for (const re of _PADROES_EXTRATO_NOME) if (re.test(nome)) return true;
+  return false;
+}
+
+// Modal de aviso quando o usuário arrasta um PDF que parece extrato.
+// Resolve com 'ofx' (cancelar e usar OFX) ou 'continuar' (PDF/IA mesmo assim).
+function _modalAvisoExtrato(fileName) {
+  return new Promise((resolve) => {
+    openModal('💡 Recomendação: use OFX para extratos', `
+      <div style="font-size:13px;color:var(--text);background:var(--blue-lt,rgba(91,122,224,.10));border:1px solid var(--blue,rgba(91,122,224,.35));padding:13px 14px;border-radius:9px;margin-bottom:14px;line-height:1.6">
+        <strong>Identificamos que <span style="font-family:var(--mono);font-size:12px">${fileName}</span> pode ser um extrato bancário.</strong>
+      </div>
+
+      <div style="font-size:12.5px;line-height:1.7;color:var(--text-2);margin-bottom:14px">
+        Para extratos, recomendamos <strong>baixar o arquivo OFX</strong> no seu Internet Banking (Sicredi → Conta Corrente → Extrato → Exportar OFX) e arrastá-lo na seção <strong>"Extrato OFX/CSV"</strong>.
+      </div>
+
+      <div style="background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:11px 13px;margin-bottom:6px;font-size:12px;line-height:1.6">
+        <div style="font-weight:700;color:var(--text-2);margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em;font-size:10px">Por quê?</div>
+        <ul style="margin:0;padding-left:18px;color:var(--text-2)">
+          <li><strong>Sem erros:</strong> OFX traz dados exatos do banco, sem interpretação</li>
+          <li><strong>Mais rápido:</strong> processa instantaneamente, não chama IA</li>
+          <li><strong>CNPJs corretos:</strong> não há risco de a IA misturar dados</li>
+        </ul>
+      </div>
+    `,
+    `<button class="btn btn-outline" id="aviso-ext-continuar">Continuar com PDF/IA</button>
+     <button class="btn btn-gold" id="aviso-ext-ofx">Cancelar e usar OFX</button>`);
+
+    document.getElementById('aviso-ext-ofx').onclick = () => {
+      closeModal(); resolve('ofx');
+    };
+    document.getElementById('aviso-ext-continuar').onclick = () => {
+      closeModal(); resolve('continuar');
+    };
+  });
+}
+
 
 async function processarPDFAutoDoc(id, file) {
   const apiKey = getClaudeApiKey();
@@ -6144,6 +6199,19 @@ async function processarPDFAutoDoc(id, file) {
     adicionarFilaItem(id, file.name, 'erro',
       'Chave da Claude API não configurada. Vá em Configurações → Claude API para configurar.', null);
     return;
+  }
+
+  // ── Detecção de extrato pelo nome do arquivo (Camada 1) ──
+  // PDF de extrato bancário é caso ruim pra IA. Recomendamos OFX antes
+  // de gastar chamada de API. O usuário pode escolher continuar mesmo assim.
+  if (_pareceExtrato(file)) {
+    const escolha = await _modalAvisoExtrato(file.name);
+    if (escolha === 'ofx') {
+      adicionarFilaItem(id, file.name, 'cancelado',
+        'Importação cancelada — use OFX para extratos. Baixe em: Sicredi → Conta Corrente → Extrato → Exportar OFX.', null);
+      return;
+    }
+    // 'continuar' → segue o fluxo normal (PDF/IA com risco conhecido)
   }
 
   adicionarFilaItem(id, file.name, 'processando', 'Enviando PDF para a IA...', null);

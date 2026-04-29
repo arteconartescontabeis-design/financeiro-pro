@@ -817,6 +817,42 @@ async function supa(method, table, opts = {}) {
   return true;
 }
 
+// ── Helpers de mitigação de rate limit do Supabase Auth (v18) ──
+// Throttle: bloqueia chamadas repetidas de uma função num intervalo curto.
+// Útil pra prevenir duplo-clique em botões de auth (signup, login, exclusão
+// com senha) que disparam 429 (Too Many Requests) no Supabase.
+// Uso: const handle = _throttle(fn, 5000); botao.onclick = handle;
+function _throttle(fn, ms) {
+  let lastCall = 0;
+  let inFlight = false;
+  return async function throttled(...args) {
+    const now = Date.now();
+    if (inFlight) return;            // já em execução — ignora
+    if (now - lastCall < ms) return; // dentro do intervalo — ignora
+    lastCall = now;
+    inFlight = true;
+    try { return await fn.apply(this, args); }
+    finally { inFlight = false; }
+  };
+}
+
+// Detecta erros de rate-limit do Auth e devolve mensagem amigável.
+// Retorna { is429: true, msg } se for rate limit, ou { is429: false } senão.
+// Uso: const r = _tratarErroAuth(err); if (r.is429) { toast(r.msg, 'error'); return; }
+function _tratarErroAuth(err) {
+  const m = String(err?.message || err || '').toLowerCase();
+  const code = err?.code || err?.status || 0;
+  const is429 = code === 429
+    || /rate[-\s]?limit/i.test(m)
+    || /too\s+many\s+requests/i.test(m)
+    || /muitas\s+tentativas/i.test(m);
+  if (!is429) return { is429: false };
+  return {
+    is429: true,
+    msg: 'Muitas tentativas em pouco tempo. O Supabase bloqueou novas chamadas de autenticação por alguns minutos. Aguarde de 5 a 30 minutos antes de tentar de novo.'
+  };
+}
+
 async function supaAuth(method, path, body) {
   const res = await fetch(`${SUPA_URL}/auth/v1/${path}`, {
     method, headers: { 'apikey': SUPA_KEY, 'Content-Type': 'application/json' },
@@ -8787,22 +8823,19 @@ async function criarUsuarioDireto() {
     // Re-seta o tenant na sessão Postgres
     try { await supaRpc('fin_set_tenant', { p_tenant_id: adminTenant }); } catch(_) {}
 
-    // 3) INSERT em fin_usuarios (executando como admin)
-    const usCriados = await supa('POST', 'fin_usuarios', {
-      body: { tenant_id: APP.tenantId, auth_id: newAuthId, nome, email,
-              perfil: tpl === 'admin' ? 'admin' : 'usuario' },
-      returning: true
+    // 3) RPC única: cria fin_usuarios + fin_usuarios_empresas com permissões
+    //    do template, validando permissão do admin chamador no banco.
+    //    Substitui os 2 INSERTs diretos que sofriam 403 por RLS.
+    const r = await supaRpc('fin_admin_vincular_usuario', {
+      p_auth_id:   newAuthId,
+      p_tenant_id: APP.tenantId,
+      p_template:  tpl,
+      p_email:     email,
+      p_nome:      nome
     });
-    const novoUserId = usCriados[0]?.id;
-    if (!novoUserId) throw new Error('Falha ao criar registro em fin_usuarios');
-
-    // 4) INSERT em fin_usuarios_empresas com permissões do template
-    const perms = await supaRpc('fin_template_permissoes', { p_template: tpl });
-    await supa('POST', 'fin_usuarios_empresas', {
-      body: { usuario_id: novoUserId, tenant_id: APP.tenantId,
-              template: tpl, permissoes: perms,
-              is_default: true, ativo: true }
-    });
+    if (!r || r.sucesso !== true) {
+      throw new Error('Falha ao vincular usuário: ' + JSON.stringify(r));
+    }
 
     closeModal();
     toast(`Usuário criado! Senha: ${senha} (anote ou copie)`, 'success', 10000);
@@ -8812,9 +8845,15 @@ async function criarUsuarioDireto() {
     APP.token    = adminToken;
     APP.user     = adminUser;
     APP.tenantId = adminTenant;
-    toast('Erro: ' + e.message, 'error', 6000);
+    // Trata 429 (rate limit) com mensagem clara
+    const r = _tratarErroAuth(e);
+    if (r.is429) toast(r.msg, 'error', 12000);
+    else         toast('Erro: ' + e.message, 'error', 6000);
   }
 }
+// Throttle 5s: previne duplo-clique no botão "Criar usuário" causando
+// múltiplas tentativas de signup (que disparam 429 do Supabase Auth).
+window.criarUsuarioDireto = _throttle(criarUsuarioDireto, 5000);
 
 // ── MODAL: EDITAR USUÁRIO ──────────────────────────────────────
 // ── MÓDULOS PARA MATRIZ DE PERMISSÕES ──────────────────────────
@@ -9514,6 +9553,18 @@ async function criarUsuarioEmpresaSA(tenantId, nomeEmpresa) {
   if (!nome || !email || !senha) { toast('Preencha todos os campos.', 'error'); return; }
   if (senha.length < 6) { toast('Senha mínima de 6 caracteres.', 'error'); return; }
 
+  // Confirmação dobrada (superadmin): pede "CRIAR" pra evitar clique acidental.
+  // Usar prompt nativo é proposital — modal customizado dentro de modal vira labirinto.
+  const confirmacao = prompt(
+    `Você está prestes a CRIAR um novo usuário com acesso à empresa "${nomeEmpresa}".\n\n` +
+    `Nome: ${nome}\nE-mail: ${email}\nPerfil: ${perfil}\n\n` +
+    `Digite a palavra CRIAR (em maiúsculas) para confirmar:`
+  );
+  if (confirmacao !== 'CRIAR') {
+    toast('Criação cancelada.', 'default');
+    return;
+  }
+
   try {
     toast('Criando acesso...', 'default', 8000);
 
@@ -9608,6 +9659,11 @@ function excluirEmpresaSA(tenantId, nome) {
         Esta ação é <strong>irreversível</strong>.
       </div>
       <div class="form-field">
+        <label class="form-label">Para confirmar, digite o nome da empresa:</label>
+        <input class="form-input" type="text" id="sa-del-nome" placeholder="${nome}"
+          autocomplete="off" spellcheck="false" style="margin-bottom:12px">
+      </div>
+      <div class="form-field">
         <label class="form-label">Digite sua senha de admin para confirmar</label>
         <input class="form-input" type="password" id="sa-del-senha" placeholder="Sua senha de acesso">
       </div>
@@ -9618,6 +9674,13 @@ function excluirEmpresaSA(tenantId, nome) {
 }
 
 async function confirmarExcluirEmpresaSA(tenantId, nome) {
+  // 1) Validar que o nome digitado bate com o nome da empresa
+  //    (anti-acidente — exige digitar o nome exato pra confirmar)
+  const nomeDigitado = $id('sa-del-nome')?.value?.trim() || '';
+  if (nomeDigitado !== nome) {
+    toast(`Nome digitado não confere. Esperado: "${nome}".`, 'error', 6000);
+    return;
+  }
   const senha = $id('sa-del-senha')?.value?.trim();
   if (!senha) { toast('Digite sua senha para confirmar.', 'error'); return; }
 
@@ -9629,9 +9692,17 @@ async function confirmarExcluirEmpresaSA(tenantId, nome) {
       body: JSON.stringify({ email: APP.user.email, password: senha }),
     });
     const data = await res.json();
+    // Trata 429 explicitamente — diferente de senha errada
+    if (res.status === 429 || /rate/i.test(data?.error_description || '')) {
+      const r = _tratarErroAuth({ status: 429 });
+      toast(r.msg, 'error', 12000);
+      return;
+    }
     if (!data.access_token) throw new Error('Senha incorreta.');
   } catch(e) {
-    toast('Senha incorreta. Exclusão cancelada.', 'error');
+    const r = _tratarErroAuth(e);
+    if (r.is429) toast(r.msg, 'error', 12000);
+    else         toast('Senha incorreta. Exclusão cancelada.', 'error');
     return;
   }
 
@@ -9642,6 +9713,9 @@ async function confirmarExcluirEmpresaSA(tenantId, nome) {
     await renderSuperadmin();
   } catch(e) { toast('Erro: ' + e.message, 'error'); }
 }
+// Throttle 5s: previne duplo-clique no botão "Excluir definitivamente"
+// que tenta fazer login pra validar senha (cada erro = 1 hit no Auth → 429).
+window.confirmarExcluirEmpresaSA = _throttle(confirmarExcluirEmpresaSA, 5000);
 
 // ── INIT ──────────────────────────────────────────────────────
 window.addEventListener('load', () => {

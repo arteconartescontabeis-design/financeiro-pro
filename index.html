@@ -3245,19 +3245,41 @@ async function excluirFornecedor(id) {
 
 // ── CATEGORIAS ────────────────────────────────────────────────
 function renderCategorias() {
-  $id('topbar-actions').innerHTML = `<button class="btn btn-gold btn-sm" onclick="modalNovaCategoria()">+ Nova Categoria</button>`;
+  const semVinculo = CATEGORIAS.filter(c => !c.conta_financeira_id).length;
+
+  $id('topbar-actions').innerHTML = `
+    ${semVinculo > 0 ? `<button class="btn btn-outline btn-sm" onclick="modalVincularLote()" title="Vincular categorias ao plano financeiro em massa">🔗 Vincular ao plano (${semVinculo})</button>` : ''}
+    <button class="btn btn-gold btn-sm" onclick="modalNovaCategoria()">+ Nova Categoria</button>
+  `;
   const rec  = CATEGORIAS.filter(c => c.tipo === 'receita');
   const desp = CATEGORIAS.filter(c => c.tipo === 'despesa');
   const amb  = CATEGORIAS.filter(c => c.tipo === 'ambos');
+
+  // Lookup rápido conta financeira por id
+  const contasFin = (PLANOS_STATE?.financeiro?.contas) || [];
+  const contaFinPorId = new Map(contasFin.map(c => [c.id, c]));
+  const planoLabel = (id) => {
+    const c = contaFinPorId.get(id);
+    return c ? `${c.codigo} · ${c.descricao}` : null;
+  };
+
   const grupo = (titulo, lista, cor) => lista.length === 0 ? '' : `
     <div class="card" style="margin-bottom:16px">
       <strong style="font-size:13px;color:${cor};display:block;margin-bottom:12px">${titulo}</strong>
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px">
-        ${lista.map(c=>`<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--bg-2);border-radius:9px;border:1px solid var(--border)">
-          <span>${c.icone||'📁'}</span>
-          <div style="width:7px;height:7px;border-radius:50%;background:${c.cor};flex-shrink:0"></div>
-          <span style="font-size:13px;font-weight:500;color:var(--text)">${c.nome}</span>
-        </div>`).join('')}
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:8px">
+        ${lista.map(c=>{
+          const vinc = planoLabel(c.conta_financeira_id);
+          return `<div onclick="modalEditarCategoria('${c.id}')" style="display:flex;flex-direction:column;gap:4px;padding:9px 11px;background:var(--bg-2);border-radius:9px;border:1px solid var(--border);cursor:pointer;transition:var(--tr)" onmouseover="this.style.borderColor='var(--gold)'" onmouseout="this.style.borderColor='var(--border)'">
+            <div style="display:flex;align-items:center;gap:8px">
+              <span>${c.icone||'📁'}</span>
+              <div style="width:7px;height:7px;border-radius:50%;background:${c.cor||'#9ca3af'};flex-shrink:0"></div>
+              <span style="font-size:13px;font-weight:600;color:var(--text);flex:1">${c.nome}</span>
+            </div>
+            ${vinc
+              ? `<div style="font-size:10.5px;color:var(--text-3);font-family:var(--mono);margin-left:23px" title="${vinc}">${vinc}</div>`
+              : `<div style="font-size:10.5px;color:#c0392b;margin-left:23px;font-style:italic">⚠ sem vínculo ao plano</div>`}
+          </div>`;
+        }).join('')}
       </div>
     </div>`;
   $id('page-content').innerHTML =
@@ -3267,7 +3289,37 @@ function renderCategorias() {
     (CATEGORIAS.length === 0 ? `<div class="empty-state"><div class="empty-icon">📁</div><h3>Nenhuma categoria</h3></div>` : '');
 }
 
-function modalNovaCategoria() {
+// ── Helper: garante que PLANOS_STATE.financeiro.contas está carregado ──
+async function _carregarContasFinanceirasSeNecessario() {
+  if (PLANOS_STATE?.financeiro?.contas?.length) return;
+  if (typeof planosCarregarDados === 'function') {
+    await planosCarregarDados();
+  }
+}
+
+// ── Datalist com contas financeiras analíticas (para o modal) ──
+function _datalistContasFinanceiras(idDatalist) {
+  const contas = (PLANOS_STATE?.financeiro?.contas || [])
+    .filter(c => c.tipo === 'A' && c.ativo !== false)
+    .sort((a,b) => (a.codigo||'').localeCompare(b.codigo||''));
+  const opts = contas.map(c => `<option data-id="${c.id}" value="${c.codigo} · ${c.descricao}"></option>`).join('');
+  return `<datalist id="${idDatalist}">${opts}</datalist>`;
+}
+
+function _resolveContaFinanceira(textoInput) {
+  if (!textoInput) return null;
+  const codigo = textoInput.split('·')[0].trim();
+  const c = (PLANOS_STATE?.financeiro?.contas || []).find(c => c.codigo === codigo && c.tipo === 'A');
+  return c?.id || null;
+}
+
+function _labelContaFinanceira(id) {
+  const c = (PLANOS_STATE?.financeiro?.contas || []).find(c => c.id === id);
+  return c ? `${c.codigo} · ${c.descricao}` : '';
+}
+
+async function modalNovaCategoria() {
+  await _carregarContasFinanceirasSeNecessario();
   openModal('Nova Categoria', `
     <div class="form-grid">
       <div class="form-field full"><label class="form-label">Nome *</label><input class="form-input" id="ncat-nome" placeholder="Ex: Marketing"></div>
@@ -3277,6 +3329,12 @@ function modalNovaCategoria() {
         <option value="ambos">Ambos</option>
       </select></div>
       <div class="form-field"><label class="form-label">Ícone</label><input class="form-input" id="ncat-icone" placeholder="📁" maxlength="2"></div>
+      <div class="form-field full">
+        <label class="form-label">Vincular a conta do Plano Financeiro <span style="font-weight:400;color:var(--text-3)">(opcional, mas recomendado)</span></label>
+        <input class="form-input" id="ncat-plano" list="dl-plano-fin" placeholder="Digite código ou descrição (ex: 1.1.03 ou Prestação)" autocomplete="off">
+        ${_datalistContasFinanceiras('dl-plano-fin')}
+        <div style="font-size:11px;color:var(--text-3);margin-top:4px">Vincular ajuda a gerar DRE agrupado pelo plano financeiro/contábil.</div>
+      </div>
     </div>`,
     `<button class="btn btn-outline" onclick="closeModal()">Cancelar</button>
      <button class="btn btn-gold" onclick="salvarCategoria()">Salvar</button>`
@@ -3287,17 +3345,171 @@ async function salvarCategoria() {
   const nome = $id('ncat-nome').value.trim();
   if (!nome) { toast('Informe o nome.', 'error'); return; }
   try {
-    const criada = await supa('POST', 'fin_categorias', { returning: true, body: {
+    const payload = {
       tenant_id: APP.tenantId, nome,
       tipo:  $id('ncat-tipo').value,
       icone: $id('ncat-icone').value || '📁',
-    }});
+    };
+    const planoTexto = $id('ncat-plano')?.value?.trim();
+    if (planoTexto) {
+      const cfId = _resolveContaFinanceira(planoTexto);
+      if (cfId) payload.conta_financeira_id = cfId;
+    }
+    const criada = await supa('POST', 'fin_categorias', { returning: true, body: payload });
     closeModal(); toast('Categoria criada!', 'success');
-    // ── Performance · Fase B ──
     if (Array.isArray(criada) && criada[0]) atualizarLocal(CATEGORIAS, criada[0]);
     rerenderTelaAtual();
   } catch(e) { toast('Erro: ' + e.message, 'error'); }
 }
+
+async function modalEditarCategoria(id) {
+  if (!isAdmin() && !podeEditar('cadastros')) {
+    toast('Sem permissão para editar.', 'error'); return;
+  }
+  const c = CATEGORIAS.find(x => x.id === id);
+  if (!c) return;
+  await _carregarContasFinanceirasSeNecessario();
+
+  openModal('Editar Categoria', `
+    <div class="form-grid">
+      <div class="form-field full"><label class="form-label">Nome *</label><input class="form-input" id="ecat-nome" value="${(c.nome||'').replace(/"/g,'&quot;')}"></div>
+      <div class="form-field"><label class="form-label">Tipo *</label><select class="form-select" id="ecat-tipo">
+        <option value="receita" ${c.tipo==='receita'?'selected':''}>Receita</option>
+        <option value="despesa" ${c.tipo==='despesa'?'selected':''}>Despesa</option>
+        <option value="ambos"   ${c.tipo==='ambos'  ?'selected':''}>Ambos</option>
+      </select></div>
+      <div class="form-field"><label class="form-label">Ícone</label><input class="form-input" id="ecat-icone" value="${c.icone||'📁'}" maxlength="2"></div>
+      <div class="form-field full">
+        <label class="form-label">Vincular a conta do Plano Financeiro</label>
+        <input class="form-input" id="ecat-plano" list="dl-plano-fin-edit" value="${_labelContaFinanceira(c.conta_financeira_id)}" placeholder="Digite código ou descrição" autocomplete="off">
+        ${_datalistContasFinanceiras('dl-plano-fin-edit')}
+        <div style="font-size:11px;color:var(--text-3);margin-top:4px">Deixe vazio para remover o vínculo.</div>
+      </div>
+    </div>`,
+    `<button class="btn btn-outline" onclick="closeModal()">Cancelar</button>
+     <button class="btn btn-red btn-sm" style="margin-right:auto" onclick="excluirCategoria('${id}')">Excluir</button>
+     <button class="btn btn-gold" onclick="salvarEdicaoCategoria('${id}')">Salvar</button>`
+  );
+}
+
+async function salvarEdicaoCategoria(id) {
+  const nome = $id('ecat-nome').value.trim();
+  if (!nome) { toast('Informe o nome.', 'error'); return; }
+  try {
+    const planoTexto = $id('ecat-plano')?.value?.trim();
+    const update = {
+      nome,
+      tipo:  $id('ecat-tipo').value,
+      icone: $id('ecat-icone').value || '📁',
+      conta_financeira_id: planoTexto ? _resolveContaFinanceira(planoTexto) : null,
+    };
+    await supa('PATCH', 'fin_categorias', { params: { id: 'eq.' + id }, body: update });
+    const c = CATEGORIAS.find(x => x.id === id);
+    if (c) Object.assign(c, update);
+    closeModal();
+    toast('Categoria atualizada.', 'success');
+    rerenderTelaAtual();
+  } catch(e) { toast('Erro: ' + e.message, 'error'); }
+}
+
+async function excluirCategoria(id) {
+  if (!confirm('Desativar esta categoria? Lançamentos existentes não são afetados.')) return;
+  try {
+    await supa('PATCH', 'fin_categorias', { params: { id: 'eq.' + id }, body: { ativo: false } });
+    removerLocal(CATEGORIAS, id);
+    closeModal();
+    toast('Categoria desativada.', 'success');
+    rerenderTelaAtual();
+  } catch(e) { toast('Erro: ' + e.message, 'error'); }
+}
+
+// ── Modal de vinculação em lote (sugestões automáticas via RPC) ──
+async function modalVincularLote() {
+  if (!isAdmin() && !podeEditar('cadastros')) {
+    toast('Sem permissão.', 'error'); return;
+  }
+  await _carregarContasFinanceirasSeNecessario();
+
+  // Carrega sugestões via RPC
+  let sugestoes = [];
+  try {
+    sugestoes = await supaRpc('fin_categorias_sugerir_vinculo', { p_tenant_id: APP.tenantId }) || [];
+  } catch(e) { console.warn('sugerir_vinculo:', e.message); }
+
+  const semVinculo = CATEGORIAS.filter(c => !c.conta_financeira_id);
+  if (semVinculo.length === 0) {
+    toast('Todas as categorias já estão vinculadas!', 'success'); return;
+  }
+
+  // Mapa categoria_id → sugestão
+  const sugMap = new Map();
+  sugestoes.forEach(s => sugMap.set(s.categoria_id, s));
+
+  const linhas = semVinculo.map(c => {
+    const s = sugMap.get(c.id);
+    const sugLabel = s ? `${s.conta_codigo} · ${s.conta_descricao}` : '';
+    return `
+      <tr>
+        <td style="padding:6px 8px">
+          <span style="font-weight:600">${c.icone||'📁'} ${c.nome}</span>
+          <span class="badge ${c.tipo==='receita'?'badge-green':c.tipo==='despesa'?'badge-red':'badge-gray'}" style="margin-left:6px">${c.tipo}</span>
+        </td>
+        <td style="padding:6px 8px">
+          <input class="form-input" id="vl-${c.id}" list="dl-plano-fin-lote"
+            value="${sugLabel}" placeholder="Digite ou selecione..."
+            style="font-size:12px;padding:5px 8px" autocomplete="off">
+          ${s ? `<div style="font-size:10px;color:var(--text-3);margin-top:2px">💡 sugestão (${(s.similaridade*100).toFixed(0)}% similar)</div>` : ''}
+        </td>
+      </tr>`;
+  }).join('');
+
+  openModal('Vincular Categorias ao Plano Financeiro', `
+    <div style="font-size:12.5px;color:var(--text-2);margin-bottom:14px;line-height:1.6">
+      ${semVinculo.length} categoria${semVinculo.length>1?'s':''} sem vínculo. As sugestões abaixo foram geradas automaticamente por similaridade de nome — revise e ajuste antes de salvar.
+    </div>
+    <div style="max-height:50vh;overflow-y:auto;border:1px solid var(--border);border-radius:8px">
+      <table style="width:100%;font-size:12.5px">
+        <thead style="background:var(--surface-2);position:sticky;top:0;z-index:1">
+          <tr>
+            <th style="text-align:left;padding:8px;font-weight:700">Categoria</th>
+            <th style="text-align:left;padding:8px;font-weight:700">Conta do Plano Financeiro</th>
+          </tr>
+        </thead>
+        <tbody>${linhas}</tbody>
+      </table>
+      ${_datalistContasFinanceiras('dl-plano-fin-lote')}
+    </div>
+    <div style="font-size:11px;color:var(--text-3);margin-top:10px">
+      💡 Deixe vazio para pular uma categoria. Você pode vincular depois individualmente.
+    </div>
+  `, `
+    <button class="btn btn-outline" onclick="closeModal()">Cancelar</button>
+    <button class="btn btn-gold" onclick="salvarVinculacaoLote()">Salvar Vínculos</button>
+  `);
+}
+
+async function salvarVinculacaoLote() {
+  const semVinculo = CATEGORIAS.filter(c => !c.conta_financeira_id);
+  let salvas = 0, ignoradas = 0, erros = 0;
+  for (const c of semVinculo) {
+    const inp = $id(`vl-${c.id}`);
+    const texto = inp?.value?.trim();
+    if (!texto) { ignoradas++; continue; }
+    const cfId = _resolveContaFinanceira(texto);
+    if (!cfId) { ignoradas++; continue; }
+    try {
+      await supa('PATCH', 'fin_categorias', { params: { id: 'eq.' + c.id }, body: { conta_financeira_id: cfId } });
+      c.conta_financeira_id = cfId;
+      salvas++;
+    } catch(e) { erros++; }
+  }
+  closeModal();
+  if (salvas > 0) toast(`${salvas} vínculo${salvas>1?'s':''} salvo${salvas>1?'s':''}.${ignoradas>0?` (${ignoradas} sem alteração)`:''}${erros>0?` ⚠ ${erros} erro${erros>1?'s':''}`:''}`, salvas > 0 ? 'success' : 'error');
+  else toast('Nenhuma categoria foi alterada.', 'default');
+  rerenderTelaAtual();
+}
+
+
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PLANOS DE CONTAS (v19) ─ Financeiro + Contábil + De-Para

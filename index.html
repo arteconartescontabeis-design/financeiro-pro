@@ -781,6 +781,14 @@ tbody td { padding: 11px 16px; font-size: 13px; }
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 14H7v-2h5v2zm5-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg>
         DRE
       </button>
+      <button class="nav-item" onclick="go('razao')" data-page="razao">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 3h18v2H3V3zm0 4h18v2H3V7zm0 4h12v2H3v-2zm0 4h12v2H3v-2zm0 4h18v2H3v-2zm14-8h4v6h-4v-6z"/></svg>
+        Razão Contábil
+      </button>
+      <button class="nav-item" onclick="go('balancete')" data-page="balancete">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M5 3h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2zm0 4v2h14V7H5zm0 4v2h6v-2H5zm8 0v2h6v-2h-6zm-8 4v2h6v-2H5zm8 0v2h6v-2h-6z"/></svg>
+        Balancete
+      </button>
       <button class="nav-item" onclick="go('metas')" data-page="metas">
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm3.88-11.71L10 14.17l-1.88-1.88a.996.996 0 1 0-1.41 1.41l2.59 2.59c.39.39 1.02.39 1.41 0L17.3 9.7a.996.996 0 0 0 0-1.41c-.39-.39-1.03-.39-1.42 0z"/></svg>
         Metas
@@ -1392,6 +1400,8 @@ const PAGES = {
   contas:       { title: 'Caixa / Bancos',  render: renderContas },
   fluxo:        { title: 'Fluxo de Caixa',  render: renderFluxo },
   dre:          { title: 'DRE',             render: renderDRE },
+  razao:        { title: 'Razão Contábil',  render: renderRazao },
+  balancete:    { title: 'Balancete',       render: renderBalancete },
   metas:        { title: 'Metas',           render: renderMetas },
   relatorios:   { title: 'Relatórios',      render: renderRelatorios },
   clifinanceiro:{ title: 'Clientes · A Receber', render: renderClientesAReceber },
@@ -2937,7 +2947,7 @@ function renderDRE() {
             <strong style="color:var(--gold)">⚠ ${semVincQtd} categoria${semVincQtd===1?'':'s'} sem vínculo</strong>
             ${semVincValor>0 ? ` — ${fmtMoeda(semVincValor)} no período aparecerão como "(sem vínculo)"` : ''}
           </div>
-          <button class="btn btn-sm btn-gold" onclick="navegar('categorias')">Vincular agora</button>
+          <button class="btn btn-sm btn-gold" onclick="go('categorias')">Vincular agora</button>
         </div>`;
     }
   }
@@ -3017,6 +3027,529 @@ function renderDRE() {
       </tbody>
     </table></div>
   </div>`;
+}
+
+// ── RAZÃO CONTÁBIL ────────────────────────────────────────────
+// Mostra todos os lançamentos (receitas + despesas) de uma conta contábil
+// num período, em ordem cronológica, com saldo acumulado.
+// Caminho: lançamento → categoria → conta_contabil_id → fin_plano_contabil
+// Modo simplificado: apenas a perna de receita/despesa (sem contrapartida).
+// Conta sintética soma todos os filhos (analíticas descendentes).
+function renderRazao() {
+  // Carregar plano contábil em background se necessário
+  if (typeof _carregarContasFinanceirasSeNecessario === 'function') {
+    if (!PLANOS_STATE?.contabil?.contas?.length && typeof planosCarregarDados === 'function') {
+      planosCarregarDados().then(() => {
+        if (APP.pagina === 'razao') renderRazao();
+      }).catch(()=>{});
+    }
+  }
+
+  const periodoSel = window._razaoPeriodo || 'mes';
+  const contaSel   = window._razaoConta   || ''; // id da conta contábil
+  const hoje = new Date();
+  const anoAtual = hoje.getFullYear();
+  const mesAtual = String(hoje.getMonth()+1).padStart(2,'0');
+  const mesStr   = `${anoAtual}-${mesAtual}`;
+
+  const contasCont = (PLANOS_STATE?.contabil?.contas) || [];
+  const contaById  = new Map(contasCont.map(c => [c.id, c]));
+
+  // Calcular conjunto de IDs descendentes (inclui o próprio) para sintéticas
+  function descendentesDe(idRaiz) {
+    const raiz = contaById.get(idRaiz);
+    if (!raiz) return new Set();
+    if (raiz.tipo === 'A') return new Set([idRaiz]);
+    // Sintética: prefixo de código → todos com codigo começando com raiz.codigo
+    const prefixo = raiz.codigo;
+    const ids = new Set();
+    contasCont.forEach(c => {
+      if (c.codigo === prefixo || (c.codigo || '').startsWith(prefixo + '.')) {
+        ids.add(c.id);
+      }
+    });
+    return ids;
+  }
+
+  // Categorias cujo conta_contabil_id está dentro do conjunto selecionado
+  function categoriasDaConta(idsContas) {
+    return new Set(
+      CATEGORIAS
+        .filter(c => c.conta_contabil_id && idsContas.has(c.conta_contabil_id))
+        .map(c => c.id)
+    );
+  }
+
+  // Filtro de período
+  function dentroPeriodo(dataStr) {
+    const m = dataStr?.slice(0, 7);
+    if (periodoSel === 'mes')  return m === mesStr;
+    if (periodoSel === 'ano')  return m?.startsWith(String(anoAtual));
+    return true;
+  }
+  function antesPeriodo(dataStr) {
+    if (!dataStr) return false;
+    if (periodoSel === 'tudo') return false;
+    if (periodoSel === 'mes')  return dataStr < (mesStr + '-01');
+    if (periodoSel === 'ano')  return dataStr < (anoAtual + '-01-01');
+    return false;
+  }
+
+  // Selectbox hierárquico (igual estilo do plano de contas)
+  function selectHierarquico() {
+    if (!contasCont.length) {
+      return `<select class="form-input" disabled style="min-width:280px"><option>Carregando plano contábil…</option></select>`;
+    }
+    const ordenadas = [...contasCont].sort((a, b) => (a.codigo || '').localeCompare(b.codigo || ''));
+    const opts = ordenadas.map(c => {
+      const indent = '&nbsp;&nbsp;'.repeat(Math.max(0, (c.nivel || 1) - 1));
+      const tag = c.tipo === 'A' ? '' : ' [Sintética]';
+      const sel = c.id === contaSel ? 'selected' : '';
+      return `<option value="${c.id}" ${sel}>${indent}${c.codigo} · ${c.descricao}${tag}</option>`;
+    }).join('');
+    return `
+      <select class="form-input" id="razao-conta-select" onchange="window._razaoConta=this.value;renderRazao()" style="min-width:340px;font-family:var(--mono);font-size:12px">
+        <option value="">— Selecione uma conta contábil —</option>
+        ${opts}
+      </select>`;
+  }
+
+  function btnP(p, label) {
+    const active = periodoSel === p;
+    return `<button onclick="window._razaoPeriodo='${p}';renderRazao()" style="padding:7px 14px;border-radius:9px;border:1.5px solid ${active?'var(--gold)':'var(--border-lt)'};background:${active?'var(--gold-lt)':'transparent'};color:${active?'var(--gold)':'var(--text-2)'};font-family:var(--font);font-size:12px;font-weight:600;cursor:pointer">${label}</button>`;
+  }
+
+  const cabecalho = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        ${selectHierarquico()}
+      </div>
+      <div style="display:flex;gap:6px">
+        ${btnP('mes','Este mês')}${btnP('ano','Este ano')}${btnP('tudo','Tudo')}
+      </div>
+    </div>`;
+
+  // Estado: nenhuma conta selecionada
+  if (!contaSel) {
+    const totalContas = contasCont.length;
+    const totalCatComVinc = CATEGORIAS.filter(c => c.conta_contabil_id).length;
+    const totalCat = CATEGORIAS.length;
+    $id('page-content').innerHTML = `
+      ${cabecalho}
+      <div class="card" style="text-align:center;padding:50px 20px">
+        <div style="font-size:48px;margin-bottom:10px">📖</div>
+        <strong style="font-size:15px;color:var(--text);display:block;margin-bottom:6px">Selecione uma conta contábil</strong>
+        <div style="color:var(--text-3);font-size:13px;margin-bottom:16px">
+          Escolha uma conta no seletor acima para ver seus lançamentos no período.
+        </div>
+        <div style="display:inline-flex;gap:18px;font-size:12px;color:var(--text-2);background:var(--surface-2);padding:10px 16px;border-radius:8px">
+          <span><strong style="color:var(--gold)">${totalContas}</strong> contas no plano</span>
+          <span><strong style="color:var(--gold)">${totalCatComVinc}/${totalCat}</strong> categorias vinculadas</span>
+        </div>
+        ${totalCatComVinc < totalCat ? `
+          <div style="margin-top:14px">
+            <button class="btn btn-sm" style="background:var(--surface-2);color:var(--text-2);border:1px solid var(--border-lt)" onclick="go('categorias')">Ver categorias sem vínculo</button>
+          </div>` : ''}
+      </div>`;
+    return;
+  }
+
+  // Conta selecionada — montar razão
+  const conta = contaById.get(contaSel);
+  if (!conta) {
+    $id('page-content').innerHTML = `${cabecalho}<div class="card" style="color:var(--red)">Conta não encontrada.</div>`;
+    return;
+  }
+
+  const idsConta = descendentesDe(contaSel);
+  const idsCategoria = categoriasDaConta(idsConta);
+
+  // Coletar lançamentos
+  function coletarLancamentos(arr, tipo) {
+    return arr
+      .filter(l => idsCategoria.has(l.categoria_id))
+      .map(l => ({
+        data: l.vencimento,
+        historico: l.descricao || '(sem descrição)',
+        documento: l.numero_documento || l.numero_doc || '',
+        valor: parseFloat(l.valor) || 0,
+        tipo, // 'R' (receita) ou 'D' (despesa)
+        categoria: getNome(CATEGORIAS, l.categoria_id),
+        status: l.status,
+        id: l.id,
+      }));
+  }
+  const todasReceitas = coletarLancamentos(RECEITAS.filter(r => r.status === 'recebido'), 'R');
+  const todasDespesas = coletarLancamentos(DESPESAS.filter(d => d.status === 'pago'), 'D');
+  const todos = [...todasReceitas, ...todasDespesas].sort((a, b) => (a.data || '').localeCompare(b.data || ''));
+
+  // Saldo anterior (lançamentos antes do período)
+  let saldoAnterior = 0;
+  todos.forEach(l => {
+    if (antesPeriodo(l.data)) {
+      // Convenção contábil simplificada:
+      // Conta de receita → crédito aumenta (entrada positiva)
+      // Conta de despesa → débito aumenta (entrada positiva)
+      // Para o razão, mostramos saldo "natural" da conta (positivo = movimento normal)
+      saldoAnterior += l.valor;
+    }
+  });
+
+  // Lançamentos do período
+  const doPeriodo = todos.filter(l => dentroPeriodo(l.data));
+  let saldo = saldoAnterior;
+
+  // Determinar natureza da conta a partir do código (1 = ativo, 2 = passivo, 3 = PL, 4 = receita, 5 = despesa)
+  // No nosso fin_plano_contabil pode usar grupo. Vamos inferir pelo grupo de pelo menos uma categoria.
+  // Mais simples: olhar o tipo das categorias vinculadas — se a maioria forem receita, é "receita"; senão "despesa".
+  let recCount = 0, despCount = 0;
+  CATEGORIAS.forEach(c => {
+    if (idsCategoria.has(c.id)) {
+      if (c.tipo === 'receita') recCount++;
+      else if (c.tipo === 'despesa') despCount++;
+    }
+  });
+  const naturezaCredito = recCount >= despCount; // true = receita (crédito), false = despesa (débito)
+  const colDebitoLabel  = naturezaCredito ? 'Estorno' : 'Débito';
+  const colCreditoLabel = naturezaCredito ? 'Crédito' : 'Estorno';
+
+  // Render
+  const periodoLabel = periodoSel === 'mes' ? `${mesAtual}/${anoAtual}` : periodoSel === 'ano' ? `${anoAtual}` : 'Todo o período';
+  const totalDeb = doPeriodo.filter(l => l.tipo === 'D').reduce((s, l) => s + l.valor, 0);
+  const totalCre = doPeriodo.filter(l => l.tipo === 'R').reduce((s, l) => s + l.valor, 0);
+  const totalMov = naturezaCredito ? totalCre - totalDeb : totalDeb - totalCre;
+  const saldoFinal = saldoAnterior + totalMov;
+
+  $id('page-content').innerHTML = `
+    ${cabecalho}
+
+    <div class="card" style="margin-bottom:14px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px">
+        <div>
+          <div style="font-family:var(--mono);font-size:11px;color:var(--text-3);margin-bottom:2px">${conta.codigo}</div>
+          <strong style="font-size:16px;color:var(--text);display:block">${conta.descricao}</strong>
+          <div style="font-size:12px;color:var(--text-3);margin-top:3px">
+            ${conta.tipo === 'A' ? 'Conta analítica' : 'Conta sintética · agrega ' + (idsConta.size - 1) + ' conta(s) filha(s)'}
+            · ${idsCategoria.size} categoria(s) vinculada(s)
+            · ${periodoLabel}
+          </div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:11px;color:var(--text-3);text-transform:uppercase;letter-spacing:.5px">Saldo do período</div>
+          <div style="font-family:var(--mono);font-size:20px;font-weight:700;color:${saldoFinal >= 0 ? 'var(--green)' : 'var(--red)'}">${fmtMoeda(saldoFinal)}</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:14px">
+      <div class="kpi-card"><div class="kpi-label">Saldo Anterior</div><div class="kpi-value" style="color:var(--text-2)">${fmtMoeda(saldoAnterior)}</div><div class="kpi-sub">antes do período</div></div>
+      <div class="kpi-card k-green"><div class="kpi-label">Movimentos a Crédito</div><div class="kpi-value" style="color:var(--green)">${fmtMoeda(totalCre)}</div><div class="kpi-sub">${doPeriodo.filter(l=>l.tipo==='R').length} lançamento(s)</div></div>
+      <div class="kpi-card k-red"><div class="kpi-label">Movimentos a Débito</div><div class="kpi-value" style="color:var(--red)">${fmtMoeda(totalDeb)}</div><div class="kpi-sub">${doPeriodo.filter(l=>l.tipo==='D').length} lançamento(s)</div></div>
+      <div class="kpi-card k-gold"><div class="kpi-label">Saldo Final</div><div class="kpi-value" style="color:var(--gold)">${fmtMoeda(saldoFinal)}</div><div class="kpi-sub">${doPeriodo.length} movimento(s) no período</div></div>
+    </div>
+
+    <div class="card">
+      <strong style="font-size:13.5px;display:block;margin-bottom:14px;color:var(--text)">Movimentos cronológicos</strong>
+      <div class="table-wrap"><table>
+        <thead>
+          <tr>
+            <th style="width:90px">Data</th>
+            <th>Histórico</th>
+            <th>Categoria</th>
+            <th style="width:90px">Doc.</th>
+            <th style="text-align:right;width:120px">${colDebitoLabel}</th>
+            <th style="text-align:right;width:120px">${colCreditoLabel}</th>
+            <th style="text-align:right;width:130px">Saldo</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${saldoAnterior !== 0 || periodoSel !== 'tudo' ? `
+            <tr style="background:var(--surface-2)">
+              <td colspan="4" style="font-style:italic;color:var(--text-3);font-size:12px">Saldo anterior</td>
+              <td></td><td></td>
+              <td style="text-align:right;font-family:var(--mono);font-weight:600;color:var(--text-2)">${fmtMoeda(saldoAnterior)}</td>
+            </tr>` : ''}
+          ${doPeriodo.length === 0 ? `
+            <tr><td colspan="7" style="text-align:center;color:var(--text-3);padding:30px">Nenhum movimento no período.</td></tr>
+          ` : doPeriodo.map(l => {
+            // tipo R (receita) → crédito; tipo D (despesa) → débito
+            // se conta natureza crédito (receita): R aumenta saldo; D estorna (diminui)
+            // se conta natureza débito (despesa): D aumenta saldo; R estorna (diminui)
+            const ehCredito = l.tipo === 'R';
+            if (naturezaCredito) {
+              saldo += ehCredito ? l.valor : -l.valor;
+            } else {
+              saldo += ehCredito ? -l.valor : l.valor;
+            }
+            const debCol = (ehCredito === naturezaCredito) ? '' : fmtMoeda(l.valor);
+            const creCol = (ehCredito === naturezaCredito) ? fmtMoeda(l.valor) : '';
+            const dataFmt = l.data ? l.data.split('-').reverse().join('/') : '';
+            return `
+              <tr>
+                <td style="font-family:var(--mono);font-size:12px">${dataFmt}</td>
+                <td>${l.historico}</td>
+                <td style="font-size:12px;color:var(--text-2)">${l.categoria}</td>
+                <td style="font-family:var(--mono);font-size:11px;color:var(--text-3)">${l.documento || '—'}</td>
+                <td style="text-align:right;font-family:var(--mono);color:var(--red)">${debCol}</td>
+                <td style="text-align:right;font-family:var(--mono);color:var(--green)">${creCol}</td>
+                <td style="text-align:right;font-family:var(--mono);font-weight:600;color:${saldo >= 0 ? 'var(--text)' : 'var(--red)'}">${fmtMoeda(saldo)}</td>
+              </tr>`;
+          }).join('')}
+          ${doPeriodo.length > 0 ? `
+            <tr style="border-top:2px solid var(--border-lt);background:var(--surface-2);font-weight:700">
+              <td colspan="4" style="color:var(--text)">Totais do período</td>
+              <td style="text-align:right;font-family:var(--mono);color:var(--red)">${fmtMoeda(totalDeb)}</td>
+              <td style="text-align:right;font-family:var(--mono);color:var(--green)">${fmtMoeda(totalCre)}</td>
+              <td style="text-align:right;font-family:var(--mono);color:${saldoFinal >= 0 ? 'var(--text)' : 'var(--red)'}">${fmtMoeda(saldoFinal)}</td>
+            </tr>` : ''}
+        </tbody>
+      </table></div>
+    </div>`;
+}
+
+// ── BALANCETE ─────────────────────────────────────────────────
+// Visão consolidada de todas as contas contábeis num período:
+// código · descrição · saldo anterior · débitos · créditos · saldo atual.
+// Sintéticas somam descendentes; analíticas mostram só os próprios.
+// Click numa analítica abre o Razão daquela conta.
+function renderBalancete() {
+  if (!PLANOS_STATE?.contabil?.contas?.length && typeof planosCarregarDados === 'function') {
+    planosCarregarDados().then(() => {
+      if (APP.pagina === 'balancete') renderBalancete();
+    }).catch(()=>{});
+  }
+
+  const periodoSel = window._balancetePeriodo || 'mes';
+  const grupoSel   = window._balanceteGrupo   || 'todos'; // todos | receita | despesa | ativo | passivo
+  const ocultarZero = window._balanceteOcultarZero !== false; // default: oculta sem movimento
+  const hoje = new Date();
+  const anoAtual = hoje.getFullYear();
+  const mesAtual = String(hoje.getMonth()+1).padStart(2,'0');
+  const mesStr   = `${anoAtual}-${mesAtual}`;
+
+  const contasCont = (PLANOS_STATE?.contabil?.contas) || [];
+
+  function dentroPeriodo(dataStr) {
+    const m = dataStr?.slice(0, 7);
+    if (periodoSel === 'mes')  return m === mesStr;
+    if (periodoSel === 'ano')  return m?.startsWith(String(anoAtual));
+    return true;
+  }
+  function antesPeriodo(dataStr) {
+    if (!dataStr) return false;
+    if (periodoSel === 'tudo') return false;
+    if (periodoSel === 'mes')  return dataStr < (mesStr + '-01');
+    if (periodoSel === 'ano')  return dataStr < (anoAtual + '-01-01');
+    return false;
+  }
+
+  // Mapa: categoria_id → conta_contabil_id (e tipo da categoria)
+  const catContaMap = new Map();
+  CATEGORIAS.forEach(c => {
+    if (c.conta_contabil_id) {
+      catContaMap.set(c.id, { contaId: c.conta_contabil_id, tipo: c.tipo });
+    }
+  });
+
+  // Para cada conta analítica, agregar movimentos (próprios + descendentes)
+  // Estratégia: percorrer lançamentos uma vez, distribuir saldo por conta analítica
+  // Depois rolar para sintéticas via prefixo de código.
+
+  // Estrutura: { [contaId]: { antes: 0, debPer: 0, crePer: 0, naturezaCredito: bool } }
+  const movPorConta = new Map();
+
+  function aplicarLancamentos(arr, statusOk, tipoLanc /* 'R' ou 'D' */) {
+    arr.forEach(l => {
+      if (l.status !== statusOk) return;
+      const cat = catContaMap.get(l.categoria_id);
+      if (!cat) return;
+      const contaId = cat.contaId;
+      let m = movPorConta.get(contaId);
+      if (!m) {
+        m = { antes: 0, debPer: 0, crePer: 0, recCount: 0, despCount: 0 };
+        movPorConta.set(contaId, m);
+      }
+      const valor = parseFloat(l.valor) || 0;
+      // Contagem de tipos para inferir natureza
+      if (cat.tipo === 'receita') m.recCount += valor;
+      if (cat.tipo === 'despesa') m.despCount += valor;
+
+      if (antesPeriodo(l.vencimento)) {
+        // Saldo anterior: receita = +valor; despesa = +valor (saldo natural positivo)
+        m.antes += valor;
+      } else if (dentroPeriodo(l.vencimento)) {
+        // Receita lançada → crédito; despesa lançada → débito
+        if (tipoLanc === 'R') m.crePer += valor;
+        else m.debPer += valor;
+      }
+    });
+  }
+
+  aplicarLancamentos(RECEITAS, 'recebido', 'R');
+  aplicarLancamentos(DESPESAS, 'pago',     'D');
+
+  // Sintéticas: agregar pelo prefixo de código
+  // Construir saldos finais para cada conta
+  const linhas = contasCont.map(c => {
+    const m = movPorConta.get(c.id) || { antes: 0, debPer: 0, crePer: 0, recCount: 0, despCount: 0 };
+    let antes = m.antes, deb = m.debPer, cre = m.crePer;
+    let recVal = m.recCount, despVal = m.despCount;
+
+    // Se sintética, somar todas as analíticas descendentes
+    if (c.tipo !== 'A') {
+      const prefixo = c.codigo + '.';
+      contasCont.forEach(filho => {
+        if (filho.id === c.id) return;
+        if (filho.tipo !== 'A') return;
+        if (!(filho.codigo || '').startsWith(prefixo)) return;
+        const mf = movPorConta.get(filho.id);
+        if (!mf) return;
+        antes += mf.antes;
+        deb   += mf.debPer;
+        cre   += mf.crePer;
+        recVal  += mf.recCount;
+        despVal += mf.despCount;
+      });
+    }
+
+    const naturezaCredito = recVal >= despVal;
+    // Movimento líquido no período (saldo natural positivo)
+    const movPeriodo = naturezaCredito ? (cre - deb) : (deb - cre);
+    const saldoAtual = antes + movPeriodo;
+
+    return {
+      ...c,
+      antes,
+      deb,
+      cre,
+      saldoAtual,
+      naturezaCredito,
+      temMov: (deb !== 0 || cre !== 0 || antes !== 0),
+    };
+  });
+
+  // Filtro por grupo
+  function passaGrupo(linha) {
+    if (grupoSel === 'todos') return true;
+    if (linha.grupo) return linha.grupo === grupoSel;
+    // Fallback: inferir pelo primeiro dígito do código (1=ativo, 2=passivo, 3=PL, 4=receita, 5=despesa)
+    const prefDig = (linha.codigo || '')[0];
+    if (grupoSel === 'receita')  return prefDig === '4' || prefDig === '3';
+    if (grupoSel === 'despesa')  return prefDig === '5' || prefDig === '6';
+    if (grupoSel === 'ativo')    return prefDig === '1';
+    if (grupoSel === 'passivo')  return prefDig === '2';
+    return true;
+  }
+
+  let visiveis = linhas.filter(passaGrupo);
+  if (ocultarZero) visiveis = visiveis.filter(l => l.temMov);
+  visiveis.sort((a,b) => (a.codigo || '').localeCompare(b.codigo || ''));
+
+  // Totalizadores (só de analíticas para evitar dupla contagem)
+  const analiticasVisiveis = visiveis.filter(l => l.tipo === 'A');
+  const totalAntes = analiticasVisiveis.reduce((s,l) => s + l.antes, 0);
+  const totalDeb   = analiticasVisiveis.reduce((s,l) => s + l.deb, 0);
+  const totalCre   = analiticasVisiveis.reduce((s,l) => s + l.cre, 0);
+  const totalSaldo = analiticasVisiveis.reduce((s,l) => s + l.saldoAtual, 0);
+
+  // Helpers de UI
+  function btnP(p, label) {
+    const active = periodoSel === p;
+    return `<button onclick="window._balancetePeriodo='${p}';renderBalancete()" style="padding:7px 14px;border-radius:9px;border:1.5px solid ${active?'var(--gold)':'var(--border-lt)'};background:${active?'var(--gold-lt)':'transparent'};color:${active?'var(--gold)':'var(--text-2)'};font-family:var(--font);font-size:12px;font-weight:600;cursor:pointer">${label}</button>`;
+  }
+  function btnG(g, label) {
+    const active = grupoSel === g;
+    return `<button onclick="window._balanceteGrupo='${g}';renderBalancete()" style="padding:7px 12px;border-radius:9px;border:1.5px solid ${active?'var(--gold)':'var(--border-lt)'};background:${active?'var(--gold-lt)':'transparent'};color:${active?'var(--gold)':'var(--text-2)'};font-family:var(--font);font-size:11px;font-weight:600;cursor:pointer">${label}</button>`;
+  }
+
+  // Estado vazio
+  if (!contasCont.length) {
+    $id('page-content').innerHTML = `
+      <div class="card" style="text-align:center;padding:50px 20px">
+        <div style="font-size:48px;margin-bottom:10px">📊</div>
+        <strong style="font-size:15px;color:var(--text);display:block;margin-bottom:6px">Carregando plano contábil…</strong>
+        <div style="color:var(--text-3);font-size:13px">Aguarde um instante.</div>
+      </div>`;
+    return;
+  }
+
+  $id('page-content').innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+        ${btnP('mes','Este mês')}${btnP('ano','Este ano')}${btnP('tudo','Tudo')}
+        <span style="display:inline-block;width:1px;height:24px;background:var(--border-lt);margin:0 4px"></span>
+        ${btnG('todos','Todas')}${btnG('receita','Receitas')}${btnG('despesa','Despesas')}${btnG('ativo','Ativo')}${btnG('passivo','Passivo')}
+      </div>
+      <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-2);cursor:pointer;user-select:none">
+        <input type="checkbox" ${ocultarZero ? 'checked' : ''} onchange="window._balanceteOcultarZero=this.checked;renderBalancete()">
+        Ocultar contas sem movimento
+      </label>
+    </div>
+
+    <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:14px">
+      <div class="kpi-card"><div class="kpi-label">Saldo Anterior</div><div class="kpi-value" style="color:var(--text-2)">${fmtMoeda(totalAntes)}</div><div class="kpi-sub">soma das analíticas</div></div>
+      <div class="kpi-card k-red"><div class="kpi-label">Total Débitos</div><div class="kpi-value" style="color:var(--red)">${fmtMoeda(totalDeb)}</div><div class="kpi-sub">no período</div></div>
+      <div class="kpi-card k-green"><div class="kpi-label">Total Créditos</div><div class="kpi-value" style="color:var(--green)">${fmtMoeda(totalCre)}</div><div class="kpi-sub">no período</div></div>
+      <div class="kpi-card k-gold"><div class="kpi-label">Saldo Final</div><div class="kpi-value" style="color:var(--gold)">${fmtMoeda(totalSaldo)}</div><div class="kpi-sub">${analiticasVisiveis.length} conta(s) analítica(s)</div></div>
+    </div>
+
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <strong style="font-size:13.5px;color:var(--text)">Balancete · ${periodoSel === 'mes' ? mesAtual+'/'+anoAtual : periodoSel === 'ano' ? anoAtual : 'Todo o período'}</strong>
+        <span style="font-size:11px;color:var(--text-3)">${visiveis.length} de ${linhas.length} conta(s)</span>
+      </div>
+      <div class="table-wrap"><table>
+        <thead>
+          <tr>
+            <th style="width:120px">Código</th>
+            <th>Descrição</th>
+            <th style="text-align:right;width:130px">Saldo Anterior</th>
+            <th style="text-align:right;width:120px">Débitos</th>
+            <th style="text-align:right;width:120px">Créditos</th>
+            <th style="text-align:right;width:130px">Saldo Atual</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${visiveis.length === 0 ? `
+            <tr><td colspan="6" style="text-align:center;color:var(--text-3);padding:30px">
+              Nenhuma conta com movimento no período.${ocultarZero ? ' Desmarque "Ocultar contas sem movimento" para ver todas.' : ''}
+            </td></tr>
+          ` : visiveis.map(l => {
+            const isSint = l.tipo !== 'A';
+            const indent = '&nbsp;&nbsp;&nbsp;'.repeat(Math.max(0, (l.nivel || 1) - 1));
+            const corLinha = isSint ? 'var(--surface-2)' : 'transparent';
+            const peso = isSint ? '600' : '400';
+            const corText = isSint ? 'var(--text)' : 'var(--text-2)';
+            const cursor = l.tipo === 'A' ? 'pointer' : 'default';
+            const onclickAttr = l.tipo === 'A'
+              ? `onclick="window._razaoConta='${l.id}';window._razaoPeriodo='${periodoSel}';go('razao')" title="Ver razão desta conta"`
+              : '';
+            const corSaldo = l.saldoAtual >= 0 ? 'var(--text)' : 'var(--red)';
+            return `
+              <tr style="background:${corLinha};cursor:${cursor}" ${onclickAttr}>
+                <td style="font-family:var(--mono);font-size:12px;font-weight:${peso};color:${corText}">${indent}${l.codigo}${isSint ? ' ▸' : ''}</td>
+                <td style="font-weight:${peso};color:${corText}">${l.descricao}</td>
+                <td style="text-align:right;font-family:var(--mono);font-size:12px;color:var(--text-2)">${l.antes !== 0 ? fmtMoeda(l.antes) : '—'}</td>
+                <td style="text-align:right;font-family:var(--mono);font-size:12px;color:${l.deb > 0 ? 'var(--red)' : 'var(--text-3)'}">${l.deb > 0 ? fmtMoeda(l.deb) : '—'}</td>
+                <td style="text-align:right;font-family:var(--mono);font-size:12px;color:${l.cre > 0 ? 'var(--green)' : 'var(--text-3)'}">${l.cre > 0 ? fmtMoeda(l.cre) : '—'}</td>
+                <td style="text-align:right;font-family:var(--mono);font-size:12px;font-weight:${peso};color:${corSaldo}">${fmtMoeda(l.saldoAtual)}</td>
+              </tr>`;
+          }).join('')}
+          ${visiveis.length > 0 ? `
+            <tr style="border-top:2px solid var(--border-lt);background:var(--surface-2);font-weight:700">
+              <td colspan="2" style="color:var(--text)">Totais (analíticas)</td>
+              <td style="text-align:right;font-family:var(--mono);color:var(--text-2)">${fmtMoeda(totalAntes)}</td>
+              <td style="text-align:right;font-family:var(--mono);color:var(--red)">${fmtMoeda(totalDeb)}</td>
+              <td style="text-align:right;font-family:var(--mono);color:var(--green)">${fmtMoeda(totalCre)}</td>
+              <td style="text-align:right;font-family:var(--mono);color:${totalSaldo >= 0 ? 'var(--text)' : 'var(--red)'}">${fmtMoeda(totalSaldo)}</td>
+            </tr>` : ''}
+        </tbody>
+      </table></div>
+      ${visiveis.some(l => l.tipo === 'A') ? `
+        <div style="margin-top:10px;font-size:11px;color:var(--text-3)">
+          💡 Clique em uma conta analítica para abrir seu Razão.
+        </div>` : ''}
+    </div>`;
 }
 
 // ── CLIENTES ──────────────────────────────────────────────────

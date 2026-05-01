@@ -3755,6 +3755,7 @@ function modalNovoCliente() {
     `<button class="btn btn-outline" onclick="closeModal()">Cancelar</button>
      <button class="btn btn-gold" onclick="salvarCliente()">Salvar</button>`
   );
+  _ligarValidacaoDocVivo('ncli-doc');
 }
 
 async function salvarCliente() {
@@ -3762,9 +3763,10 @@ async function salvarCliente() {
   if (!nome) { toast('Informe o nome.', 'error'); return; }
   const docRaw = $id('ncli-doc').value || '';
   const docLimpo = docRaw.replace(/\D/g, '');
-  // Valida CNPJ se preenchido com 14 dígitos. CPF (11 dígitos) e vazio passam.
-  if (docLimpo.length === 14 && !_validaCNPJ(docLimpo)) {
-    toast('CNPJ inválido. Verifique os dígitos.', 'error'); return;
+  // Valida CPF (11 dígitos) ou CNPJ (14 dígitos) pelo DV. Vazio é aceito.
+  if (!_validaDocumentoOpcional(docLimpo)) {
+    const tipo = docLimpo.length === 11 ? 'CPF' : docLimpo.length === 14 ? 'CNPJ' : 'documento';
+    toast(`${tipo} inválido. Verifique os dígitos.`, 'error'); return;
   }
   try {
     const criado = await supa('POST', 'fin_clientes', { returning: true, body: {
@@ -3792,6 +3794,7 @@ function editarCliente(id) {
     `<button class="btn btn-outline" onclick="closeModal()">Cancelar</button>
      <button class="btn btn-gold" onclick="salvarEdicaoCliente('${id}')">Salvar</button>`
   );
+  _ligarValidacaoDocVivo('ecli-doc');
 }
 
 async function salvarEdicaoCliente(id) {
@@ -3799,8 +3802,9 @@ async function salvarEdicaoCliente(id) {
   if (!nome) { toast('Informe o nome.', 'error'); return; }
   const docRaw = $id('ecli-doc').value || '';
   const docLimpo = docRaw.replace(/\D/g, '');
-  if (docLimpo.length === 14 && !_validaCNPJ(docLimpo)) {
-    toast('CNPJ inválido. Verifique os dígitos.', 'error'); return;
+  if (!_validaDocumentoOpcional(docLimpo)) {
+    const tipo = docLimpo.length === 11 ? 'CPF' : docLimpo.length === 14 ? 'CNPJ' : 'documento';
+    toast(`${tipo} inválido. Verifique os dígitos.`, 'error'); return;
   }
   try {
     const atualizado = await supa('PATCH', 'fin_clientes', { params: { id: `eq.${id}` }, returning: true, body: {
@@ -3894,6 +3898,7 @@ function modalNovoFornecedor() {
     `<button class="btn btn-outline" onclick="closeModal()">Cancelar</button>
      <button class="btn btn-gold" onclick="salvarFornecedor()">Salvar</button>`
   );
+  _ligarValidacaoDocVivo('nfor-doc');
 }
 
 async function salvarFornecedor() {
@@ -3901,8 +3906,9 @@ async function salvarFornecedor() {
   if (!nome) { toast('Informe o nome.', 'error'); return; }
   const docRaw = $id('nfor-doc').value || '';
   const docLimpo = docRaw.replace(/\D/g, '');
-  if (docLimpo.length === 14 && !_validaCNPJ(docLimpo)) {
-    toast('CNPJ inválido. Verifique os dígitos.', 'error'); return;
+  if (!_validaDocumentoOpcional(docLimpo)) {
+    const tipo = docLimpo.length === 11 ? 'CPF' : docLimpo.length === 14 ? 'CNPJ' : 'documento';
+    toast(`${tipo} inválido. Verifique os dígitos.`, 'error'); return;
   }
   try {
     const criado = await supa('POST', 'fin_fornecedores', { returning: true, body: {
@@ -3930,6 +3936,7 @@ function editarFornecedor(id) {
     `<button class="btn btn-outline" onclick="closeModal()">Cancelar</button>
      <button class="btn btn-gold" onclick="salvarEdicaoFornecedor('${id}')">Salvar</button>`
   );
+  _ligarValidacaoDocVivo('efor-doc');
 }
 
 async function salvarEdicaoFornecedor(id) {
@@ -3937,8 +3944,9 @@ async function salvarEdicaoFornecedor(id) {
   if (!nome) { toast('Informe o nome.', 'error'); return; }
   const docRaw = $id('efor-doc').value || '';
   const docLimpo = docRaw.replace(/\D/g, '');
-  if (docLimpo.length === 14 && !_validaCNPJ(docLimpo)) {
-    toast('CNPJ inválido. Verifique os dígitos.', 'error'); return;
+  if (!_validaDocumentoOpcional(docLimpo)) {
+    const tipo = docLimpo.length === 11 ? 'CPF' : docLimpo.length === 14 ? 'CNPJ' : 'documento';
+    toast(`${tipo} inválido. Verifique os dígitos.`, 'error'); return;
   }
   try {
     const atualizado = await supa('PATCH', 'fin_fornecedores', { params: { id: `eq.${id}` }, returning: true, body: {
@@ -9659,6 +9667,142 @@ function _formatCNPJ(cnpj) {
   const c = String(cnpj).replace(/\D/g,'');
   if (c.length !== 14) return cnpj;
   return c.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5');
+}
+
+// Formata CPF: 12345678901 → 123.456.789-01
+function _formatCPF(cpf) {
+  if (!cpf) return '—';
+  const c = String(cpf).replace(/\D/g,'');
+  if (c.length !== 11) return cpf;
+  return c.replace(/^(\d{3})(\d{3})(\d{3})(\d{2})$/, '$1.$2.$3-$4');
+}
+
+// Formata CPF (11 dígitos) ou CNPJ (14 dígitos) automaticamente
+function _formatDoc(doc) {
+  if (!doc) return '—';
+  const c = String(doc).replace(/\D/g,'');
+  if (c.length === 11) return _formatCPF(c);
+  if (c.length === 14) return _formatCNPJ(c);
+  return doc;
+}
+
+// Valida CPF pelo dígito verificador (algoritmo módulo 11 — Receita Federal).
+// Retorna true se válido. Aceita string com ou sem máscara.
+// Rejeita: comprimento errado, todos dígitos iguais (ex: 00000000000), DVs incorretos.
+function _validaCPF(cpf) {
+  if (!cpf) return false;
+  const c = String(cpf).replace(/\D/g, '');
+  if (c.length !== 11) return false;
+  // Sequências repetidas (00000000000, 11111111111, etc.) são inválidas
+  if (/^(\d)\1{10}$/.test(c)) return false;
+
+  const calcDV = (base, pesoInicial) => {
+    let soma = 0;
+    for (let i = 0; i < base.length; i++) {
+      soma += parseInt(base[i], 10) * (pesoInicial - i);
+    }
+    const resto = (soma * 10) % 11;
+    return resto === 10 ? 0 : resto;
+  };
+
+  // 1º DV: pesos 10..2 sobre os 9 primeiros dígitos
+  const dv1 = calcDV(c.slice(0, 9), 10);
+  if (dv1 !== parseInt(c[9], 10)) return false;
+
+  // 2º DV: pesos 11..2 sobre os 10 primeiros dígitos
+  const dv2 = calcDV(c.slice(0, 10), 11);
+  if (dv2 !== parseInt(c[10], 10)) return false;
+
+  return true;
+}
+
+// Valida CPF (11 dígitos) ou CNPJ (14 dígitos). Vazio/null = false.
+// Para validação opcional (aceitar vazio), use _validaDocumentoOpcional.
+function _validaDocumento(doc) {
+  const c = String(doc || '').replace(/\D/g, '');
+  if (c.length === 11) return _validaCPF(c);
+  if (c.length === 14) return _validaCNPJ(c);
+  return false;
+}
+
+// Valida documento se preenchido. Vazio/null = aceita (true).
+// Comprimentos diferentes de 11/14 = inválido.
+function _validaDocumentoOpcional(doc) {
+  const c = String(doc || '').replace(/\D/g, '');
+  if (c.length === 0) return true;            // vazio é OK
+  if (c.length === 11) return _validaCPF(c);
+  if (c.length === 14) return _validaCNPJ(c);
+  return false; // comprimento errado
+}
+
+// Liga validação visual em tempo real num input de CPF/CNPJ.
+// - Vazio ou < 11 dígitos: neutro
+// - 11 dígitos válidos: borda verde + mensagem "✓ CPF válido"
+// - 14 dígitos válidos: borda verde + mensagem "✓ CNPJ válido"
+// - Inválido (DV errado ou comprimento errado com ≥11 dígitos): borda vermelha + mensagem
+// Cria automaticamente um <div> de feedback após o input se ainda não existir.
+function _ligarValidacaoDocVivo(inputId) {
+  const inp = document.getElementById(inputId);
+  if (!inp || inp._validaLigado) return;
+  inp._validaLigado = true;
+
+  // Cria/reusa um elemento de feedback irmão
+  let fb = inp.nextElementSibling;
+  if (!fb || !fb.classList || !fb.classList.contains('doc-feedback')) {
+    fb = document.createElement('div');
+    fb.className = 'doc-feedback';
+    fb.style.cssText = 'font-size:11px;margin-top:4px;min-height:14px;font-family:var(--font);transition:color .15s';
+    inp.parentNode.insertBefore(fb, inp.nextSibling);
+  }
+
+  const atualizar = () => {
+    const c = (inp.value || '').replace(/\D/g, '');
+    if (c.length === 0) {
+      inp.style.borderColor = '';
+      fb.textContent = '';
+      fb.style.color = '';
+      return;
+    }
+    if (c.length < 11) {
+      inp.style.borderColor = '';
+      fb.textContent = `${c.length}/11 dígitos (CPF) ou ${c.length}/14 (CNPJ)`;
+      fb.style.color = 'var(--text-3)';
+      return;
+    }
+    if (c.length === 11) {
+      if (_validaCPF(c)) {
+        inp.style.borderColor = 'var(--green)';
+        fb.textContent = '✓ CPF válido';
+        fb.style.color = 'var(--green)';
+      } else {
+        inp.style.borderColor = 'var(--red)';
+        fb.textContent = '✗ CPF inválido (dígito verificador incorreto)';
+        fb.style.color = 'var(--red)';
+      }
+      return;
+    }
+    if (c.length === 14) {
+      if (_validaCNPJ(c)) {
+        inp.style.borderColor = 'var(--green)';
+        fb.textContent = '✓ CNPJ válido';
+        fb.style.color = 'var(--green)';
+      } else {
+        inp.style.borderColor = 'var(--red)';
+        fb.textContent = '✗ CNPJ inválido (dígito verificador incorreto)';
+        fb.style.color = 'var(--red)';
+      }
+      return;
+    }
+    // 12, 13 ou >14 dígitos: comprimento errado
+    inp.style.borderColor = 'var(--red)';
+    fb.textContent = `✗ ${c.length} dígitos — CPF tem 11, CNPJ tem 14`;
+    fb.style.color = 'var(--red)';
+  };
+
+  inp.addEventListener('input', atualizar);
+  inp.addEventListener('blur',  atualizar);
+  // Validar estado inicial (caso já venha preenchido na edição)
+  atualizar();
 }
 
 // Valida CNPJ pelo dígito verificador (algoritmo módulo 11 — Receita Federal).

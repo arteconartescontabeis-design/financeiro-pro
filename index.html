@@ -552,6 +552,134 @@ tbody td { padding: 11px 16px; font-size: 13px; }
   /* Venc row */
   .venc-row { flex-wrap: wrap; }
 }
+
+/* ─── PLANOS DE CONTAS (v19) ───────────────────────────────────────── */
+.planos-tabs { display: flex; gap: 4px; border-bottom: 1.5px solid var(--border); margin-bottom: 16px; }
+.planos-tab {
+  padding: 9px 18px; background: transparent; border: none;
+  border-bottom: 2.5px solid transparent;
+  cursor: pointer; font-family: var(--font); font-weight: 600;
+  font-size: 13px; color: var(--text-3); transition: var(--tr);
+}
+.planos-tab:hover { color: var(--gold); }
+.planos-tab.active { color: var(--gold); border-bottom-color: var(--gold); }
+
+.planos-toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
+.planos-toolbar input[type=search],
+.planos-toolbar select {
+  padding: 7px 11px; border: 1.5px solid var(--border-lt); border-radius: 8px;
+  font-family: var(--font); font-size: 12.5px; background: var(--bg-2); color: var(--text); outline: none;
+}
+.planos-toolbar input[type=search] { flex: 1; min-width: 220px; }
+.planos-toolbar input[type=search]:focus,
+.planos-toolbar select:focus { border-color: var(--gold); }
+
+.plano-tree {
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--surface); max-height: 70vh; overflow: auto;
+}
+.plano-tree-row {
+  display: grid; grid-template-columns: 22px 130px 1fr 110px 90px 70px;
+  gap: 10px; padding: 7px 12px; border-bottom: 1px solid var(--border);
+  align-items: center; font-size: 12.5px;
+}
+.plano-tree-row:last-child { border-bottom: none; }
+.plano-tree-row:hover { background: var(--surface-2); }
+.plano-tree-row.sintetica { font-weight: 700; background: rgba(26,82,118,.04); }
+.plano-tree-row .toggle {
+  cursor: pointer; user-select: none; color: var(--text-3);
+  width: 16px; text-align: center; font-size: 10px;
+}
+.plano-tree-row .codigo { font-family: var(--mono); color: var(--text-2); font-size: 11.5px; }
+.plano-tree-row .descricao {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text);
+}
+.plano-tree-row .nat-tag { font-size: 10px; padding: 2px 7px; border-radius: 99px; font-weight: 700; }
+.nat-receita,        .nat-RECEITA        { background: var(--green-lt); color: var(--green); }
+.nat-custo_despesa,  .nat-DESPESA        { background: var(--red-lt); color: var(--red); }
+.nat-desp_financeira { background: var(--amber-lt); color: var(--amber); }
+.nat-investimento,   .nat-ATIVO          { background: var(--gold-lt); color: var(--gold); }
+.nat-nao_operacional { background: rgba(150,100,200,.12); color: #6b21a8; }
+.nat-PASSIVO         { background: var(--red-lt); color: var(--red); }
+.nat-PL              { background: var(--amber-lt); color: var(--amber); }
+.nat-RESULTADO       { background: var(--gold-lt); color: var(--gold); }
+.nat-COMPENSACAO     { background: var(--surface-2); color: var(--text-2); }
+.nat-OUTROS          { background: var(--surface-2); color: var(--text-2); }
+.plano-tree-row .row-actions { display: flex; gap: 4px; justify-content: flex-end; }
+.plano-tree-row .row-actions button {
+  padding: 3px 7px; font-size: 11px; border: 1px solid var(--border-lt);
+  background: var(--bg-2); border-radius: 6px; cursor: pointer; color: var(--text-2);
+  font-family: var(--font); transition: var(--tr);
+}
+.plano-tree-row .row-actions button:hover { border-color: var(--gold); color: var(--gold); }
+
+/* DE-PARA grid */
+.depara-stats { display: grid; grid-template-columns: repeat(auto-fit,minmax(150px,1fr)); gap: 10px; margin-bottom: 16px; }
+.depara-stat-card {
+  padding: 12px 14px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.depara-stat-card .num { font-size: 22px; font-weight: 700; color: var(--gold); font-family: var(--mono); }
+.depara-stat-card .num.alert { color: var(--red); }
+.depara-stat-card .label {
+  font-size: 10.5px; color: var(--text-3); text-transform: uppercase;
+  letter-spacing: .4px; font-weight: 600; margin-top: 2px;
+}
+
+.depara-grid { display: grid; grid-template-columns: 1fr 70px 1fr; gap: 14px; align-items: start; }
+@media (max-width: 768px) { .depara-grid { grid-template-columns: 1fr; } .depara-action { padding-top: 0 !important; flex-direction: row !important; justify-content: center; } }
+.depara-col {
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--surface); overflow: hidden;
+}
+.depara-col header {
+  padding: 9px 13px; background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  font-weight: 700; font-size: 11.5px; text-transform: uppercase;
+  letter-spacing: .5px; color: var(--text-2);
+}
+.depara-col input[type=search] {
+  width: 100%; padding: 8px 12px; border: none;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font); font-size: 12.5px; outline: none; background: var(--bg-2);
+}
+.depara-list { max-height: 50vh; overflow: auto; }
+.depara-item {
+  padding: 7px 12px; border-bottom: 1px solid var(--border);
+  cursor: pointer; font-size: 12.5px; transition: var(--tr);
+}
+.depara-item:hover { background: var(--surface-2); }
+.depara-item.selected { background: var(--gold-lt); border-left: 3px solid var(--gold); padding-left: 9px; }
+.depara-item .codigo { font-family: var(--mono); color: var(--text-3); font-size: 10.5px; display: block; }
+.depara-item.linked .descricao::after { content: ' 🔗'; opacity: .55; font-size: 10px; }
+
+.depara-action {
+  display: flex; flex-direction: column; gap: 8px; padding-top: 60px; align-items: stretch;
+}
+.depara-action button { white-space: nowrap; }
+
+.vinculos-existentes {
+  margin-top: 18px; border: 1px solid var(--border);
+  border-radius: var(--radius); background: var(--surface);
+}
+.vinculo-row {
+  display: grid; grid-template-columns: 1fr 24px 1fr 70px 50px;
+  gap: 12px; padding: 9px 14px; border-bottom: 1px solid var(--border);
+  align-items: center; font-size: 12.5px;
+}
+.vinculo-row:last-child { border-bottom: none; }
+.vinculo-row .arrow { text-align: center; color: var(--text-3); }
+.vinculo-row .codigo-mono { font-family: var(--mono); color: var(--text-2); font-size: 11px; }
+.vinculo-row button.btn-mini {
+  padding: 4px 8px; font-size: 11px;
+  border: 1px solid var(--red-lt); background: var(--red-lt); color: var(--red);
+  border-radius: 6px; cursor: pointer; font-family: var(--font);
+}
+.vinculo-row button.btn-mini:hover { background: var(--red); color: #fff; }
+
+.empty-state-mini {
+  padding: 30px; text-align: center; color: var(--text-3); font-size: 13px;
+}
 </style>
 </head>
 <body>
@@ -681,6 +809,10 @@ tbody td { padding: 11px 16px; font-size: 13px; }
       <button class="nav-item" onclick="go('categorias')" data-page="categorias">
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l-5.5 9h11L12 2zm0 3.84L13.93 9h-3.87L12 5.84zM17.5 13c-2.49 0-4.5 2.01-4.5 4.5S15.01 22 17.5 22 22 19.99 22 17.5 19.99 13 17.5 13zm0 7c-1.38 0-2.5-1.12-2.5-2.5S16.12 15 17.5 15 20 16.12 20 17.5 18.88 20 17.5 20zM3 21.5h8v-8H3v8zm2-6h4v4H5v-4z"/></svg>
         Categorias
+      </button>
+      <button class="nav-item" onclick="go('planos')" data-page="planos">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 3h8v8H3V3zm10 0h8v8h-8V3zM3 13h8v8H3v-8zm13 0h2v3h3v2h-3v3h-2v-3h-3v-2h3v-3z"/></svg>
+        Plano de Contas
       </button>
       <div class="nav-section">Sistema</div>
       <button class="nav-item" onclick="go('empresas')" data-page="empresas" id="nav-empresas">
@@ -1266,6 +1398,7 @@ const PAGES = {
   clientes:     { title: 'Clientes',        render: renderClientes },
   fornecedores: { title: 'Fornecedores',    render: renderFornecedores },
   categorias:   { title: 'Categorias',      render: renderCategorias },
+  planos:       { title: 'Plano de Contas', render: renderPlanos },
   configuracoes:{ title: 'Configurações',   render: renderConfiguracoes },
   usuarios:     { title: 'Usuários',         render: () => renderUsuarios() },
   empresas:     { title: 'Empresas',         render: () => renderEmpresas() },
@@ -3086,6 +3219,537 @@ async function salvarCategoria() {
     // ── Performance · Fase B ──
     if (Array.isArray(criada) && criada[0]) atualizarLocal(CATEGORIAS, criada[0]);
     rerenderTelaAtual();
+  } catch(e) { toast('Erro: ' + e.message, 'error'); }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PLANOS DE CONTAS (v19) ─ Financeiro + Contábil + De-Para
+// ─────────────────────────────────────────────────────────────────────────
+// Tabelas backend: fin_plano_financeiro, fin_plano_contabil, fin_plano_depara
+// (criadas em migration_v19_FINAL_fix.sql, com seed automático ao criar tenant)
+// Permissões: leitura para todos do tenant; escrita só admin (RLS + isAdmin())
+// ═══════════════════════════════════════════════════════════════════════════
+
+const PLANOS_STATE = {
+  financeiro: { contas: [], filtro: '', expanded: new Set() },
+  contabil:   { contas: [], filtro: '', natureza: '', expanded: new Set() },
+  depara: {
+    selFin: null,      // id da conta financeira selecionada
+    selCont: null,     // id da conta contábil selecionada
+    vinculos: [],
+    stats: null,
+    filtroFin: '',
+    filtroCont: '',
+  },
+  tabAtual: 'financeiro',
+  carregado: false,
+};
+
+function renderPlanos() {
+  $id('topbar-actions').innerHTML = '';
+  $id('page-content').innerHTML = `
+    <nav class="planos-tabs" role="tablist">
+      <button class="planos-tab active" data-tab="financeiro" onclick="planosShowTab('financeiro')">💰 Plano Financeiro</button>
+      <button class="planos-tab"        data-tab="contabil"   onclick="planosShowTab('contabil')">📊 Plano Contábil</button>
+      <button class="planos-tab"        data-tab="depara"     onclick="planosShowTab('depara')">🔗 De-Para</button>
+    </nav>
+    <div id="planos-tab-body"></div>
+  `;
+  // Carrega dados (uma vez por sessão de tela)
+  planosCarregarDados().then(() => {
+    planosShowTab(PLANOS_STATE.tabAtual);
+  });
+}
+
+async function planosCarregarDados() {
+  if (!APP.tenantId) return;
+  try {
+    const [fin, cont, vincs] = await Promise.all([
+      supa('GET', 'fin_plano_financeiro', {
+        params: { select: '*', tenant_id: 'eq.' + APP.tenantId, ativo: 'eq.true', order: 'ordem.asc' }
+      }),
+      supa('GET', 'fin_plano_contabil', {
+        params: { select: '*', tenant_id: 'eq.' + APP.tenantId, ativo: 'eq.true', order: 'ordem.asc' }
+      }),
+      supa('GET', 'fin_plano_depara', {
+        params: { select: '*', tenant_id: 'eq.' + APP.tenantId }
+      }),
+    ]);
+    PLANOS_STATE.financeiro.contas = fin || [];
+    PLANOS_STATE.contabil.contas   = cont || [];
+    PLANOS_STATE.depara.vinculos   = vincs || [];
+    // Expandir nível 1 e 2 por padrão (primeira carga)
+    if (!PLANOS_STATE.carregado) {
+      (fin  || []).forEach(c => { if (c.nivel <= 2) PLANOS_STATE.financeiro.expanded.add(c.id); });
+      (cont || []).forEach(c => { if (c.nivel <= 2) PLANOS_STATE.contabil.expanded.add(c.id); });
+      PLANOS_STATE.carregado = true;
+    }
+    // Stats via RPC
+    try {
+      const stats = await supa('POST', 'rpc/fin_depara_stats', {
+        body: { p_tenant_id: APP.tenantId }, returning: true,
+      });
+      PLANOS_STATE.depara.stats = Array.isArray(stats) ? stats[0] : stats;
+    } catch(e) { /* RPC opcional, segue sem stats */ }
+  } catch(e) {
+    toast('Erro ao carregar planos: ' + e.message, 'error');
+  }
+}
+
+function planosShowTab(tab) {
+  PLANOS_STATE.tabAtual = tab;
+  document.querySelectorAll('.planos-tab').forEach(t =>
+    t.classList.toggle('active', t.dataset.tab === tab));
+  if (tab === 'financeiro') renderPlanoArvore('financeiro');
+  else if (tab === 'contabil') renderPlanoArvore('contabil');
+  else if (tab === 'depara') renderDePara();
+}
+
+function renderPlanoArvore(tipo) {
+  const state = PLANOS_STATE[tipo];
+  const filtro = (state.filtro || '').toLowerCase().trim();
+  const filtroNat = tipo === 'contabil' ? state.natureza : '';
+
+  const byId = new Map(state.contas.map(c => [c.id, c]));
+  const filhos = new Map();
+  state.contas.forEach(c => {
+    if (c.conta_pai_id) {
+      if (!filhos.has(c.conta_pai_id)) filhos.set(c.conta_pai_id, []);
+      filhos.get(c.conta_pai_id).push(c);
+    }
+  });
+
+  // Filtros: marca contas visíveis (e seus ancestrais)
+  let visiveis = null;
+  if (filtro || filtroNat) {
+    visiveis = new Set();
+    state.contas.forEach(c => {
+      const matchTexto = !filtro || (
+        (c.codigo || '').toLowerCase().includes(filtro) ||
+        (c.descricao || '').toLowerCase().includes(filtro) ||
+        (c.apelido || '').toLowerCase().includes(filtro)
+      );
+      const matchNat = !filtroNat || c.natureza === filtroNat;
+      if (matchTexto && matchNat) {
+        visiveis.add(c.id);
+        let pai = c.conta_pai_id;
+        while (pai) { visiveis.add(pai); pai = byId.get(pai)?.conta_pai_id; }
+      }
+    });
+  }
+
+  const raizes = state.contas.filter(c => !c.conta_pai_id).sort((a,b)=>(a.ordem||0)-(b.ordem||0));
+  const linhas = [];
+
+  function renderConta(c, depth) {
+    if (visiveis && !visiveis.has(c.id)) return;
+    const childs = (filhos.get(c.id) || []).sort((a,b)=>(a.ordem||0)-(b.ordem||0));
+    const isExpanded = state.expanded.has(c.id) || (visiveis && visiveis.size > 0);
+    const hasChild = childs.length > 0;
+    const sintetica = (tipo === 'financeiro' ? c.tipo === 'S' : c.sintetica);
+    const indent = depth * 18;
+    const desc = (c.descricao || '').replace(/"/g,'&quot;');
+
+    let tag = '';
+    if (tipo === 'financeiro' && c.grupo) {
+      tag = `<span class="nat-tag nat-${c.grupo.toLowerCase()}">${c.grupo.replace('_',' ')}</span>`;
+    } else if (tipo === 'contabil' && c.natureza) {
+      tag = `<span class="nat-tag nat-${c.natureza}">${c.natureza}</span>`;
+    }
+
+    const adminBtns = isAdmin() ? `
+      <button onclick="planoEditarConta('${tipo}','${c.id}')" title="Editar">✎</button>
+      ${!hasChild ? `<button onclick="planoExcluirConta('${tipo}','${c.id}')" title="Desativar">🗑</button>` : ''}
+    ` : '';
+
+    linhas.push(`
+      <div class="plano-tree-row ${sintetica ? 'sintetica' : ''}" style="padding-left:${12 + indent}px">
+        <span class="toggle" onclick="planosToggle('${tipo}','${c.id}')">${hasChild ? (isExpanded ? '▾' : '▸') : ''}</span>
+        <span class="codigo">${c.codigo}</span>
+        <span class="descricao" title="${desc}">${desc}</span>
+        <span>${tag}</span>
+        <span style="font-size:11px;color:var(--text-3)">${sintetica ? 'Sintética' : 'Analítica'}</span>
+        <span class="row-actions">${adminBtns}</span>
+      </div>
+    `);
+
+    if (isExpanded && hasChild) {
+      childs.forEach(ch => renderConta(ch, depth + 1));
+    }
+  }
+
+  raizes.forEach(r => renderConta(r, 0));
+
+  const filtroNatHtml = tipo === 'contabil' ? `
+    <select id="filtro-natureza" onchange="planosFiltrarArvore('contabil')">
+      <option value="">Todas naturezas</option>
+      <option value="ATIVO">Ativo</option>
+      <option value="PASSIVO">Passivo</option>
+      <option value="PL">Patrimônio Líquido</option>
+      <option value="RECEITA">Receitas</option>
+      <option value="DESPESA">Despesas</option>
+      <option value="RESULTADO">Resultado</option>
+      <option value="COMPENSACAO">Compensação</option>
+      <option value="OUTROS">Outros</option>
+    </select>
+  ` : '';
+
+  const novoBtn = isAdmin() ? `<button class="btn btn-gold btn-sm" onclick="planoModalNovaConta('${tipo}')">+ Nova conta</button>` : '';
+
+  $id('planos-tab-body').innerHTML = `
+    <div class="planos-toolbar">
+      <input type="search" id="busca-${tipo}" placeholder="Buscar por código ou descrição..." value="${state.filtro||''}" oninput="planosFiltrarArvore('${tipo}')">
+      ${filtroNatHtml}
+      <button class="btn btn-sm btn-outline" onclick="planosExpandirTodos('${tipo}')">Expandir tudo</button>
+      <button class="btn btn-sm btn-outline" onclick="planosColapsarTodos('${tipo}')">Colapsar tudo</button>
+      ${novoBtn}
+    </div>
+    <div class="plano-tree" id="arvore-${tipo}">
+      ${linhas.length ? linhas.join('') : '<div class="empty-state-mini">Nenhuma conta encontrada.</div>'}
+    </div>
+  `;
+
+  // Restaurar valores dos filtros (perdidos no innerHTML)
+  if (tipo === 'contabil') {
+    const sel = $id('filtro-natureza');
+    if (sel) sel.value = state.natureza || '';
+  }
+  // Foco preserva caret no input se tinha valor
+  const inp = $id('busca-' + tipo);
+  if (inp && state.filtro) { inp.focus(); inp.setSelectionRange(state.filtro.length, state.filtro.length); }
+}
+
+function planosToggle(tipo, id) {
+  const s = PLANOS_STATE[tipo].expanded;
+  if (s.has(id)) s.delete(id); else s.add(id);
+  renderPlanoArvore(tipo);
+}
+function planosExpandirTodos(tipo) {
+  PLANOS_STATE[tipo].contas.forEach(c => PLANOS_STATE[tipo].expanded.add(c.id));
+  renderPlanoArvore(tipo);
+}
+function planosColapsarTodos(tipo) {
+  PLANOS_STATE[tipo].expanded.clear();
+  renderPlanoArvore(tipo);
+}
+function planosFiltrarArvore(tipo) {
+  PLANOS_STATE[tipo].filtro = $id('busca-' + tipo).value;
+  if (tipo === 'contabil') {
+    PLANOS_STATE.contabil.natureza = $id('filtro-natureza').value;
+  }
+  renderPlanoArvore(tipo);
+}
+
+// ── CRUD CONTAS ──────────────────────────────────────────────────
+function planoModalNovaConta(tipo) {
+  if (!isAdmin()) { toast('Apenas administradores podem criar contas.', 'error'); return; }
+  const isFin = tipo === 'financeiro';
+  openModal(`Nova Conta (${isFin?'Financeiro':'Contábil'})`, `
+    <div class="form-grid">
+      <div class="form-field"><label class="form-label">Código *</label><input class="form-input" id="np-codigo" placeholder="${isFin?'1.1.05':'1.1.01.999'}"></div>
+      <div class="form-field"><label class="form-label">Tipo *</label><select class="form-select" id="np-sint">
+        <option value="false">Analítica (recebe lançamento)</option>
+        <option value="true">Sintética (agrupadora)</option>
+      </select></div>
+      <div class="form-field full"><label class="form-label">Descrição *</label><input class="form-input" id="np-desc" placeholder="Nome da conta"></div>
+      ${isFin ? `<div class="form-field full"><label class="form-label">Grupo</label><select class="form-select" id="np-grupo">
+        <option value="">Herdar do pai</option>
+        <option value="RECEITA">Receita</option>
+        <option value="CUSTO_DESPESA">Custo / Despesa</option>
+        <option value="DESP_FINANCEIRA">Despesa Financeira</option>
+        <option value="INVESTIMENTO">Investimento</option>
+        <option value="NAO_OPERACIONAL">Não Operacional</option>
+      </select></div>` : `<div class="form-field full"><label class="form-label">Natureza</label><select class="form-select" id="np-natureza">
+        <option value="">Herdar do pai</option>
+        <option value="ATIVO">Ativo</option>
+        <option value="PASSIVO">Passivo</option>
+        <option value="PL">Patrimônio Líquido</option>
+        <option value="RECEITA">Receita</option>
+        <option value="DESPESA">Despesa</option>
+        <option value="RESULTADO">Resultado</option>
+        <option value="COMPENSACAO">Compensação</option>
+      </select></div>`}
+    </div>
+  `, `
+    <button class="btn btn-outline" onclick="closeModal()">Cancelar</button>
+    <button class="btn btn-gold" onclick="planoSalvarNovaConta('${tipo}')">Salvar</button>
+  `);
+}
+
+async function planoSalvarNovaConta(tipo) {
+  const codigo = $id('np-codigo').value.trim();
+  const desc   = $id('np-desc').value.trim();
+  const sint   = $id('np-sint').value === 'true';
+  if (!codigo || !desc) { toast('Preencha código e descrição.', 'error'); return; }
+
+  const state = PLANOS_STATE[tipo];
+  if (state.contas.find(c => c.codigo === codigo)) {
+    toast('Já existe uma conta com este código.', 'error'); return;
+  }
+
+  // Localiza pai pelo código
+  const codigoPai = codigo.includes('.') ? codigo.split('.').slice(0, -1).join('.') : null;
+  const pai = codigoPai ? state.contas.find(c => c.codigo === codigoPai) : null;
+  const nivel = codigo.split('.').length;
+  const ordem = (Math.max(0, ...state.contas.map(c => c.ordem || 0)) + 1);
+
+  const payload = {
+    tenant_id: APP.tenantId,
+    codigo, descricao: desc, nivel, ordem,
+    conta_pai_id: pai?.id || null,
+  };
+
+  if (tipo === 'financeiro') {
+    payload.tipo = sint ? 'S' : 'A';
+    payload.grupo = $id('np-grupo').value || pai?.grupo || null;
+  } else {
+    payload.sintetica = sint;
+    payload.natureza = $id('np-natureza').value || pai?.natureza || null;
+    payload.entra_balanco = true;
+  }
+
+  const tabela = tipo === 'financeiro' ? 'fin_plano_financeiro' : 'fin_plano_contabil';
+  try {
+    const criada = await supa('POST', tabela, { returning: true, body: payload });
+    closeModal();
+    if (Array.isArray(criada) && criada[0]) atualizarLocal(state.contas, criada[0]);
+    toast('Conta criada!', 'success');
+    renderPlanoArvore(tipo);
+  } catch(e) { toast('Erro: ' + e.message, 'error'); }
+}
+
+async function planoEditarConta(tipo, id) {
+  if (!isAdmin()) { toast('Apenas administradores podem editar.', 'error'); return; }
+  const state = PLANOS_STATE[tipo];
+  const conta = state.contas.find(c => c.id === id);
+  if (!conta) return;
+  openModal('Editar Conta', `
+    <div class="form-grid">
+      <div class="form-field"><label class="form-label">Código</label><input class="form-input" id="ne-codigo" value="${conta.codigo||''}" disabled style="background:var(--surface-2)"></div>
+      <div class="form-field full"><label class="form-label">Descrição *</label><input class="form-input" id="ne-desc" value="${(conta.descricao||'').replace(/"/g,'&quot;')}"></div>
+      ${tipo === 'contabil' ? `<div class="form-field full"><label class="form-label">Apelido</label><input class="form-input" id="ne-apel" value="${(conta.apelido||'').replace(/"/g,'&quot;')}"></div>` : ''}
+    </div>
+  `, `
+    <button class="btn btn-outline" onclick="closeModal()">Cancelar</button>
+    <button class="btn btn-gold" onclick="planoSalvarEdicao('${tipo}','${id}')">Salvar</button>
+  `);
+}
+
+async function planoSalvarEdicao(tipo, id) {
+  const desc = $id('ne-desc').value.trim();
+  if (!desc) { toast('Descrição obrigatória.', 'error'); return; }
+  const tabela = tipo === 'financeiro' ? 'fin_plano_financeiro' : 'fin_plano_contabil';
+  const update = { descricao: desc };
+  if (tipo === 'contabil') update.apelido = $id('ne-apel').value.trim() || null;
+  try {
+    await supa('PATCH', tabela, { params: { id: 'eq.' + id }, body: update });
+    closeModal();
+    const state = PLANOS_STATE[tipo];
+    const conta = state.contas.find(c => c.id === id);
+    if (conta) Object.assign(conta, update);
+    toast('Conta atualizada!', 'success');
+    renderPlanoArvore(tipo);
+  } catch(e) { toast('Erro: ' + e.message, 'error'); }
+}
+
+async function planoExcluirConta(tipo, id) {
+  if (!isAdmin()) { toast('Apenas administradores podem desativar.', 'error'); return; }
+  if (!confirm('Desativar esta conta? Vínculos de-para serão removidos.')) return;
+  const tabela = tipo === 'financeiro' ? 'fin_plano_financeiro' : 'fin_plano_contabil';
+  try {
+    await supa('PATCH', tabela, { params: { id: 'eq.' + id }, body: { ativo: false } });
+    const state = PLANOS_STATE[tipo];
+    const idx = state.contas.findIndex(c => c.id === id);
+    if (idx >= 0) state.contas.splice(idx, 1);
+    // Remove vínculos órfãos do estado local
+    PLANOS_STATE.depara.vinculos = PLANOS_STATE.depara.vinculos.filter(v =>
+      v.conta_financeira_id !== id && v.conta_contabil_id !== id);
+    toast('Conta desativada.', 'success');
+    renderPlanoArvore(tipo);
+  } catch(e) { toast('Erro: ' + e.message, 'error'); }
+}
+
+// ── DE-PARA ──────────────────────────────────────────────────────
+function renderDePara() {
+  const D = PLANOS_STATE.depara;
+  const s = D.stats || {};
+
+  // Listas de analíticas
+  const finList = PLANOS_STATE.financeiro.contas
+    .filter(c => c.tipo === 'A' && c.ativo !== false)
+    .sort((a,b) => (a.codigo||'').localeCompare(b.codigo||''));
+  const contList = PLANOS_STATE.contabil.contas
+    .filter(c => !c.sintetica && c.ativo !== false)
+    .sort((a,b) => (a.codigo||'').localeCompare(b.codigo||''));
+
+  const idsLinkedFin  = new Set(D.vinculos.map(v => v.conta_financeira_id));
+  const idsLinkedCont = new Set(D.vinculos.map(v => v.conta_contabil_id));
+
+  const filFin  = (D.filtroFin  || '').toLowerCase();
+  const filCont = (D.filtroCont || '').toLowerCase();
+
+  const finItems = finList
+    .filter(c => !filFin || (c.codigo||'').toLowerCase().includes(filFin) || (c.descricao||'').toLowerCase().includes(filFin))
+    .map(c => `
+      <div class="depara-item ${idsLinkedFin.has(c.id)?'linked':''} ${D.selFin===c.id?'selected':''}"
+           onclick="deparaSelecionar('fin','${c.id}')">
+        <span class="codigo">${c.codigo}</span>
+        <span class="descricao">${c.descricao||''}</span>
+      </div>
+    `).join('') || '<div class="empty-state-mini">Sem contas analíticas.</div>';
+
+  const contItems = contList
+    .filter(c => !filCont || (c.codigo||'').toLowerCase().includes(filCont) || (c.descricao||'').toLowerCase().includes(filCont) || (c.apelido||'').toLowerCase().includes(filCont))
+    .map(c => `
+      <div class="depara-item ${idsLinkedCont.has(c.id)?'linked':''} ${D.selCont===c.id?'selected':''}"
+           onclick="deparaSelecionar('cont','${c.id}')">
+        <span class="codigo">${c.codigo}${c.apelido?' · '+c.apelido:''}</span>
+        <span class="descricao">${c.descricao||''}</span>
+      </div>
+    `).join('') || '<div class="empty-state-mini">Sem contas analíticas.</div>';
+
+  // Lista de vínculos existentes
+  const finById  = new Map(PLANOS_STATE.financeiro.contas.map(c => [c.id, c]));
+  const contById = new Map(PLANOS_STATE.contabil.contas.map(c => [c.id, c]));
+  const vincsHtml = D.vinculos.map(v => {
+    const f = finById.get(v.conta_financeira_id);
+    const c = contById.get(v.conta_contabil_id);
+    if (!f || !c) return '';
+    const removeBtn = isAdmin() ? `<button class="btn-mini" onclick="deparaRemoverVinculo('${v.id}')" title="Remover">🗑</button>` : '';
+    return `
+      <div class="vinculo-row">
+        <span><span class="codigo-mono">${f.codigo}</span> ${f.descricao||''}</span>
+        <span class="arrow">→</span>
+        <span><span class="codigo-mono">${c.codigo}</span> ${c.descricao||''}</span>
+        <span style="text-align:right;font-family:var(--mono);color:var(--text-2)">${v.percentual||100}%</span>
+        <span style="text-align:right">${removeBtn}</span>
+      </div>`;
+  }).join('') || '<div class="empty-state-mini">Nenhum vínculo cadastrado ainda. Selecione uma conta de cada lado e clique em <strong>Vincular →</strong>.</div>';
+
+  const podeVincular = isAdmin() && D.selFin && D.selCont;
+  const btnVinc = isAdmin() ? `
+    <button class="btn btn-gold" id="btn-vincular" onclick="deparaVincular()" ${podeVincular?'':'disabled'}>Vincular →</button>
+    <button class="btn btn-outline" onclick="deparaLimparSelecao()">Limpar</button>
+  ` : '<div style="font-size:11.5px;color:var(--text-3);text-align:center;padding:10px">Apenas administradores podem editar vínculos.</div>';
+
+  $id('planos-tab-body').innerHTML = `
+    <div class="depara-stats">
+      <div class="depara-stat-card"><div class="num">${s.total_financeiras||0}</div><div class="label">Contas Financeiras</div></div>
+      <div class="depara-stat-card"><div class="num">${s.total_contabeis||0}</div><div class="label">Contas Contábeis</div></div>
+      <div class="depara-stat-card"><div class="num">${s.total_vinculos||0}</div><div class="label">Vínculos Criados</div></div>
+      <div class="depara-stat-card"><div class="num">${s.financeiras_vinculadas||0}</div><div class="label">Financeiras Vinculadas</div></div>
+      <div class="depara-stat-card"><div class="num ${(s.financeiras_pendentes||0)>0?'alert':''}">${s.financeiras_pendentes||0}</div><div class="label">Pendentes</div></div>
+    </div>
+
+    <p style="color:var(--text-3);font-size:12.5px;margin-bottom:14px">
+      Selecione uma conta financeira (esquerda) e uma conta contábil (direita) e clique em <strong>Vincular →</strong>.
+      ${isAdmin() ? '' : 'Modo somente leitura: apenas administradores podem editar vínculos.'}
+    </p>
+
+    <div class="depara-grid">
+      <div class="depara-col">
+        <header>Plano Financeiro (analíticas)</header>
+        <input type="search" id="busca-depara-fin" placeholder="Buscar..." value="${D.filtroFin||''}" oninput="deparaFiltrar('fin', this.value)">
+        <div class="depara-list">${finItems}</div>
+      </div>
+      <div class="depara-action">${btnVinc}</div>
+      <div class="depara-col">
+        <header>Plano Contábil (analíticas)</header>
+        <input type="search" id="busca-depara-cont" placeholder="Buscar..." value="${D.filtroCont||''}" oninput="deparaFiltrar('cont', this.value)">
+        <div class="depara-list">${contItems}</div>
+      </div>
+    </div>
+
+    <h3 style="margin-top:24px;margin-bottom:10px;font-size:14px;color:var(--text)">Vínculos atuais</h3>
+    <div class="vinculos-existentes">${vincsHtml}</div>
+  `;
+}
+
+function deparaSelecionar(lado, id) {
+  if (lado === 'fin')  PLANOS_STATE.depara.selFin  = (PLANOS_STATE.depara.selFin  === id ? null : id);
+  if (lado === 'cont') PLANOS_STATE.depara.selCont = (PLANOS_STATE.depara.selCont === id ? null : id);
+  renderDePara();
+}
+
+function deparaLimparSelecao() {
+  PLANOS_STATE.depara.selFin = null;
+  PLANOS_STATE.depara.selCont = null;
+  renderDePara();
+}
+
+function deparaFiltrar(lado, val) {
+  if (lado === 'fin')  PLANOS_STATE.depara.filtroFin  = val;
+  if (lado === 'cont') PLANOS_STATE.depara.filtroCont = val;
+  renderDePara();
+  // Reposicionar foco no input que disparou
+  const id = lado === 'fin' ? 'busca-depara-fin' : 'busca-depara-cont';
+  const inp = $id(id);
+  if (inp) { inp.focus(); inp.setSelectionRange(val.length, val.length); }
+}
+
+async function deparaVincular() {
+  if (!isAdmin()) { toast('Apenas administradores podem criar vínculos.', 'error'); return; }
+  const D = PLANOS_STATE.depara;
+  if (!D.selFin || !D.selCont) return;
+
+  // Já existe?
+  if (D.vinculos.find(v => v.conta_financeira_id === D.selFin && v.conta_contabil_id === D.selCont)) {
+    toast('Este vínculo já existe.', 'error'); return;
+  }
+
+  // Modal de percentual
+  openModal('Confirmar Vínculo', `
+    <div class="form-grid">
+      <div class="form-field full" style="font-size:13px;color:var(--text-2)">
+        Percentual de rateio (1–100). Use 100 quando 100% do valor da conta financeira deve ir para esta conta contábil.
+      </div>
+      <div class="form-field"><label class="form-label">Percentual</label><input class="form-input" id="dp-perc" type="number" min="0.01" max="100" step="0.01" value="100"></div>
+      <div class="form-field full"><label class="form-label">Observação (opcional)</label><input class="form-input" id="dp-obs" placeholder=""></div>
+    </div>
+  `, `
+    <button class="btn btn-outline" onclick="closeModal()">Cancelar</button>
+    <button class="btn btn-gold" onclick="deparaConfirmarVinculo()">Vincular</button>
+  `);
+}
+
+async function deparaConfirmarVinculo() {
+  const D = PLANOS_STATE.depara;
+  const perc = parseFloat($id('dp-perc').value);
+  const obs  = $id('dp-obs').value.trim() || null;
+  if (isNaN(perc) || perc <= 0 || perc > 100) { toast('Percentual inválido.', 'error'); return; }
+  try {
+    const criado = await supa('POST', 'fin_plano_depara', {
+      returning: true,
+      body: {
+        tenant_id: APP.tenantId,
+        conta_financeira_id: D.selFin,
+        conta_contabil_id:   D.selCont,
+        percentual: perc,
+        observacao: obs,
+      }
+    });
+    closeModal();
+    if (Array.isArray(criado) && criado[0]) D.vinculos.push(criado[0]);
+    D.selFin = null; D.selCont = null;
+    // Atualizar stats locais
+    if (D.stats) {
+      D.stats.total_vinculos = (D.stats.total_vinculos||0) + 1;
+    }
+    toast('Vínculo criado!', 'success');
+    renderDePara();
+  } catch(e) { toast('Erro: ' + e.message, 'error'); }
+}
+
+async function deparaRemoverVinculo(id) {
+  if (!isAdmin()) { toast('Apenas administradores podem remover.', 'error'); return; }
+  if (!confirm('Remover este vínculo?')) return;
+  try {
+    await supa('DELETE', 'fin_plano_depara', { params: { id: 'eq.' + id } });
+    const D = PLANOS_STATE.depara;
+    D.vinculos = D.vinculos.filter(v => v.id !== id);
+    if (D.stats) D.stats.total_vinculos = Math.max(0, (D.stats.total_vinculos||1) - 1);
+    toast('Vínculo removido.', 'success');
+    renderDePara();
   } catch(e) { toast('Erro: ' + e.message, 'error'); }
 }
 

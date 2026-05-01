@@ -3227,7 +3227,8 @@ async function salvarCategoria() {
 // ─────────────────────────────────────────────────────────────────────────
 // Tabelas backend: fin_plano_financeiro, fin_plano_contabil, fin_plano_depara
 // (criadas em migration_v19_FINAL_fix.sql, com seed automático ao criar tenant)
-// Permissões: leitura para todos do tenant; escrita só admin (RLS + isAdmin())
+// Permissões: leitura para quem tem 'planos.v'; escrita conforme permissoes JSONB
+// (admin sempre pode tudo; usuários custom/financeiro/leitura conforme template)
 // ═══════════════════════════════════════════════════════════════════════════
 
 const PLANOS_STATE = {
@@ -3246,6 +3247,18 @@ const PLANOS_STATE = {
 };
 
 function renderPlanos() {
+  // ── Permissão v2: 'planos' precisa estar autorizado para ver ──
+  if (!isAdmin() && !podeVer('planos')) {
+    $id('topbar-actions').innerHTML = '';
+    $id('page-content').innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon">🔒</div>
+        <h3>Acesso restrito</h3>
+        <p style="font-size:13px;color:var(--text-3);margin-top:6px">Você não tem permissão para visualizar o Plano de Contas.</p>
+      </div>`;
+    return;
+  }
+
   $id('topbar-actions').innerHTML = '';
   $id('page-content').innerHTML = `
     <nav class="planos-tabs" role="tablist">
@@ -3260,6 +3273,14 @@ function renderPlanos() {
     planosShowTab(PLANOS_STATE.tabAtual);
   });
 }
+
+// ── Helpers de permissão para módulo planos ─────────────────────────────
+// admin sempre pode tudo; senão, checa o módulo 'planos' no JSONB permissoes
+function podeCriarPlanos()  { return isAdmin() || podeCriar('planos'); }
+function podeEditarPlanos() { return isAdmin() || podeEditar('planos'); }
+function podeExcluirPlanos(){ return isAdmin() || podeExcluir('planos'); }
+// Para criar/editar/excluir vínculos de-para usamos a mesma permissão de edição
+function podeEditarDePara() { return isAdmin() || podeEditar('planos'); }
 
 async function planosCarregarDados() {
   if (!APP.tenantId) return;
@@ -3375,9 +3396,9 @@ function renderPlanoArvore(tipo) {
       tag = `<span class="nat-tag nat-${c.natureza}">${c.natureza}</span>`;
     }
 
-    const adminBtns = isAdmin() ? `
-      <button onclick="planoEditarConta('${tipo}','${c.id}')" title="Editar">✎</button>
-      ${!hasChild ? `<button onclick="planoExcluirConta('${tipo}','${c.id}')" title="Desativar">🗑</button>` : ''}
+    const adminBtns = (podeEditarPlanos() || podeExcluirPlanos()) ? `
+      ${podeEditarPlanos()  ? `<button onclick="planoEditarConta('${tipo}','${c.id}')" title="Editar">✎</button>` : ''}
+      ${(!hasChild && podeExcluirPlanos()) ? `<button onclick="planoExcluirConta('${tipo}','${c.id}')" title="Desativar">🗑</button>` : ''}
     ` : '';
 
     // Para contábil, exibe apelido entre parênteses (desambigua códigos duplicados)
@@ -3417,7 +3438,7 @@ function renderPlanoArvore(tipo) {
     </select>
   ` : '';
 
-  const novoBtn = isAdmin() ? `<button class="btn btn-gold btn-sm" onclick="planoModalNovaConta('${tipo}')">+ Nova conta</button>` : '';
+  const novoBtn = podeCriarPlanos() ? `<button class="btn btn-gold btn-sm" onclick="planoModalNovaConta('${tipo}')">+ Nova conta</button>` : '';
 
   $id('planos-tab-body').innerHTML = `
     <div class="planos-toolbar">
@@ -3465,7 +3486,7 @@ function planosFiltrarArvore(tipo) {
 
 // ── CRUD CONTAS ──────────────────────────────────────────────────
 function planoModalNovaConta(tipo) {
-  if (!isAdmin()) { toast('Apenas administradores podem criar contas.', 'error'); return; }
+  if (!podeCriarPlanos()) { toast('Sem permissão para criar contas.', 'error'); return; }
   const isFin = tipo === 'financeiro';
   openModal(`Nova Conta (${isFin?'Financeiro':'Contábil'})`, `
     <div class="form-grid">
@@ -3559,7 +3580,7 @@ async function planoSalvarNovaConta(tipo) {
 }
 
 async function planoEditarConta(tipo, id) {
-  if (!isAdmin()) { toast('Apenas administradores podem editar.', 'error'); return; }
+  if (!podeEditarPlanos()) { toast('Sem permissão para editar.', 'error'); return; }
   const state = PLANOS_STATE[tipo];
   const conta = state.contas.find(c => c.id === id);
   if (!conta) return;
@@ -3593,7 +3614,7 @@ async function planoSalvarEdicao(tipo, id) {
 }
 
 async function planoExcluirConta(tipo, id) {
-  if (!isAdmin()) { toast('Apenas administradores podem desativar.', 'error'); return; }
+  if (!podeExcluirPlanos()) { toast('Sem permissão para desativar.', 'error'); return; }
   if (!confirm('Desativar esta conta? Vínculos de-para serão removidos.')) return;
   const tabela = tipo === 'financeiro' ? 'fin_plano_financeiro' : 'fin_plano_contabil';
   try {
@@ -3655,7 +3676,7 @@ function renderDePara() {
     const f = finById.get(v.conta_financeira_id);
     const c = contById.get(v.conta_contabil_id);
     if (!f || !c) return '';
-    const removeBtn = isAdmin() ? `<button class="btn-mini" onclick="deparaRemoverVinculo('${v.id}')" title="Remover">🗑</button>` : '';
+    const removeBtn = podeEditarDePara() ? `<button class="btn-mini" onclick="deparaRemoverVinculo('${v.id}')" title="Remover">🗑</button>` : '';
     return `
       <div class="vinculo-row">
         <span><span class="codigo-mono">${f.codigo}</span> ${f.descricao||''}</span>
@@ -3666,11 +3687,11 @@ function renderDePara() {
       </div>`;
   }).join('') || '<div class="empty-state-mini">Nenhum vínculo cadastrado ainda. Selecione uma conta de cada lado e clique em <strong>Vincular →</strong>.</div>';
 
-  const podeVincular = isAdmin() && D.selFin && D.selCont;
-  const btnVinc = isAdmin() ? `
+  const podeVincular = podeEditarDePara() && D.selFin && D.selCont;
+  const btnVinc = podeEditarDePara() ? `
     <button class="btn btn-gold" id="btn-vincular" onclick="deparaVincular()" ${podeVincular?'':'disabled'}>Vincular →</button>
     <button class="btn btn-outline" onclick="deparaLimparSelecao()">Limpar</button>
-  ` : '<div style="font-size:11.5px;color:var(--text-3);text-align:center;padding:10px">Apenas administradores podem editar vínculos.</div>';
+  ` : '<div style="font-size:11.5px;color:var(--text-3);text-align:center;padding:10px">Você não tem permissão para editar vínculos.</div>';
 
   $id('planos-tab-body').innerHTML = `
     <div class="depara-stats">
@@ -3683,7 +3704,7 @@ function renderDePara() {
 
     <p style="color:var(--text-3);font-size:12.5px;margin-bottom:14px">
       Selecione uma conta financeira (esquerda) e uma conta contábil (direita) e clique em <strong>Vincular →</strong>.
-      ${isAdmin() ? '' : 'Modo somente leitura: apenas administradores podem editar vínculos.'}
+      ${podeEditarDePara() ? '' : 'Modo somente leitura.'}
     </p>
 
     <div class="depara-grid">
@@ -3728,7 +3749,7 @@ function deparaFiltrar(lado, val) {
 }
 
 async function deparaVincular() {
-  if (!isAdmin()) { toast('Apenas administradores podem criar vínculos.', 'error'); return; }
+  if (!podeEditarDePara()) { toast('Sem permissão para criar vínculos.', 'error'); return; }
   const D = PLANOS_STATE.depara;
   if (!D.selFin || !D.selCont) return;
 
@@ -3781,7 +3802,7 @@ async function deparaConfirmarVinculo() {
 }
 
 async function deparaRemoverVinculo(id) {
-  if (!isAdmin()) { toast('Apenas administradores podem remover.', 'error'); return; }
+  if (!podeEditarDePara()) { toast('Sem permissão para remover.', 'error'); return; }
   if (!confirm('Remover este vínculo?')) return;
   try {
     await supa('DELETE', 'fin_plano_depara', { params: { id: 'eq.' + id } });
@@ -8402,6 +8423,7 @@ const _TEMPLATES = {
   admin:      { label: 'Administrador', desc: 'Acesso total a todos os módulos', cor: 'var(--gold-dim)' },
   financeiro: { label: 'Operacional',   desc: 'Cria/edita lançamentos, sem configurações', cor: 'var(--amber)' },
   leitura:    { label: 'Visualização',  desc: 'Somente leitura', cor: 'var(--text-2)' },
+  custom:     { label: 'Personalizado', desc: 'Permissões definidas manualmente', cor: '#7d3c98' },
 };
 
 async function carregarUsuarios() {
@@ -9572,6 +9594,7 @@ const _MODULOS_PERMS = [
   { key: 'impostos',      label: 'Impostos' },
   { key: 'dre',           label: 'DRE' },
   { key: 'fluxo_caixa',   label: 'Fluxo de Caixa' },
+  { key: 'planos',        label: 'Plano de Contas' },
   { key: 'importacao_ia', label: 'Importação IA' },
   { key: 'configuracoes', label: 'Configurações' },
   { key: 'usuarios',      label: 'Usuários' },
@@ -9596,14 +9619,21 @@ const _PRESETS = {
     p.metas.v = true;
     p.dre.v = true;
     p.fluxo_caixa.v = true;
+    p.planos.v = true; // operacional vê plano de contas mas não edita
     p.importacao_ia.v = true; p.importacao_ia.c = true;
     return p;
   },
   leitura: () => {
     const p = {};
     _MODULOS_PERMS.forEach(m => p[m.key] = { v:false, c:false, e:false, x:false });
-    ['dashboard','receber','pagar','caixa_bancos','cadastros','recorrencias','metas','impostos','dre','fluxo_caixa']
+    ['dashboard','receber','pagar','caixa_bancos','cadastros','recorrencias','metas','impostos','dre','fluxo_caixa','planos']
       .forEach(k => p[k].v = true);
+    return p;
+  },
+  custom: () => {
+    // Custom começa do zero — admin define do jeito que quiser
+    const p = {};
+    _MODULOS_PERMS.forEach(m => p[m.key] = { v:false, c:false, e:false, x:false });
     return p;
   }
 };

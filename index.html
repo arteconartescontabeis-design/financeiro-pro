@@ -1549,6 +1549,44 @@ function rerenderTelaAtual() {
 const _RPC_CACHE = new Map();   // chave: 'fn:tenant:args' → {data, expira}
 const _RPC_TTL_MS = 30 * 1000;  // 30s
 
+// Leitor SÍNCRONO do cache (retorna null se não houver hit válido).
+// Usado pelos render*() para usar dados da RPC sem await — se faltar,
+// o cálculo legado roda como fallback transparente.
+function _rpcCacheGet(fnName, args) {
+  const tid = APP.tenantId;
+  if (!tid) return null;
+  const key = `${fnName}:${tid}:${JSON.stringify(args || {})}`;
+  const hit = _RPC_CACHE.get(key);
+  if (hit && hit.expira > Date.now()) return hit.data;
+  return null;
+}
+
+// Dispara RPC em background e dispara re-render quando chegar.
+// Se a página mudou enquanto a RPC voltava, não faz nada.
+function _rpcAquecer(fnName, args, onReadyRender) {
+  const tid = APP.tenantId;
+  if (!tid) return;
+  const key = `${fnName}:${tid}:${JSON.stringify(args || {})}`;
+  // Já em cache? Não precisa aquecer.
+  const hit = _RPC_CACHE.get(key);
+  if (hit && hit.expira > Date.now()) return;
+  // Marca como "fetching" para evitar disparos duplicados em re-renders rápidos
+  if (hit && hit.fetching) return;
+  _RPC_CACHE.set(key, { fetching: true, expira: Date.now() + 5000 });
+  supaRpc(fnName, args || {})
+    .then(data => {
+      _RPC_CACHE.set(key, { data, expira: Date.now() + _RPC_TTL_MS });
+      if (typeof onReadyRender === 'function') {
+        try { onReadyRender(); } catch(e) { console.warn('rerender RPC falhou:', e); }
+      }
+    })
+    .catch(e => {
+      console.warn(`RPC ${fnName} falhou:`, e?.message || e);
+      // Limpa marca de fetching para tentar de novo no próximo render
+      _RPC_CACHE.delete(key);
+    });
+}
+
 async function _rpcCacheado(fnName, args) {
   const tid = APP.tenantId;
   if (!tid) return null;
@@ -1617,19 +1655,38 @@ function renderDashboard() {
   const diasNoMes   = new Date(parseInt(anoAtual), new Date().getMonth()+1, 0).getDate();
   const mesAnterior = (() => { const d=new Date(); d.setMonth(d.getMonth()-1); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); })();
 
-  // ── Dados base ────────────────────────────────────────────
-  const saldoTotal   = CONTAS.reduce((s,c) => s+(parseFloat(c.saldo_atual)||0), 0);
+  // ── Dados base (cálculo legado — usado como fallback) ─────
+  let saldoTotal     = CONTAS.reduce((s,c) => s+(parseFloat(c.saldo_atual)||0), 0);
   const recPend      = RECEITAS.filter(r => r.status==='pendente');
   const despPend     = DESPESAS.filter(d => d.status==='pendente');
   const recVenc      = RECEITAS.filter(r => r.status==='pendente' && r.vencimento<hoje);
   const despVenc     = DESPESAS.filter(d => d.status==='pendente' && d.vencimento<hoje);
-  const totalReceber = recPend.reduce((s,r) => s+(parseFloat(r.valor)||0), 0);
-  const totalPagar   = despPend.reduce((s,d) => s+(parseFloat(d.valor)||0), 0);
+  let totalReceber = recPend.reduce((s,r) => s+(parseFloat(r.valor)||0), 0);
+  let totalPagar   = despPend.reduce((s,d) => s+(parseFloat(d.valor)||0), 0);
 
-  const recMes  = RECEITAS.filter(r=>r.status==='recebido'&&r.vencimento?.startsWith(mesAtual)).reduce((s,r)=>s+(parseFloat(r.valor)||0),0);
-  const despMes = DESPESAS.filter(d=>d.status==='pago'&&d.vencimento?.startsWith(mesAtual)).reduce((s,d)=>s+(parseFloat(d.valor)||0),0);
-  const recAnt  = RECEITAS.filter(r=>r.status==='recebido'&&r.vencimento?.startsWith(mesAnterior)).reduce((s,r)=>s+(parseFloat(r.valor)||0),0);
-  const despAnt = DESPESAS.filter(d=>d.status==='pago'&&d.vencimento?.startsWith(mesAnterior)).reduce((s,d)=>s+(parseFloat(d.valor)||0),0);
+  let recMes  = RECEITAS.filter(r=>r.status==='recebido'&&r.vencimento?.startsWith(mesAtual)).reduce((s,r)=>s+(parseFloat(r.valor)||0),0);
+  let despMes = DESPESAS.filter(d=>d.status==='pago'&&d.vencimento?.startsWith(mesAtual)).reduce((s,d)=>s+(parseFloat(d.valor)||0),0);
+  let recAnt  = RECEITAS.filter(r=>r.status==='recebido'&&r.vencimento?.startsWith(mesAnterior)).reduce((s,r)=>s+(parseFloat(r.valor)||0),0);
+  let despAnt = DESPESAS.filter(d=>d.status==='pago'&&d.vencimento?.startsWith(mesAnterior)).reduce((s,d)=>s+(parseFloat(d.valor)||0),0);
+
+  // ── PERFORMANCE v21 — sobrescreve KPIs com dados da RPC quando disponível ──
+  // Mantém arrays para os cálculos derivados (score/projeção/sugestões/gráfico).
+  const _rpcArgs = { p_tenant_id: APP.tenantId, p_data_ref: hoje };
+  const _rpcDash = _rpcCacheGet('fin_dashboard_kpis', _rpcArgs);
+  if (_rpcDash && typeof _rpcDash.saldo_total !== 'undefined') {
+    saldoTotal   = parseFloat(_rpcDash.saldo_total) || 0;
+    totalReceber = parseFloat(_rpcDash.total_a_receber) || 0;
+    totalPagar   = parseFloat(_rpcDash.total_a_pagar) || 0;
+    recMes       = parseFloat(_rpcDash.rec_mes) || 0;
+    despMes      = parseFloat(_rpcDash.desp_mes) || 0;
+    recAnt       = parseFloat(_rpcDash.rec_ant) || 0;
+    despAnt      = parseFloat(_rpcDash.desp_ant) || 0;
+  } else {
+    // Não está em cache: aquece em background para o próximo render
+    _rpcAquecer('fin_dashboard_kpis', _rpcArgs, () => {
+      if (APP.pagina === 'dashboard') renderDashboard();
+    });
+  }
 
   const varRec  = recAnt>0  ? ((recMes-recAnt)/recAnt*100).toFixed(1)  : null;
   const varDesp = despAnt>0 ? ((despMes-despAnt)/despAnt*100).toFixed(1) : null;
@@ -2782,6 +2839,44 @@ function renderFluxo() {
   }
 
   const mesObj = getMeses();
+
+  // ── PERFORMANCE v21 — sobrescreve mesObj com dados da RPC quando disponível ──
+  // Chaves do mesObj: { rec, desp, recReal, despReal }
+  // RPC fin_fluxo retorna: { mes, rec_previsto, rec_realizado, desp_previsto, desp_realizado }
+  (function() {
+    let _diIni, _diFim;
+    if (periodoSel === '6m') {
+      const _d = new Date(); _d.setMonth(_d.getMonth() - 5);
+      _diIni = `${_d.getFullYear()}-${String(_d.getMonth()+1).padStart(2,'0')}-01`;
+      const _ult = new Date(anoAtual, hoje.getMonth()+1, 0).getDate();
+      _diFim = `${anoAtual}-${mesAtual}-${String(_ult).padStart(2,'0')}`;
+    } else if (periodoSel === 'ano') {
+      _diIni = `${anoAtual}-01-01`;
+      _diFim = `${anoAtual}-12-31`;
+    } else {
+      _diIni = '1900-01-01';
+      _diFim = '2999-12-31';
+    }
+    const _rpcArgsFluxo = { p_tenant_id: APP.tenantId, p_data_inicio: _diIni, p_data_fim: _diFim };
+    const _rpcFluxo = _rpcCacheGet('fin_fluxo', _rpcArgsFluxo);
+    if (_rpcFluxo && Array.isArray(_rpcFluxo.meses)) {
+      // Limpa mesObj e reconstroi a partir da RPC
+      Object.keys(mesObj).forEach(k => delete mesObj[k]);
+      _rpcFluxo.meses.forEach(it => {
+        mesObj[it.mes] = {
+          rec:      parseFloat(it.rec_previsto)   || 0,
+          desp:     parseFloat(it.desp_previsto)  || 0,
+          recReal:  parseFloat(it.rec_realizado)  || 0,
+          despReal: parseFloat(it.desp_realizado) || 0,
+        };
+      });
+    } else {
+      _rpcAquecer('fin_fluxo', _rpcArgsFluxo, () => {
+        if (APP.pagina === 'fluxo') renderFluxo();
+      });
+    }
+  })();
+
   const lista = Object.keys(mesObj).sort();
   const maxVal = Math.max(...lista.map(m => Math.max(mesObj[m].rec, mesObj[m].desp)), 1);
   const totalRec  = lista.reduce((s,m)=>s+mesObj[m].rec,0);
@@ -2928,11 +3023,50 @@ function renderDRE() {
   recFilt.forEach(r  => { const c=chaveGrupo(r); catRec[c]  = (catRec[c]||0)  + (parseFloat(r.valor)||0); });
   despFilt.forEach(d => { const c=chaveGrupo(d); catDesp[c] = (catDesp[c]||0) + (parseFloat(d.valor)||0); });
 
-  const totalRec   = Object.values(catRec).reduce((s,v)=>s+v,0);
-  const totalDesp  = Object.values(catDesp).reduce((s,v)=>s+v,0);
+  let totalRec   = Object.values(catRec).reduce((s,v)=>s+v,0);
+  let totalDesp  = Object.values(catDesp).reduce((s,v)=>s+v,0);
+  let totalPrevR = recPrev.reduce((s,r)=>s+(parseFloat(r.valor)||0),0);
+  let totalPrevD = despPrev.reduce((s,d)=>s+(parseFloat(d.valor)||0),0);
+
+  // ── PERFORMANCE v21 — sobrescreve com dados da RPC quando disponível ──
+  // Só no modo 'categoria': a RPC fin_dre agrupa por categoria.
+  // Modo 'plano' usa cálculo local (RPC fin_dre_por_plano fica para depois).
+  if (modoSel === 'categoria') {
+    let _diIni, _diFim;
+    if (periodoSel === 'mes') {
+      _diIni = `${anoAtual}-${mesAtual}-01`;
+      const _ult = new Date(anoAtual, hoje.getMonth()+1, 0).getDate();
+      _diFim = `${anoAtual}-${mesAtual}-${String(_ult).padStart(2,'0')}`;
+    } else if (periodoSel === 'ano') {
+      _diIni = `${anoAtual}-01-01`;
+      _diFim = `${anoAtual}-12-31`;
+    } else {
+      _diIni = '1900-01-01';
+      _diFim = '2999-12-31';
+    }
+    const _rpcArgsDre = { p_tenant_id: APP.tenantId, p_data_inicio: _diIni, p_data_fim: _diFim };
+    const _rpcDre = _rpcCacheGet('fin_dre', _rpcArgsDre);
+    if (_rpcDre && Array.isArray(_rpcDre.por_categoria_receita)) {
+      const _catRec = {}, _catDesp = {};
+      _rpcDre.por_categoria_receita.forEach(it => { _catRec[it.categoria] = parseFloat(it.valor) || 0; });
+      _rpcDre.por_categoria_despesa.forEach(it => { _catDesp[it.categoria] = parseFloat(it.valor) || 0; });
+      // Substitui in-place mantendo referência
+      Object.keys(catRec).forEach(k => delete catRec[k]);
+      Object.keys(catDesp).forEach(k => delete catDesp[k]);
+      Object.assign(catRec, _catRec);
+      Object.assign(catDesp, _catDesp);
+      totalRec   = parseFloat(_rpcDre.rec_realizada)  || 0;
+      totalDesp  = parseFloat(_rpcDre.desp_realizada) || 0;
+      totalPrevR = parseFloat(_rpcDre.rec_pendente)   || 0;
+      totalPrevD = parseFloat(_rpcDre.desp_pendente)  || 0;
+    } else {
+      _rpcAquecer('fin_dre', _rpcArgsDre, () => {
+        if (APP.pagina === 'dre') renderDRE();
+      });
+    }
+  }
+
   const resultado  = totalRec - totalDesp;
-  const totalPrevR = recPrev.reduce((s,r)=>s+(parseFloat(r.valor)||0),0);
-  const totalPrevD = despPrev.reduce((s,d)=>s+(parseFloat(d.valor)||0),0);
   const margem     = totalRec > 0 ? Math.round((resultado/totalRec)*100) : 0;
 
   // Aviso de categorias sem vínculo (apenas no modo "plano")

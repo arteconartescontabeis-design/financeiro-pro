@@ -3264,15 +3264,33 @@ function renderPlanos() {
 async function planosCarregarDados() {
   if (!APP.tenantId) return;
   try {
+    // Helper de paginação — PostgREST tem limite default de 1000 linhas.
+    // Como o plano contábil tem 1.438 contas, precisamos paginar.
+    async function fetchTudo(tabela, paramsBase) {
+      const PAGE = 1000;
+      let offset = 0;
+      let acc = [];
+      while (true) {
+        const params = { ...paramsBase, limit: String(PAGE), offset: String(offset) };
+        const chunk = await supa('GET', tabela, { params });
+        if (!chunk || chunk.length === 0) break;
+        acc = acc.concat(chunk);
+        if (chunk.length < PAGE) break; // última página
+        offset += PAGE;
+        if (offset > 50000) break; // safety net
+      }
+      return acc;
+    }
+
     const [fin, cont, vincs] = await Promise.all([
-      supa('GET', 'fin_plano_financeiro', {
-        params: { select: '*', tenant_id: 'eq.' + APP.tenantId, ativo: 'eq.true', order: 'ordem.asc' }
+      fetchTudo('fin_plano_financeiro', {
+        select: '*', tenant_id: 'eq.' + APP.tenantId, ativo: 'eq.true', order: 'ordem.asc'
       }),
-      supa('GET', 'fin_plano_contabil', {
-        params: { select: '*', tenant_id: 'eq.' + APP.tenantId, ativo: 'eq.true', order: 'ordem.asc' }
+      fetchTudo('fin_plano_contabil', {
+        select: '*', tenant_id: 'eq.' + APP.tenantId, ativo: 'eq.true', order: 'ordem.asc'
       }),
-      supa('GET', 'fin_plano_depara', {
-        params: { select: '*', tenant_id: 'eq.' + APP.tenantId }
+      fetchTudo('fin_plano_depara', {
+        select: '*', tenant_id: 'eq.' + APP.tenantId
       }),
     ]);
     PLANOS_STATE.financeiro.contas = fin || [];

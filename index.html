@@ -169,6 +169,21 @@ body {
 #app { display: none; min-height: 100vh; }
 #app.visible { display: flex; }
 
+/* ── SUPERADMIN MODE ─────────────────────────────────────── */
+/* Quando o painel Superadmin está ativo (body.sa-mode), garantir que
+   nenhum elemento residual do app principal (sidebar fixa, overlays, etc.)
+   intercepte cliques. Necessário porque .sidebar tem position:fixed +
+   z-index:100, e display:none no #app não cascateia 100% confiavelmente
+   em todas as combinações de browser/responsivo. */
+body.sa-mode #app,
+body.sa-mode .sidebar,
+body.sa-mode .sidebar-overlay,
+body.sa-mode #app * {
+  display: none !important;
+  pointer-events: none !important;
+}
+body.sa-mode #superadmin-screen { display: flex !important; }
+
 /* ── SIDEBAR ─────────────────────────────────────────────── */
 .sidebar {
   width: var(--sidebar-w); min-height: 100vh;
@@ -11161,6 +11176,9 @@ async function trocarEmpresaSA(tenantId) {
 }
 
 async function abrirSuperadmin() {
+  // Marca body.sa-mode → CSS esconde sidebar/app via !important
+  // (mais robusto que só display:none no #app, que pode falhar com filhos position:fixed)
+  document.body.classList.add('sa-mode');
   $id('app').classList.remove('visible');
   $id('app').style.display = 'none';
   const screen = $id('superadmin-screen');
@@ -11178,6 +11196,7 @@ async function abrirSuperadmin() {
 }
 
 function sairSuperadmin() {
+  document.body.classList.remove('sa-mode');
   $id('superadmin-screen').style.display = 'none';
   $id('app').style.display = '';
   $id('app').classList.add('visible');

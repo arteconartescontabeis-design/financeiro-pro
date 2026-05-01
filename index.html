@@ -1187,6 +1187,30 @@ async function inicializar() {
   }
 }
 
+// ── Helper global de paginação ─────────────────────────────────
+// PostgREST tem limite default de 1000 linhas por requisição.
+// Para tabelas que podem ultrapassar (receitas/despesas em empresas
+// com volume), pagina automaticamente até trazer tudo.
+// Safety net: para no offset 50.000 (50 páginas) para evitar loop infinito.
+async function _supaFetchTudo(tabela, paramsBase) {
+  const PAGE = 1000;
+  let offset = 0;
+  let acc = [];
+  while (true) {
+    const params = { ...paramsBase, limit: String(PAGE), offset: String(offset) };
+    const chunk = await supa('GET', tabela, { params });
+    if (!chunk || chunk.length === 0) break;
+    acc = acc.concat(chunk);
+    if (chunk.length < PAGE) break; // última página
+    offset += PAGE;
+    if (offset > 50000) {
+      console.warn(`_supaFetchTudo: tabela ${tabela} ultrapassou 50k linhas — truncado por safety net`);
+      break;
+    }
+  }
+  return acc;
+}
+
 async function carregarDados() {
   const tid = APP.tenantId;
   const [contas, cats, clis, fors, recs, desps, metas, recorr] = await Promise.all([
@@ -1194,8 +1218,9 @@ async function carregarDados() {
     supa('GET', 'fin_categorias',    { params: { tenant_id: `eq.${tid}`, ativo: 'eq.true', select: '*', order: 'nome.asc' } }),
     supa('GET', 'fin_clientes',      { params: { tenant_id: `eq.${tid}`, ativo: 'eq.true', select: '*', order: 'nome.asc' } }),
     supa('GET', 'fin_fornecedores',  { params: { tenant_id: `eq.${tid}`, ativo: 'eq.true', select: '*', order: 'nome.asc' } }),
-    supa('GET', 'fin_receitas',      { params: { tenant_id: `eq.${tid}`, select: '*', order: 'vencimento.desc' } }),
-    supa('GET', 'fin_despesas',      { params: { tenant_id: `eq.${tid}`, select: '*', order: 'vencimento.desc' } }),
+    // Receitas/Despesas: usam fetchTudo com paginação (podem ultrapassar 1000 lançamentos)
+    _supaFetchTudo('fin_receitas',   { tenant_id: `eq.${tid}`, select: '*', order: 'vencimento.desc' }),
+    _supaFetchTudo('fin_despesas',   { tenant_id: `eq.${tid}`, select: '*', order: 'vencimento.desc' }),
     supa('GET', 'fin_metas',         { params: { tenant_id: `eq.${tid}`, select: '*', order: 'prazo.asc' } }).catch(()=>[]),
     supa('GET', 'fin_recorrencias',  { params: { tenant_id: `eq.${tid}`, select: '*', order: 'criado_em.asc' } }).catch(()=>[]),
   ]);
@@ -1203,8 +1228,8 @@ async function carregarDados() {
   FORNECEDORES = fors; RECEITAS = recs; DESPESAS = desps;
   METAS = metas || []; RECORRENCIAS = recorr || [];
   // Impostos carregado separado (tabela pode não existir)
-  try { IMPOSTOS = await supa('GET', 'fin_impostos', { params: { tenant_id: `eq.${tid}`, select: '*', order: 'vencimento.desc' } }); } catch(_) { IMPOSTOS = []; }
-  try { ANEXOS = await supa('GET', 'fin_anexos', { params: { tenant_id: `eq.${tid}`, select: '*', order: 'criado_em.desc' } }); } catch(_) { ANEXOS = []; }
+  try { IMPOSTOS = await _supaFetchTudo('fin_impostos', { tenant_id: `eq.${tid}`, select: '*', order: 'vencimento.desc' }); } catch(_) { IMPOSTOS = []; }
+  try { ANEXOS = await _supaFetchTudo('fin_anexos', { tenant_id: `eq.${tid}`, select: '*', order: 'criado_em.desc' }); } catch(_) { ANEXOS = []; }
 }
 
 function mostrarApp() {
@@ -1441,6 +1466,7 @@ function closeSidebar() {
 
 function go(page) {
   APP.page = page;
+  APP.pagina = page;  // alias usado em vários checks de re-render por RPC
   document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.page === page));
   const cfg = PAGES[page]; if (!cfg) return;
   $id('page-title').textContent = cfg.title;
@@ -1622,7 +1648,8 @@ async function _rpcCacheado(fnName, args) {
 function invalidarCacheDashboard() {
   for (const k of _RPC_CACHE.keys()) {
     if (k.startsWith('fin_dashboard_kpis:') ||
-        k.startsWith('fin_dre:') ||
+        k.startsWith('fin_dre:')           ||
+        k.startsWith('fin_dre_por_plano:') ||
         k.startsWith('fin_fluxo:')) {
       _RPC_CACHE.delete(k);
     }
@@ -2293,6 +2320,12 @@ function renderReceber() {
   const totalFiltrado = list.reduce((s,r)=>s+(parseFloat(r.valor)||0),0);
   const temFiltro = f.busca||f.status||f.periodo;
 
+  // Paginação: aplicar slice antes do render
+  if (f.busca || f.status || f.periodo) _PAG.receber = 1; // reseta paginação ao filtrar
+  const pagAtual = _PAG.receber;
+  const totalLinhas = list.length;
+  const pagList = list.slice((pagAtual-1)*PAG_SIZE, pagAtual*PAG_SIZE);
+
   $id('page-content').innerHTML = `
   <!-- Barra de filtros -->
   <div style="${filterBarStyle()}">
@@ -2329,7 +2362,7 @@ function renderReceber() {
       <tbody>
       ${list.length === 0
         ? `<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">📥</div><h3>${temFiltro?'Nenhum resultado para os filtros aplicados':'Nenhuma receita cadastrada'}</h3></div></td></tr>`
-        : list.map(r => {
+        : pagList.map(r => {
             const vencHoje = r.vencimento === hoje;
             const vencAtras = r.status==='pendente' && r.vencimento < hoje;
             return `<tr style="${vencAtras?'background:rgba(224,92,92,.04)':''}">
@@ -2351,6 +2384,7 @@ function renderReceber() {
       </tbody>
     </table>
     </div>
+    ${paginaBar(totalLinhas, pagAtual, 'receber', 'renderReceber')}
   </div>`;
 }
 
@@ -2517,6 +2551,12 @@ function renderPagar() {
   const totalFiltrado = list.reduce((s,d)=>s+(parseFloat(d.valor)||0),0);
   const temFiltro = f.busca||f.status||f.periodo;
 
+  // Paginação: aplicar slice antes do render
+  if (f.busca || f.status || f.periodo) _PAG.pagar = 1;
+  const pagAtual = _PAG.pagar;
+  const totalLinhas = list.length;
+  const pagList = list.slice((pagAtual-1)*PAG_SIZE, pagAtual*PAG_SIZE);
+
   $id('page-content').innerHTML = `
   <!-- Barra de filtros -->
   <div style="${filterBarStyle()}">
@@ -2553,7 +2593,7 @@ function renderPagar() {
       <tbody>
       ${list.length === 0
         ? `<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">📤</div><h3>${temFiltro?'Nenhum resultado para os filtros aplicados':'Nenhuma despesa cadastrada'}</h3></div></td></tr>`
-        : list.map(d => {
+        : pagList.map(d => {
             const vencHoje  = d.vencimento === hoje;
             const vencAtras = d.status==='pendente' && d.vencimento < hoje;
             return `<tr style="${vencAtras?'background:rgba(224,92,92,.04)':''}">
@@ -2575,6 +2615,7 @@ function renderPagar() {
       </tbody>
     </table>
     </div>
+    ${paginaBar(totalLinhas, pagAtual, 'pagar', 'renderPagar')}
   </div>`;
 }
 
@@ -3043,10 +3084,12 @@ function renderDRE() {
   let totalPrevR = recPrev.reduce((s,r)=>s+(parseFloat(r.valor)||0),0);
   let totalPrevD = despPrev.reduce((s,d)=>s+(parseFloat(d.valor)||0),0);
 
-  // ── PERFORMANCE v21 — sobrescreve com dados da RPC quando disponível ──
-  // Só no modo 'categoria': a RPC fin_dre agrupa por categoria.
-  // Modo 'plano' usa cálculo local (RPC fin_dre_por_plano fica para depois).
-  if (modoSel === 'categoria') {
+  // ── PERFORMANCE — sobrescreve com dados da RPC quando disponível ──
+  // Cada modo usa uma RPC diferente:
+  //   modo 'categoria' → fin_dre        (v21) agrupa por categoria.nome
+  //   modo 'plano'     → fin_dre_por_plano (v22) agrupa por conta financeira
+  // Se a RPC ainda não está em cache, dispara aquecimento e usa cálculo local.
+  {
     let _diIni, _diFim;
     if (periodoSel === 'mes') {
       _diIni = `${anoAtual}-${mesAtual}-01`;
@@ -3060,24 +3103,52 @@ function renderDRE() {
       _diFim = '2999-12-31';
     }
     const _rpcArgsDre = { p_tenant_id: APP.tenantId, p_data_inicio: _diIni, p_data_fim: _diFim };
-    const _rpcDre = _rpcCacheGet('fin_dre', _rpcArgsDre);
-    if (_rpcDre && Array.isArray(_rpcDre.por_categoria_receita)) {
-      const _catRec = {}, _catDesp = {};
-      _rpcDre.por_categoria_receita.forEach(it => { _catRec[it.categoria] = parseFloat(it.valor) || 0; });
-      _rpcDre.por_categoria_despesa.forEach(it => { _catDesp[it.categoria] = parseFloat(it.valor) || 0; });
-      // Substitui in-place mantendo referência
-      Object.keys(catRec).forEach(k => delete catRec[k]);
-      Object.keys(catDesp).forEach(k => delete catDesp[k]);
-      Object.assign(catRec, _catRec);
-      Object.assign(catDesp, _catDesp);
-      totalRec   = parseFloat(_rpcDre.rec_realizada)  || 0;
-      totalDesp  = parseFloat(_rpcDre.desp_realizada) || 0;
-      totalPrevR = parseFloat(_rpcDre.rec_pendente)   || 0;
-      totalPrevD = parseFloat(_rpcDre.desp_pendente)  || 0;
-    } else {
-      _rpcAquecer('fin_dre', _rpcArgsDre, () => {
-        if (APP.pagina === 'dre') renderDRE();
-      });
+
+    if (modoSel === 'categoria') {
+      const _rpcDre = _rpcCacheGet('fin_dre', _rpcArgsDre);
+      if (_rpcDre && Array.isArray(_rpcDre.por_categoria_receita)) {
+        const _catRec = {}, _catDesp = {};
+        _rpcDre.por_categoria_receita.forEach(it => { _catRec[it.categoria] = parseFloat(it.valor) || 0; });
+        _rpcDre.por_categoria_despesa.forEach(it => { _catDesp[it.categoria] = parseFloat(it.valor) || 0; });
+        Object.keys(catRec).forEach(k => delete catRec[k]);
+        Object.keys(catDesp).forEach(k => delete catDesp[k]);
+        Object.assign(catRec, _catRec);
+        Object.assign(catDesp, _catDesp);
+        totalRec   = parseFloat(_rpcDre.rec_realizada)  || 0;
+        totalDesp  = parseFloat(_rpcDre.desp_realizada) || 0;
+        totalPrevR = parseFloat(_rpcDre.rec_pendente)   || 0;
+        totalPrevD = parseFloat(_rpcDre.desp_pendente)  || 0;
+      } else {
+        _rpcAquecer('fin_dre', _rpcArgsDre, () => {
+          if (APP.pagina === 'dre') renderDRE();
+        });
+      }
+    } else if (modoSel === 'plano') {
+      // RPC fin_dre_por_plano retorna {codigo, descricao, grupo, valor}.
+      // A chave de exibição precisa bater com a do cálculo local: "código · descrição"
+      // (ou "(sem vínculo)" pra categorias sem conta financeira).
+      const _rpcPlano = _rpcCacheGet('fin_dre_por_plano', _rpcArgsDre);
+      if (_rpcPlano && Array.isArray(_rpcPlano.por_plano_receita)) {
+        const chaveDe = (it) => {
+          if (!it.codigo || it.codigo === '(sem vínculo)') return '(sem vínculo)';
+          return `${it.codigo} · ${it.descricao || ''}`.trim();
+        };
+        const _catRec = {}, _catDesp = {};
+        _rpcPlano.por_plano_receita.forEach(it => { _catRec[chaveDe(it)] = (parseFloat(it.valor) || 0); });
+        _rpcPlano.por_plano_despesa.forEach(it => { _catDesp[chaveDe(it)] = (parseFloat(it.valor) || 0); });
+        Object.keys(catRec).forEach(k => delete catRec[k]);
+        Object.keys(catDesp).forEach(k => delete catDesp[k]);
+        Object.assign(catRec, _catRec);
+        Object.assign(catDesp, _catDesp);
+        totalRec   = parseFloat(_rpcPlano.rec_realizada)  || 0;
+        totalDesp  = parseFloat(_rpcPlano.desp_realizada) || 0;
+        totalPrevR = parseFloat(_rpcPlano.rec_pendente)   || 0;
+        totalPrevD = parseFloat(_rpcPlano.desp_pendente)  || 0;
+      } else {
+        _rpcAquecer('fin_dre_por_plano', _rpcArgsDre, () => {
+          if (APP.pagina === 'dre') renderDRE();
+        });
+      }
     }
   }
 
@@ -4149,6 +4220,8 @@ async function salvarEdicaoCategoria(id) {
     await supa('PATCH', 'fin_categorias', { params: { id: 'eq.' + id }, body: update });
     const c = CATEGORIAS.find(x => x.id === id);
     if (c) Object.assign(c, update);
+    // Invalida cache RPC: vínculo categoria→conta afeta fin_dre_por_plano
+    if (typeof invalidarCacheDashboard === 'function') invalidarCacheDashboard();
     closeModal();
     toast('Categoria atualizada.', 'success');
     rerenderTelaAtual();
@@ -4246,6 +4319,8 @@ async function salvarVinculacaoLote() {
       salvas++;
     } catch(e) { erros++; }
   }
+  // Invalida cache RPC: novos vínculos afetam fin_dre_por_plano
+  if (salvas > 0 && typeof invalidarCacheDashboard === 'function') invalidarCacheDashboard();
   closeModal();
   if (salvas > 0) toast(`${salvas} vínculo${salvas>1?'s':''} salvo${salvas>1?'s':''}.${ignoradas>0?` (${ignoradas} sem alteração)`:''}${erros>0?` ⚠ ${erros} erro${erros>1?'s':''}`:''}`, salvas > 0 ? 'success' : 'error');
   else toast('Nenhuma categoria foi alterada.', 'default');
@@ -5165,7 +5240,8 @@ async function salvarMeta() {
     }});
     closeModal();
     toast('Meta criada!', 'success');
-    await carregarDados();
+    // Performance: recarrega só fin_metas em vez de todas as 8 tabelas
+    await recarregarApenas('fin_metas');
     renderMetas();
   } catch(e) { toast('Erro: ' + e.message + ' (verifique se a tabela fin_metas foi criada no Supabase)', 'error'); }
 }
@@ -5213,7 +5289,7 @@ async function salvarEdicaoMeta(id) {
       cor: $id('em-cor').value||'#1a5276',
     }});
     closeModal(); toast('Meta atualizada!', 'success');
-    await carregarDados(); renderMetas();
+    await recarregarApenas('fin_metas'); renderMetas();
   } catch(e) { toast('Erro: ' + e.message, 'error'); }
 }
 
@@ -5221,8 +5297,8 @@ async function excluirMeta(id) {
   if (!confirm('Excluir esta meta?')) return;
   try {
     await supa('DELETE', 'fin_metas', { params: { id: `eq.${id}` } });
+    removerLocal(METAS, id);
     toast('Meta removida.', 'success');
-    await carregarDados();
     renderMetas();
   } catch(e) { toast('Erro: ' + e.message, 'error'); }
 }
@@ -5354,7 +5430,11 @@ async function gerarRecorrenciasPendentes() {
   }
 
   if (gerou) {
-    await carregarDados();
+    // Performance: só recarrega receitas e despesas (não as 8 tabelas)
+    await Promise.all([
+      recarregarApenas('fin_receitas'),
+      recarregarApenas('fin_despesas'),
+    ]);
     if (APP.page === 'receber' || APP.page === 'pagar') go(APP.page);
     toast('Lançamentos recorrentes gerados!', 'success');
   }
@@ -5517,10 +5597,13 @@ async function salvarRecorrencia() {
     }});
     closeModal();
     toast('Recorrência criada!', 'success');
-    await carregarDados();
-    // Gera lançamentos imediatamente
+    // Performance: gera lançamentos e recarrega só as tabelas afetadas (recorrencias + receitas + despesas)
+    await recarregarApenas('fin_recorrencias');
     await gerarRecorrenciasPendentes();
-    await carregarDados();
+    await Promise.all([
+      recarregarApenas('fin_receitas'),
+      recarregarApenas('fin_despesas'),
+    ]);
     renderRecorrencias();
   } catch(e) { toast('Erro: ' + e.message + ' (verifique se a tabela fin_recorrencias foi criada)', 'error'); }
 }
@@ -5528,8 +5611,10 @@ async function salvarRecorrencia() {
 async function toggleRecorrencia(id, novoStatus) {
   try {
     await supa('PATCH', 'fin_recorrencias', { params: { id: `eq.${id}` }, body: { ativo: novoStatus } });
+    const r = RECORRENCIAS.find(x => x.id === id);
+    if (r) { r.ativo = novoStatus; atualizarLocal(RECORRENCIAS, r); }
     toast(novoStatus ? 'Recorrência reativada!' : 'Recorrência pausada.', 'success');
-    await carregarDados(); renderRecorrencias();
+    renderRecorrencias();
   } catch(e) { toast('Erro: ' + e.message, 'error'); }
 }
 
@@ -5537,8 +5622,9 @@ async function excluirRecorrencia(id) {
   if (!confirm('Excluir esta recorrência? Os lançamentos já gerados não serão removidos.')) return;
   try {
     await supa('DELETE', 'fin_recorrencias', { params: { id: `eq.${id}` } });
+    removerLocal(RECORRENCIAS, id);
     toast('Recorrência excluída.', 'success');
-    await carregarDados(); renderRecorrencias();
+    renderRecorrencias();
   } catch(e) { toast('Erro: ' + e.message, 'error'); }
 }
 
@@ -5752,7 +5838,7 @@ async function salvarImposto() {
       observacao:   $id('ni-obs').value     || null,
     }});
     closeModal(); toast('Imposto registrado!', 'success');
-    await carregarDados(); renderImpostos();
+    await recarregarApenas('fin_impostos'); renderImpostos();
   } catch(e) { toast('Erro: ' + e.message + ' (verifique se a tabela fin_impostos foi criada)', 'error'); }
 }
 
@@ -5760,8 +5846,10 @@ async function pagarImposto(id, e) {
   e.stopPropagation();
   try {
     await supa('PATCH', 'fin_impostos', { params: { id: `eq.${id}` }, body: { status: 'pago', pago_em: today() } });
+    const imp = IMPOSTOS.find(x => x.id === id);
+    if (imp) { imp.status = 'pago'; imp.pago_em = today(); atualizarLocal(IMPOSTOS, imp); }
     toast('Imposto marcado como pago!', 'success');
-    await carregarDados(); renderImpostos();
+    renderImpostos();
   } catch(e) { toast('Erro: ' + e.message, 'error'); }
 }
 
@@ -5770,8 +5858,9 @@ async function excluirImposto(id, e) {
   if (!confirm('Excluir este registro?')) return;
   try {
     await supa('DELETE', 'fin_impostos', { params: { id: `eq.${id}` } });
+    removerLocal(IMPOSTOS, id);
     toast('Registro excluído.', 'success');
-    await carregarDados(); renderImpostos();
+    renderImpostos();
   } catch(e) { toast('Erro: ' + e.message, 'error'); }
 }
 
@@ -6015,7 +6104,7 @@ async function anexarDocumento(tipoRef, refId, file) {
     storage_path: path,
     tamanho:      file.size,
   }});
-  await carregarDados();
+  await recarregarApenas('fin_anexos');
   toast(`Documento "${file.name}" anexado!`, 'success');
 }
 
@@ -6031,7 +6120,7 @@ async function excluirAnexo(id, path) {
   try {
     await supa('DELETE', 'fin_anexos', { params: { id: `eq.${id}` } });
     await deleteStorage(path);
-    await carregarDados();
+    removerLocal(ANEXOS, id);
     toast('Documento excluído.', 'success');
     renderDocumentos();
   } catch(e) { toast('Erro: ' + e.message, 'error'); }
@@ -6243,7 +6332,14 @@ async function confirmarAnexoComAtualizacao() {
       await supa('PATCH', tabela, { params: { id: `eq.${contexto.refId}` }, body: patch });
     }
     await executarUploadFinal(contexto);
-    await carregarDados();
+    // Performance: recarrega só anexos + a tabela do tipoRef
+    const tab = contexto.tipoRef === 'receita' ? 'fin_receitas'
+              : contexto.tipoRef === 'despesa' ? 'fin_despesas'
+              : 'fin_impostos';
+    await Promise.all([
+      recarregarApenas('fin_anexos'),
+      recarregarApenas(tab),
+    ]);
   } catch(e) {
     toast('Erro ao atualizar: ' + e.message, 'error');
   }
@@ -6330,7 +6426,7 @@ async function excluirAnexoModal(id, path) {
   try {
     await supa('DELETE', 'fin_anexos', { params: { id: `eq.${id}` } });
     await deleteStorage(path);
-    await carregarDados();
+    removerLocal(ANEXOS, id);
     toast('Documento excluído.', 'success');
     // Fecha modal e reabre não é necessário, mas recarrega a lista
   } catch(e) { toast('Erro: ' + e.message, 'error'); }
@@ -6961,7 +7057,11 @@ async function processarArquivos(files) {
   // Resumo do batch XML/PDF (se houve)
   if (temDocFiscal && typeof _xmlBatchResumo === 'function') _xmlBatchResumo();
 
-  await carregarDados();
+  // Performance: import de docs fiscais cria receitas/despesas
+  await Promise.all([
+    recarregarApenas('fin_receitas'),
+    recarregarApenas('fin_despesas'),
+  ]);
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -8559,7 +8659,10 @@ async function confirmarImportacaoExtrato() {
     } catch(_) { err++; }
   }
   closeModal();
-  await carregarDados();
+  await Promise.all([
+    recarregarApenas('fin_receitas'),
+    recarregarApenas('fin_despesas'),
+  ]);
   toast(`${ok} lançamento(s) importado(s)${err?' · '+err+' erro(s)':''}!`, ok>0?'success':'error');
   _extratoPreview = [];
 }
@@ -8677,7 +8780,7 @@ async function confirmarImportacaoNFe() {
       observacao:   `NF-e importada · CNPJ ${_nfeData.CNPJ} · ${_nfeData.xMun}`,
     }});
     closeModal();
-    await carregarDados();
+    await recarregarApenas('fin_receitas');
     toast(`Receita criada: ${_nfeData.desc} — ${fmtMoeda(_nfeData.valor)}`, 'success');
     _nfeData = null;
     go('receber');
@@ -8771,7 +8874,7 @@ async function importarPlanoFinanceiro(input) {
     } catch(_) { err++; }
   }
 
-  await carregarDados();
+  await recarregarApenas('fin_categorias');
   const msg = `${ok} categoria(s) importada(s) · ${skip} já existia(m) · ${err} erro(s)`;
   if (resultado) resultado.innerHTML = `<div style="background:var(--green-lt);border:1px solid var(--green);border-radius:9px;padding:12px 16px;font-size:12.5px;color:var(--green);font-weight:600">${msg}</div>`;
   toast(msg, ok>0?'success':'warn');

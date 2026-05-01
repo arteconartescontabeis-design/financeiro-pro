@@ -1474,6 +1474,10 @@ function atualizarLocal(arr, registro) {
   if (idx >= 0) arr[idx] = registro;
   else arr.unshift(registro);
   _NOME_CACHE.delete(arr);  // invalida cache de getNome (Fase C)
+  // Performance v21: invalida cache RPC se mexeu em receitas/despesas/contas
+  if (arr === RECEITAS || arr === DESPESAS || arr === CONTAS) {
+    if (typeof invalidarCacheDashboard === 'function') invalidarCacheDashboard();
+  }
 }
 
 /** Remove um registro do array local pelo id */
@@ -1482,6 +1486,10 @@ function removerLocal(arr, id) {
   const idx = arr.findIndex(r => r.id === id);
   if (idx >= 0) arr.splice(idx, 1);
   _NOME_CACHE.delete(arr);  // invalida cache de getNome (Fase C)
+  // Performance v21: invalida cache RPC
+  if (arr === RECEITAS || arr === DESPESAS || arr === CONTAS) {
+    if (typeof invalidarCacheDashboard === 'function') invalidarCacheDashboard();
+  }
 }
 
 /** Recarrega apenas UMA tabela do Supabase (não todas as 19) */
@@ -1519,6 +1527,75 @@ function rerenderTelaAtual() {
   if (cfg && typeof cfg.render === 'function') {
     cfg.render();
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PERFORMANCE v21 — RPCs DE AGREGAÇÃO (Dashboard / DRE / Fluxo)
+// ─────────────────────────────────────────────────────────────────────────
+// Estratégia: tentar RPC primeiro; se falhar, mantém o cálculo legado.
+// Cache de 30s por tenant pra evitar refetches em re-renders próximos.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const _RPC_CACHE = new Map();   // chave: 'fn:tenant:args' → {data, expira}
+const _RPC_TTL_MS = 30 * 1000;  // 30s
+
+async function _rpcCacheado(fnName, args) {
+  const tid = APP.tenantId;
+  if (!tid) return null;
+  const key = `${fnName}:${tid}:${JSON.stringify(args || {})}`;
+  const hit = _RPC_CACHE.get(key);
+  if (hit && hit.expira > Date.now()) return hit.data;
+  try {
+    const data = await supaRpc(fnName, args || {});
+    _RPC_CACHE.set(key, { data, expira: Date.now() + _RPC_TTL_MS });
+    return data;
+  } catch(e) {
+    console.warn(`RPC ${fnName} falhou:`, e.message);
+    return null;
+  }
+}
+
+// Invalida cache quando dados mudam (chame após criar/editar/excluir lançamentos)
+function invalidarCacheDashboard() {
+  for (const k of _RPC_CACHE.keys()) {
+    if (k.startsWith('fin_dashboard_kpis:') ||
+        k.startsWith('fin_dre:') ||
+        k.startsWith('fin_fluxo:')) {
+      _RPC_CACHE.delete(k);
+    }
+  }
+}
+
+async function fetchDashboardKpis(dataRef) {
+  return _rpcCacheado('fin_dashboard_kpis', {
+    p_tenant_id: APP.tenantId,
+    p_data_ref:  dataRef || today(),
+  });
+}
+
+async function fetchDre(dataInicio, dataFim) {
+  return _rpcCacheado('fin_dre', {
+    p_tenant_id:   APP.tenantId,
+    p_data_inicio: dataInicio,
+    p_data_fim:    dataFim,
+  });
+}
+
+async function fetchFluxo(dataInicio, dataFim) {
+  return _rpcCacheado('fin_fluxo', {
+    p_tenant_id:   APP.tenantId,
+    p_data_inicio: dataInicio,
+    p_data_fim:    dataFim,
+  });
+}
+
+// Helper para período de mês a partir de uma string YYYY-MM
+function _periodoMes(yyyymm) {
+  const [yyyy, mm] = yyyymm.split('-').map(Number);
+  const inicio = `${yyyy}-${String(mm).padStart(2,'0')}-01`;
+  const ultDia = new Date(yyyy, mm, 0).getDate();
+  const fim    = `${yyyy}-${String(mm).padStart(2,'0')}-${ultDia}`;
+  return { inicio, fim };
 }
 
 // ── DASHBOARD ─────────────────────────────────────────────────

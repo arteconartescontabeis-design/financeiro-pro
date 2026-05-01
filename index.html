@@ -2867,7 +2867,18 @@ function renderFluxo() {
 
 // ── DRE ───────────────────────────────────────────────────────
 function renderDRE() {
+  // Carregar plano financeiro em background (não-bloqueante) para o modo "plano"
+  if (typeof _carregarContasFinanceirasSeNecessario === 'function') {
+    _carregarContasFinanceirasSeNecessario().then(() => {
+      // se o usuário ainda está no DRE e o modo é "plano", re-renderiza com dados completos
+      if (APP.pagina === 'dre' && (window._dreModo || 'categoria') === 'plano') {
+        renderDRE();
+      }
+    }).catch(()=>{});
+  }
+
   const periodoSel = window._drePeriodo || 'mes';
+  const modoSel    = window._dreModo    || 'categoria'; // 'categoria' | 'plano'
   const hoje = new Date();
   const anoAtual = hoje.getFullYear();
   const mesAtual = String(hoje.getMonth()+1).padStart(2,'0');
@@ -2887,9 +2898,25 @@ function renderDRE() {
   const recPrev  = filtrar(RECEITAS).filter(r => r.status === 'pendente');
   const despPrev = filtrar(DESPESAS).filter(d => d.status === 'pendente');
 
+  // Função de agrupamento: por categoria (default) ou por conta financeira
+  // Retorna a chave de agrupamento para um lançamento.
+  const contasFin = (typeof PLANOS_STATE !== 'undefined' && PLANOS_STATE?.financeiro?.contas) || [];
+  const contaFinById = new Map(contasFin.map(c => [c.id, c]));
+
+  function chaveGrupo(lancamento) {
+    if (modoSel === 'categoria') {
+      return getNome(CATEGORIAS, lancamento.categoria_id) || '(sem categoria)';
+    }
+    // modo 'plano': usa conta_financeira_id da categoria
+    const cat = CATEGORIAS.find(c => c.id === lancamento.categoria_id);
+    if (!cat?.conta_financeira_id) return '(sem vínculo)';
+    const cf = contaFinById.get(cat.conta_financeira_id);
+    return cf ? `${cf.codigo} · ${cf.descricao}` : '(sem vínculo)';
+  }
+
   const catRec = {}, catDesp = {};
-  recFilt.forEach(r  => { const c=getNome(CATEGORIAS,r.categoria_id);  catRec[c]  = (catRec[c]||0)  + (parseFloat(r.valor)||0); });
-  despFilt.forEach(d => { const c=getNome(CATEGORIAS,d.categoria_id);  catDesp[c] = (catDesp[c]||0) + (parseFloat(d.valor)||0); });
+  recFilt.forEach(r  => { const c=chaveGrupo(r); catRec[c]  = (catRec[c]||0)  + (parseFloat(r.valor)||0); });
+  despFilt.forEach(d => { const c=chaveGrupo(d); catDesp[c] = (catDesp[c]||0) + (parseFloat(d.valor)||0); });
 
   const totalRec   = Object.values(catRec).reduce((s,v)=>s+v,0);
   const totalDesp  = Object.values(catDesp).reduce((s,v)=>s+v,0);
@@ -2898,18 +2925,44 @@ function renderDRE() {
   const totalPrevD = despPrev.reduce((s,d)=>s+(parseFloat(d.valor)||0),0);
   const margem     = totalRec > 0 ? Math.round((resultado/totalRec)*100) : 0;
 
+  // Aviso de categorias sem vínculo (apenas no modo "plano")
+  let avisoSemVinculo = '';
+  if (modoSel === 'plano') {
+    const semVincValor = (catRec['(sem vínculo)'] || 0) + (catDesp['(sem vínculo)'] || 0);
+    const semVincQtd   = CATEGORIAS.filter(c => !c.conta_financeira_id).length;
+    if (semVincValor > 0 || semVincQtd > 0) {
+      avisoSemVinculo = `
+        <div style="background:rgba(212,175,55,.08);border:1px solid var(--gold);border-radius:10px;padding:12px 14px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+          <div style="font-size:13px;color:var(--text-2)">
+            <strong style="color:var(--gold)">⚠ ${semVincQtd} categoria${semVincQtd===1?'':'s'} sem vínculo</strong>
+            ${semVincValor>0 ? ` — ${fmtMoeda(semVincValor)} no período aparecerão como "(sem vínculo)"` : ''}
+          </div>
+          <button class="btn btn-sm btn-gold" onclick="navegar('categorias')">Vincular agora</button>
+        </div>`;
+    }
+  }
+
   function btnP(p, label) {
     const active = periodoSel === p;
     return `<button onclick="window._drePeriodo='${p}';renderDRE()" style="padding:7px 14px;border-radius:9px;border:1.5px solid ${active?'var(--gold)':'var(--border-lt)'};background:${active?'var(--gold-lt)':'transparent'};color:${active?'var(--gold)':'var(--text-2)'};font-family:var(--font);font-size:12px;font-weight:600;cursor:pointer">${label}</button>`;
   }
+  function btnM(m, label, ico) {
+    const active = modoSel === m;
+    return `<button onclick="window._dreModo='${m}';renderDRE()" title="Agrupar por ${label}" style="padding:7px 12px;border-radius:9px;border:1.5px solid ${active?'var(--gold)':'var(--border-lt)'};background:${active?'var(--gold-lt)':'transparent'};color:${active?'var(--gold)':'var(--text-2)'};font-family:var(--font);font-size:12px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:6px">${ico}<span>${label}</span></button>`;
+  }
+
+  const labelGrupo = modoSel === 'categoria' ? 'Categoria' : 'Plano Financeiro';
 
   $id('page-content').innerHTML = `
-  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:10px">
-    <div style="display:flex;gap:6px">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+    <div style="display:flex;gap:6px;flex-wrap:wrap">
       ${btnP('mes','Este mês')}${btnP('ano','Este ano')}${btnP('tudo','Tudo')}
+      <span style="display:inline-block;width:1px;background:var(--border-lt);margin:0 4px"></span>
+      ${btnM('categoria','Categoria','🏷')}${btnM('plano','Plano Financeiro','📊')}
     </div>
     <button class="btn btn-sm" style="background:var(--surface-2);color:var(--text-2);border:1px solid var(--border-lt)" onclick="gerarPdfDRE()">⬇ PDF</button>
   </div>
+  ${avisoSemVinculo}
 
   <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:20px">
     <div class="kpi-card k-green"><div class="kpi-label">Receitas Realizadas</div><div class="kpi-value" style="color:var(--green)">${fmtMoeda(totalRec)}</div><div class="kpi-sub">${fmtMoeda(totalPrevR)} a receber</div></div>
@@ -2920,7 +2973,7 @@ function renderDRE() {
 
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px">
     <div class="card">
-      <strong style="font-size:13.5px;display:block;margin-bottom:14px;color:var(--green)">↑ Receitas por Categoria</strong>
+      <strong style="font-size:13.5px;display:block;margin-bottom:14px;color:var(--green)">↑ Receitas por ${labelGrupo}</strong>
       ${Object.keys(catRec).length === 0 ? '<div style="color:var(--text-3);font-size:13px">Nenhuma receita realizada no período</div>' :
       Object.entries(catRec).sort((a,b)=>b[1]-a[1]).map(([c,v]) => `
         <div style="margin-bottom:12px">
@@ -2933,7 +2986,7 @@ function renderDRE() {
       ${Object.keys(catRec).length > 0 ? `<div style="border-top:1px solid var(--border);padding-top:10px;margin-top:4px;display:flex;justify-content:space-between;font-weight:700;font-size:13px"><span style="color:var(--text)">Total</span><span style="color:var(--green);font-family:var(--mono)">${fmtMoeda(totalRec)}</span></div>` : ''}
     </div>
     <div class="card">
-      <strong style="font-size:13.5px;display:block;margin-bottom:14px;color:var(--red)">↓ Despesas por Categoria</strong>
+      <strong style="font-size:13.5px;display:block;margin-bottom:14px;color:var(--red)">↓ Despesas por ${labelGrupo}</strong>
       ${Object.keys(catDesp).length === 0 ? '<div style="color:var(--text-3);font-size:13px">Nenhuma despesa realizada no período</div>' :
       Object.entries(catDesp).sort((a,b)=>b[1]-a[1]).map(([c,v]) => `
         <div style="margin-bottom:12px">
@@ -8228,6 +8281,7 @@ function abrirPDF(titulo, html) {
 // ── PDF: DRE ──────────────────────────────────────────────────
 function gerarPdfDRE() {
   const periodoSel = window._drePeriodo || 'mes';
+  const modoSel    = window._dreModo    || 'categoria';
   const hoje  = new Date();
   const ano   = hoje.getFullYear();
   const mes   = String(hoje.getMonth()+1).padStart(2,'0');
@@ -8245,9 +8299,21 @@ function gerarPdfDRE() {
   const recFilt  = filtrar(RECEITAS).filter(r=>r.status==='recebido');
   const despFilt = filtrar(DESPESAS).filter(d=>d.status==='pago');
 
+  const contasFin = (typeof PLANOS_STATE !== 'undefined' && PLANOS_STATE?.financeiro?.contas) || [];
+  const contaFinById = new Map(contasFin.map(c => [c.id, c]));
+  function chaveGrupo(lancamento) {
+    if (modoSel === 'categoria') {
+      return getNome(CATEGORIAS, lancamento.categoria_id) || '(sem categoria)';
+    }
+    const cat = CATEGORIAS.find(c => c.id === lancamento.categoria_id);
+    if (!cat?.conta_financeira_id) return '(sem vínculo)';
+    const cf = contaFinById.get(cat.conta_financeira_id);
+    return cf ? `${cf.codigo} · ${cf.descricao}` : '(sem vínculo)';
+  }
+
   const catRec={}, catDesp={};
-  recFilt.forEach(r  => { const c=getNome(CATEGORIAS,r.categoria_id);  catRec[c]  =(catRec[c]||0) +(parseFloat(r.valor)||0); });
-  despFilt.forEach(d => { const c=getNome(CATEGORIAS,d.categoria_id);  catDesp[c] =(catDesp[c]||0)+(parseFloat(d.valor)||0); });
+  recFilt.forEach(r  => { const c=chaveGrupo(r); catRec[c]  =(catRec[c]||0) +(parseFloat(r.valor)||0); });
+  despFilt.forEach(d => { const c=chaveGrupo(d); catDesp[c] =(catDesp[c]||0)+(parseFloat(d.valor)||0); });
 
   const totalRec  = Object.values(catRec).reduce((s,v)=>s+v,0);
   const totalDesp = Object.values(catDesp).reduce((s,v)=>s+v,0);
@@ -8255,11 +8321,13 @@ function gerarPdfDRE() {
   const margem    = totalRec>0 ? Math.round((resultado/totalRec)*100) : 0;
 
   const periodoLabel = periodoSel==='mes' ? `${mes}/${ano}` : periodoSel==='ano' ? `Ano ${ano}` : 'Todo o período';
+  const modoLabel    = modoSel === 'categoria' ? 'Categoria' : 'Plano Financeiro';
+  const subtitulo    = `${periodoLabel} · Valores realizados · Agrupado por ${modoLabel}`;
 
   const html = `
     ${pdfHeader('Demonstrativo de Resultado (DRE)', periodoLabel)}
     <div class="rpt-title">Demonstrativo de Resultado</div>
-    <div class="rpt-period">${periodoLabel} · Valores realizados</div>
+    <div class="rpt-period">${subtitulo}</div>
 
     <div class="kpi-row" style="grid-template-columns:1fr 1fr 1fr 1fr">
       <div class="kpi-cell"><div class="lbl">Receitas</div><div class="val" style="color:#16804a">${fmtMoeda(totalRec)}</div></div>
@@ -8268,9 +8336,9 @@ function gerarPdfDRE() {
       <div class="kpi-cell"><div class="lbl">Margem</div><div class="val" style="color:${margem>=0?'#16804a':'#c0392b'}">${margem}%</div></div>
     </div>
 
-    <div class="section-title">Receitas por Categoria</div>
+    <div class="section-title">Receitas por ${modoLabel}</div>
     <table>
-      <thead><tr><th>Categoria</th><th style="text-align:right">Valor</th><th style="text-align:right">% da Receita</th></tr></thead>
+      <thead><tr><th>${modoLabel}</th><th style="text-align:right">Valor</th><th style="text-align:right">% da Receita</th></tr></thead>
       <tbody>
         ${Object.entries(catRec).sort((a,b)=>b[1]-a[1]).map(([c,v])=>`
           <tr class="sub-row"><td>${c}</td><td style="text-align:right;font-family:'DM Mono';color:#16804a">${fmtMoeda(v)}</td><td style="text-align:right;color:#888">${Math.round(v/totalRec*100)}%</td></tr>
@@ -8279,9 +8347,9 @@ function gerarPdfDRE() {
       </tbody>
     </table>
 
-    <div class="section-title">Despesas por Categoria</div>
+    <div class="section-title">Despesas por ${modoLabel}</div>
     <table>
-      <thead><tr><th>Categoria</th><th style="text-align:right">Valor</th><th style="text-align:right">% da Receita</th></tr></thead>
+      <thead><tr><th>${modoLabel}</th><th style="text-align:right">Valor</th><th style="text-align:right">% da Receita</th></tr></thead>
       <tbody>
         ${Object.entries(catDesp).sort((a,b)=>b[1]-a[1]).map(([c,v])=>`
           <tr class="sub-row"><td>${c}</td><td style="text-align:right;font-family:'DM Mono';color:#c0392b">${fmtMoeda(v)}</td><td style="text-align:right;color:#888">${totalRec>0?Math.round(v/totalRec*100):0}%</td></tr>

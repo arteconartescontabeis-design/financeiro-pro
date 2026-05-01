@@ -3362,11 +3362,16 @@ function renderPlanoArvore(tipo) {
       ${!hasChild ? `<button onclick="planoExcluirConta('${tipo}','${c.id}')" title="Desativar">🗑</button>` : ''}
     ` : '';
 
+    // Para contábil, exibe apelido entre parênteses (desambigua códigos duplicados)
+    const descShow = (tipo === 'contabil' && c.apelido)
+      ? `${desc} <span style="color:var(--text-3);font-size:11px">· ${c.apelido}</span>`
+      : desc;
+
     linhas.push(`
       <div class="plano-tree-row ${sintetica ? 'sintetica' : ''}" style="padding-left:${12 + indent}px">
         <span class="toggle" onclick="planosToggle('${tipo}','${c.id}')">${hasChild ? (isExpanded ? '▾' : '▸') : ''}</span>
         <span class="codigo">${c.codigo}</span>
-        <span class="descricao" title="${desc}">${desc}</span>
+        <span class="descricao" title="${desc}${c.apelido?' · '+c.apelido:''}">${descShow}</span>
         <span>${tag}</span>
         <span style="font-size:11px;color:var(--text-3)">${sintetica ? 'Sintética' : 'Analítica'}</span>
         <span class="row-actions">${adminBtns}</span>
@@ -3459,7 +3464,8 @@ function planoModalNovaConta(tipo) {
         <option value="DESP_FINANCEIRA">Despesa Financeira</option>
         <option value="INVESTIMENTO">Investimento</option>
         <option value="NAO_OPERACIONAL">Não Operacional</option>
-      </select></div>` : `<div class="form-field full"><label class="form-label">Natureza</label><select class="form-select" id="np-natureza">
+      </select></div>` : `<div class="form-field"><label class="form-label">Apelido</label><input class="form-input" id="np-apelido" placeholder="Ex: ITAU, BRADESCO, CLIENTE_X"></div>
+      <div class="form-field"><label class="form-label">Natureza</label><select class="form-select" id="np-natureza">
         <option value="">Herdar do pai</option>
         <option value="ATIVO">Ativo</option>
         <option value="PASSIVO">Passivo</option>
@@ -3483,13 +3489,28 @@ async function planoSalvarNovaConta(tipo) {
   if (!codigo || !desc) { toast('Preencha código e descrição.', 'error'); return; }
 
   const state = PLANOS_STATE[tipo];
-  if (state.contas.find(c => c.codigo === codigo)) {
-    toast('Já existe uma conta com este código.', 'error'); return;
+  // No financeiro código é único; no contábil pode repetir (várias instituições
+  // compartilham o mesmo código). Para contábil, validamos só se já existe
+  // com mesmo código + mesmo apelido.
+  if (tipo === 'financeiro') {
+    if (state.contas.find(c => c.codigo === codigo)) {
+      toast('Já existe uma conta com este código.', 'error'); return;
+    }
+  } else {
+    const apel = ($id('np-apelido')?.value || '').trim();
+    if (state.contas.find(c => c.codigo === codigo && (c.apelido||'') === apel)) {
+      toast('Já existe uma conta com este código e apelido.', 'error'); return;
+    }
   }
 
-  // Localiza pai pelo código
+  // Localiza pai pelo código — preferindo a conta SINTÉTICA (importante quando
+  // há duplicados: o pai correto é sempre a sintética, não outras analíticas)
   const codigoPai = codigo.includes('.') ? codigo.split('.').slice(0, -1).join('.') : null;
-  const pai = codigoPai ? state.contas.find(c => c.codigo === codigoPai) : null;
+  let pai = null;
+  if (codigoPai) {
+    const candidatos = state.contas.filter(c => c.codigo === codigoPai);
+    pai = candidatos.find(c => (tipo === 'financeiro' ? c.tipo === 'S' : c.sintetica)) || candidatos[0] || null;
+  }
   const nivel = codigo.split('.').length;
   const ordem = (Math.max(0, ...state.contas.map(c => c.ordem || 0)) + 1);
 
@@ -3504,6 +3525,7 @@ async function planoSalvarNovaConta(tipo) {
     payload.grupo = $id('np-grupo').value || pai?.grupo || null;
   } else {
     payload.sintetica = sint;
+    payload.apelido = ($id('np-apelido')?.value || '').trim() || null;
     payload.natureza = $id('np-natureza').value || pai?.natureza || null;
     payload.entra_balanco = true;
   }

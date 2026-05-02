@@ -9661,7 +9661,6 @@ async function renderUsuarios() {
       <tbody>
         ${_usuarios.map(u => {
           const isMe = u.id === APP.user.id;
-          const tpl  = _TEMPLATES[u.template] || _TEMPLATES.leitura;
           return `<tr>
             <td>
               <div style="display:flex;align-items:center;gap:10px">
@@ -9676,15 +9675,13 @@ async function renderUsuarios() {
             <td style="color:var(--text-2);font-size:12.5px">${u.email||'—'}</td>
             <td>
               ${(() => {
-                // Determina rótulo do perfil. Se template === 'custom' OU
-                // existem permissões salvas que divergem do preset puro,
-                // mostra "Personalizado". Senão usa o label do template.
-                const isCustom = u.template === 'custom'
-                  || (u.permissoes && Object.keys(u.permissoes).length
-                      && _PRESETS[u.template]
-                      && JSON.stringify(u.permissoes) !== JSON.stringify(_PRESETS[u.template]()));
-                const labelPerfil = isCustom ? 'Personalizado' : tpl.label;
-                const corPerfil = u.template === 'admin'
+                // v31: detecção semântica (módulo a módulo) substitui o
+                // JSON.stringify frágil que dependia de ordem de chaves.
+                const perfilReal = _detectarPerfilEfetivo(u);
+                const isCustom = perfilReal === 'custom';
+                const tplReal  = _TEMPLATES[perfilReal] || _TEMPLATES.leitura;
+                const labelPerfil = tplReal.label;
+                const corPerfil = perfilReal === 'admin'
                   ? 'background:var(--gold-lt);color:var(--gold-dim)'
                   : (isCustom ? 'background:rgba(155,89,182,.12);color:#7d3c98' : 'background:var(--surface-2);color:var(--text-2)');
                 return `<span class="badge" style="${corPerfil}">${labelPerfil}</span>`;
@@ -9743,33 +9740,50 @@ async function renderUsuarios() {
   <!-- Diferença de permissões -->
   <div class="card">
     <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:14px">Permissões por perfil</div>
-    <table>
-      <thead><tr>
-        <th>Funcionalidade</th>
-        <th style="text-align:center">Administrador</th>
-        <th style="text-align:center">Operacional</th>
-        <th style="text-align:center">Visualização</th>
-      </tr></thead>
-      <tbody>
-        ${[
-          ['Visualizar dados e relatórios', '✓', '✓', '✓'],
-          ['Criar receitas e despesas',    '✓', '✓', '✗'],
-          ['Editar lançamentos',           '✓', '✓', '✗'],
-          ['Excluir lançamentos',          '✓', '✗', '✗'],
-          ['Gerenciar metas',              '✓', '✗', '✗'],
-          ['Gerenciar recorrências',       '✓', '✓', '✗'],
-          ['Importação por IA',            '✓', '✓', '✗'],
-          ['Configurações',                '✓', '✗', '✗'],
-          ['Gerenciar usuários',           '✓', '✗', '✗'],
-        ].map(([f, adm, fin, lei]) => `
-          <tr>
-            <td style="color:var(--text-2)">${f}</td>
-            <td style="text-align:center"><span style="color:${adm==='✓'?'var(--green)':'var(--text-3)'};font-size:14px">${adm}</span></td>
-            <td style="text-align:center"><span style="color:${fin==='✓'?'var(--green)':'var(--text-3)'};font-size:14px">${fin}</span></td>
-            <td style="text-align:center"><span style="color:${lei==='✓'?'var(--green)':'var(--text-3)'};font-size:14px">${lei}</span></td>
+    <div style="font-size:11px;color:var(--text-3);margin-bottom:10px">
+      Tabela gerada automaticamente a partir dos templates atuais.
+      <span style="color:var(--green)">✓ Total</span> = todas as ações &middot;
+      <span style="color:var(--amber)">⊕ Operar</span> = ver/criar/editar &middot;
+      <span style="color:var(--amber)">+ Criar</span> = ver/criar &middot;
+      <span style="color:var(--text-2)">👁 Ver</span> = só leitura &middot;
+      <span style="color:var(--text-3)">✗</span> = sem acesso
+    </div>
+    ${(() => {
+      // v31: tabela dinâmica derivada de _PRESETS — fonte única da verdade.
+      // Resumo em 1 linha por módulo (nível de acesso) em vez da matriz cheia
+      // de 56 linhas, mantendo a leitura compacta.
+      const presetsBase = {
+        admin:      _PRESETS.admin(),
+        financeiro: _PRESETS.financeiro(),
+        leitura:    _PRESETS.leitura(),
+      };
+      const nivel = (p) => {
+        if (!p) return { txt:'✗', cor:'var(--text-3)' };
+        const v=!!p.v, c=!!p.c, e=!!p.e, x=!!p.x;
+        if (v && c && e && x) return { txt:'✓ Total',  cor:'var(--green)' };
+        if (v && c && e)      return { txt:'⊕ Operar', cor:'var(--amber)' };
+        if (v && c)           return { txt:'+ Criar',  cor:'var(--amber)' };
+        if (v)                return { txt:'👁 Ver',   cor:'var(--text-2)' };
+        return { txt:'✗', cor:'var(--text-3)' };
+      };
+      const cell = (p) => { const n = nivel(p); return `<span style="color:${n.cor};font-size:12px;font-weight:600">${n.txt}</span>`; };
+      return `<table>
+        <thead><tr>
+          <th>Módulo</th>
+          <th style="text-align:center">Administrador</th>
+          <th style="text-align:center">Operacional</th>
+          <th style="text-align:center">Visualização</th>
+        </tr></thead>
+        <tbody>
+          ${_MODULOS_PERMS.map(m => `<tr>
+            <td style="color:var(--text-2);font-size:12px">${m.label}</td>
+            <td style="text-align:center">${cell(presetsBase.admin[m.key])}</td>
+            <td style="text-align:center">${cell(presetsBase.financeiro[m.key])}</td>
+            <td style="text-align:center">${cell(presetsBase.leitura[m.key])}</td>
           </tr>`).join('')}
-      </tbody>
-    </table>
+        </tbody>
+      </table>`;
+    })()}
   </div>
 
   </div>`;
@@ -10924,6 +10938,41 @@ const _PRESETS = {
   }
 };
 
+// ── DETECÇÃO SEMÂNTICA DE PERFIL ──────────────────────────────
+// v31: substitui o JSON.stringify frágil que comparava ordem de chaves
+// e gerava falso positivo "Personalizado" mesmo para usuários com
+// permissões idênticas a um preset (bug recorrente no próprio admin).
+// Compara módulo a módulo, ação a ação, ignorando ordem e chaves extras.
+function _permsBatemComPreset(perms, preset) {
+  if (!perms || !preset) return false;
+  for (const m of _MODULOS_PERMS) {
+    const a1 = perms[m.key]   || {};
+    const a2 = preset[m.key]  || {};
+    for (const a of _ACOES_PERMS) {
+      if (!!a1[a.key] !== !!a2[a.key]) return false;
+    }
+  }
+  return true;
+}
+
+// Retorna o template efetivo de um usuário, considerando suas permissões reais.
+// Se as permissões salvas batem com algum preset puro → retorna esse preset.
+// Se não batem com nenhum → 'custom'.
+// Se o usuário não tem permissoes salvas (legacy), confia no template.
+function _detectarPerfilEfetivo(u) {
+  if (!u) return 'leitura';
+  // Sem permissões salvas → confia no template (caso legado).
+  if (!u.permissoes || typeof u.permissoes !== 'object'
+      || !Object.keys(u.permissoes).length) {
+    return u.template || 'leitura';
+  }
+  // Procura preset puro que bata exatamente.
+  for (const nome of ['admin','financeiro','leitura']) {
+    if (_permsBatemComPreset(u.permissoes, _PRESETS[nome]())) return nome;
+  }
+  return 'custom';
+}
+
 function _renderMatrizPermissoes(perms) {
   // perms = objeto JSONB atual
   return `
@@ -11038,20 +11087,9 @@ async function salvarEdicaoUsuario(usuarioId) {
   // Coleta permissões da matriz
   const perms = _coletarMatriz();
 
-  // Detecta se permissões batem com algum preset; senão marca como custom
-  let isCustom = true;
-  for (const presetName of ['admin','financeiro','leitura']) {
-    const preset = _PRESETS[presetName]();
-    let bate = true;
-    for (const m of _MODULOS_PERMS) {
-      for (const a of _ACOES_PERMS) {
-        if ((perms[m.key]||{})[a.key] !== (preset[m.key]||{})[a.key]) { bate = false; break; }
-      }
-      if (!bate) break;
-    }
-    if (bate) { tpl = presetName; isCustom = false; break; }
-  }
-  if (isCustom) tpl = 'custom';
+  // v31: detecção via helper único (mesmo usado no render). Garante que
+  // a tela de listagem e o save concordem sobre o que é "Personalizado".
+  tpl = _detectarPerfilEfetivo({ template: tpl, permissoes: perms });
 
   try {
     await supa('PATCH', 'fin_usuarios', { params: { id: `eq.${usuarioId}` }, body: { nome } });

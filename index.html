@@ -2309,7 +2309,7 @@ function renderReceber() {
 
   $id('topbar-actions').innerHTML = `
     <button class="btn btn-sm" onclick="exportarCSV(RECEITAS,'receitas_artecon')" style="background:var(--surface-2);color:var(--text-2);border:1px solid var(--border-lt)">⬇ CSV</button>
-    <button class="btn btn-gold btn-sm" onclick="modalNovaReceita()">+ Nova Receita</button>`;
+    ${podeCriar('receber') ? `<button class="btn btn-gold btn-sm" onclick="modalNovaReceita()">+ Nova Receita</button>` : ''}`;
 
   // Filtrar
   let list = [...RECEITAS];
@@ -2385,9 +2385,9 @@ function renderReceber() {
               <td>${badgeStatus(r.status)}</td>
               <td style="white-space:nowrap">
                 <div style="display:flex;gap:5px;align-items:center">
-                  ${r.status==='pendente'||r.status==='vencido' ? `<button class="btn btn-sm btn-green" onclick="baixarReceita('${r.id}',event)" style="padding:4px 10px;font-size:11px">✓</button>` : ''}
-                  <button class="btn btn-sm" onclick="editarReceita('${r.id}',event)" style="padding:4px 10px;font-size:11px;background:var(--surface-2);color:var(--text-2);border:1px solid var(--border-lt)">✏</button>
-                  <button class="btn btn-sm" onclick="excluirReceita('${r.id}',event)" style="padding:4px 10px;font-size:11px;background:var(--red-lt);color:var(--red);border:1px solid rgba(224,92,92,.2)">✕</button>
+                  ${(r.status==='pendente'||r.status==='vencido') && podeEditar('receber') ? `<button class="btn btn-sm btn-green" onclick="baixarReceita('${r.id}',event)" style="padding:4px 10px;font-size:11px">✓</button>` : ''}
+                  ${podeEditar('receber') ? `<button class="btn btn-sm" onclick="editarReceita('${r.id}',event)" style="padding:4px 10px;font-size:11px;background:var(--surface-2);color:var(--text-2);border:1px solid var(--border-lt)">✏</button>` : ''}
+                  ${podeExcluir('receber') ? `<button class="btn btn-sm" onclick="excluirReceita('${r.id}',event)" style="padding:4px 10px;font-size:11px;background:var(--red-lt);color:var(--red);border:1px solid rgba(224,92,92,.2)">✕</button>` : ''}
                 </div>
               </td>
             </tr>`;
@@ -2540,7 +2540,7 @@ function renderPagar() {
 
   $id('topbar-actions').innerHTML = `
     <button class="btn btn-sm" onclick="exportarCSV(DESPESAS,'despesas_artecon')" style="background:var(--surface-2);color:var(--text-2);border:1px solid var(--border-lt)">⬇ CSV</button>
-    <button class="btn btn-gold btn-sm" onclick="modalNovaDespesa()">+ Nova Despesa</button>`;
+    ${podeCriar('pagar') ? `<button class="btn btn-gold btn-sm" onclick="modalNovaDespesa()">+ Nova Despesa</button>` : ''}`;
 
   // Filtrar
   let list = [...DESPESAS];
@@ -2616,9 +2616,9 @@ function renderPagar() {
               <td>${badgeStatus(d.status)}</td>
               <td style="white-space:nowrap">
                 <div style="display:flex;gap:5px;align-items:center">
-                  ${d.status==='pendente'||d.status==='vencido' ? `<button class="btn btn-sm btn-red" onclick="baixarDespesa('${d.id}',event)" style="padding:4px 10px;font-size:11px">✓</button>` : ''}
-                  <button class="btn btn-sm" onclick="editarDespesa('${d.id}',event)" style="padding:4px 10px;font-size:11px;background:var(--surface-2);color:var(--text-2);border:1px solid var(--border-lt)">✏</button>
-                  <button class="btn btn-sm" onclick="excluirDespesa('${d.id}',event)" style="padding:4px 10px;font-size:11px;background:var(--red-lt);color:var(--red);border:1px solid rgba(224,92,92,.2)">✕</button>
+                  ${(d.status==='pendente'||d.status==='vencido') && podeEditar('pagar') ? `<button class="btn btn-sm btn-red" onclick="baixarDespesa('${d.id}',event)" style="padding:4px 10px;font-size:11px">✓</button>` : ''}
+                  ${podeEditar('pagar') ? `<button class="btn btn-sm" onclick="editarDespesa('${d.id}',event)" style="padding:4px 10px;font-size:11px;background:var(--surface-2);color:var(--text-2);border:1px solid var(--border-lt)">✏</button>` : ''}
+                  ${podeExcluir('pagar') ? `<button class="btn btn-sm" onclick="excluirDespesa('${d.id}',event)" style="padding:4px 10px;font-size:11px;background:var(--red-lt);color:var(--red);border:1px solid rgba(224,92,92,.2)">✕</button>` : ''}
                 </div>
               </td>
             </tr>`;
@@ -2761,7 +2761,8 @@ async function excluirDespesa(id, e) {
 
 // ── CONTAS ────────────────────────────────────────────────────
 function renderContas() {
-  $id('topbar-actions').innerHTML = `<button class="btn btn-gold btn-sm" onclick="modalNovaConta()">+ Nova Conta</button>`;
+  $id('topbar-actions').innerHTML = podeCriar('caixa_bancos')
+    ? `<button class="btn btn-gold btn-sm" onclick="modalNovaConta()">+ Nova Conta</button>` : '';
   const saldoTotal = CONTAS.reduce((s,c) => s + parseFloat(c.saldo_atual), 0);
   $id('page-content').innerHTML = `
   <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr)">
@@ -2780,8 +2781,8 @@ function renderContas() {
           <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
             <div style="font-size:11px;color:var(--text-3)">Inicial: ${fmtMoeda(c.saldo_inicial)}</div>
             <div style="display:flex;gap:5px">
-              <button onclick="editarConta('${c.id}')" class="btn btn-sm" style="padding:3px 9px;font-size:11px;background:var(--surface-2);color:var(--text-2);border:1px solid var(--border-lt)">✏</button>
-              <button onclick="excluirConta('${c.id}')" class="btn btn-sm" style="padding:3px 9px;font-size:11px;background:var(--red-lt);color:var(--red);border:1px solid rgba(192,57,43,.2)">✕</button>
+              ${podeEditar('caixa_bancos') ? `<button onclick="editarConta('${c.id}')" class="btn btn-sm" style="padding:3px 9px;font-size:11px;background:var(--surface-2);color:var(--text-2);border:1px solid var(--border-lt)">✏</button>` : ''}
+              ${podeExcluir('caixa_bancos') ? `<button onclick="excluirConta('${c.id}')" class="btn btn-sm" style="padding:3px 9px;font-size:11px;background:var(--red-lt);color:var(--red);border:1px solid rgba(192,57,43,.2)">✕</button>` : ''}
             </div>
           </div>
         </div>
@@ -3788,7 +3789,7 @@ function renderClientes() {
   const f = _F.clientes;
   $id('topbar-actions').innerHTML = `
     <button class="btn btn-sm" onclick="exportarCSV(CLIENTES,'clientes_artecon')" style="background:var(--surface-2);color:var(--text-2);border:1px solid var(--border-lt)">⬇ CSV</button>
-    <button class="btn btn-gold btn-sm" onclick="modalNovoCliente()">+ Novo Cliente</button>`;
+    ${podeCriar('cadastros') ? `<button class="btn btn-gold btn-sm" onclick="modalNovoCliente()">+ Novo Cliente</button>` : ''}`;
 
   let list = [...CLIENTES];
   if (f.busca) list = list.filter(c =>
@@ -3830,8 +3831,8 @@ function renderClientes() {
           <td style="color:var(--text-2)">${c.telefone||'—'}</td>
           <td style="white-space:nowrap">
             <div style="display:flex;gap:5px">
-              <button onclick="editarCliente('${c.id}')" class="btn btn-sm" style="padding:4px 10px;font-size:11px;background:var(--surface-2);color:var(--text-2);border:1px solid var(--border-lt)">✏</button>
-              <button onclick="excluirCliente('${c.id}')" class="btn btn-sm" style="padding:4px 10px;font-size:11px;background:var(--red-lt);color:var(--red);border:1px solid rgba(192,57,43,.2)">✕</button>
+              ${podeEditar('cadastros') ? `<button onclick="editarCliente('${c.id}')" class="btn btn-sm" style="padding:4px 10px;font-size:11px;background:var(--surface-2);color:var(--text-2);border:1px solid var(--border-lt)">✏</button>` : ''}
+              ${podeExcluir('cadastros') ? `<button onclick="excluirCliente('${c.id}')" class="btn btn-sm" style="padding:4px 10px;font-size:11px;background:var(--red-lt);color:var(--red);border:1px solid rgba(192,57,43,.2)">✕</button>` : ''}
             </div>
           </td>
         </tr>`).join('')}
@@ -3931,7 +3932,7 @@ function renderFornecedores() {
   const f = _F.fornecedores;
   $id('topbar-actions').innerHTML = `
     <button class="btn btn-sm" onclick="exportarCSV(FORNECEDORES,'fornecedores_artecon')" style="background:var(--surface-2);color:var(--text-2);border:1px solid var(--border-lt)">⬇ CSV</button>
-    <button class="btn btn-gold btn-sm" onclick="modalNovoFornecedor()">+ Novo Fornecedor</button>`;
+    ${podeCriar('cadastros') ? `<button class="btn btn-gold btn-sm" onclick="modalNovoFornecedor()">+ Novo Fornecedor</button>` : ''}`;
 
   let list = [...FORNECEDORES];
   if (f.busca) list = list.filter(x =>
@@ -3973,8 +3974,8 @@ function renderFornecedores() {
           <td style="color:var(--text-2)">${x.telefone||'—'}</td>
           <td style="white-space:nowrap">
             <div style="display:flex;gap:5px">
-              <button onclick="editarFornecedor('${x.id}')" class="btn btn-sm" style="padding:4px 10px;font-size:11px;background:var(--surface-2);color:var(--text-2);border:1px solid var(--border-lt)">✏</button>
-              <button onclick="excluirFornecedor('${x.id}')" class="btn btn-sm" style="padding:4px 10px;font-size:11px;background:var(--red-lt);color:var(--red);border:1px solid rgba(192,57,43,.2)">✕</button>
+              ${podeEditar('cadastros') ? `<button onclick="editarFornecedor('${x.id}')" class="btn btn-sm" style="padding:4px 10px;font-size:11px;background:var(--surface-2);color:var(--text-2);border:1px solid var(--border-lt)">✏</button>` : ''}
+              ${podeExcluir('cadastros') ? `<button onclick="excluirFornecedor('${x.id}')" class="btn btn-sm" style="padding:4px 10px;font-size:11px;background:var(--red-lt);color:var(--red);border:1px solid rgba(192,57,43,.2)">✕</button>` : ''}
             </div>
           </td>
         </tr>`).join('')}
@@ -4073,8 +4074,8 @@ function renderCategorias() {
   const semVinculo = CATEGORIAS.filter(c => !c.conta_financeira_id).length;
 
   $id('topbar-actions').innerHTML = `
-    ${semVinculo > 0 ? `<button class="btn btn-outline btn-sm" onclick="modalVincularLote()" title="Vincular categorias ao plano financeiro em massa">🔗 Vincular ao plano (${semVinculo})</button>` : ''}
-    <button class="btn btn-gold btn-sm" onclick="modalNovaCategoria()">+ Nova Categoria</button>
+    ${(semVinculo > 0 && podeEditar('cadastros')) ? `<button class="btn btn-outline btn-sm" onclick="modalVincularLote()" title="Vincular categorias ao plano financeiro em massa">🔗 Vincular ao plano (${semVinculo})</button>` : ''}
+    ${podeCriar('cadastros') ? `<button class="btn btn-gold btn-sm" onclick="modalNovaCategoria()">+ Nova Categoria</button>` : ''}
   `;
   const rec  = CATEGORIAS.filter(c => c.tipo === 'receita');
   const desp = CATEGORIAS.filter(c => c.tipo === 'despesa');
@@ -4212,8 +4213,8 @@ async function modalEditarCategoria(id) {
       </div>
     </div>`,
     `<button class="btn btn-outline" onclick="closeModal()">Cancelar</button>
-     <button class="btn btn-red btn-sm" style="margin-right:auto" onclick="excluirCategoria('${id}')">Excluir</button>
-     <button class="btn btn-gold" onclick="salvarEdicaoCategoria('${id}')">Salvar</button>`
+     ${podeExcluir('cadastros') ? `<button class="btn btn-red btn-sm" style="margin-right:auto" onclick="excluirCategoria('${id}')">Excluir</button>` : ''}
+     ${podeEditar('cadastros') ? `<button class="btn btn-gold" onclick="salvarEdicaoCategoria('${id}')">Salvar</button>` : ''}`
   );
 }
 
@@ -10243,12 +10244,112 @@ function isAdmin() {
   return APP.template === 'admin';
 }
 
-// guardAdmin agora usa pode() pra checagem granular quando possível
+// ─── v31: Guard de permissão por função ─────────────────────────
+// Mapeia cada função sensível para (módulo, ação) do JSONB de permissões.
+// Quando o usuário tenta executar sem permissão, mostra toast e aborta.
+// Isso é a SEGUNDA camada de defesa (a primeira é a RLS no banco).
+const _PERMS_FUNCAO = {
+  // RECEBER (módulo 'receber')
+  modalNovaReceita:        ['receber','c'],
+  salvarReceita:           ['receber','c'],
+  editarReceita:           ['receber','e'],
+  salvarEdicaoReceita:     ['receber','e'],
+  baixarReceita:           ['receber','e'], // mudar status para "recebido" é editar
+  excluirReceita:          ['receber','x'],
+
+  // PAGAR (módulo 'pagar')
+  modalNovaDespesa:        ['pagar','c'],
+  salvarDespesa:           ['pagar','c'],
+  editarDespesa:           ['pagar','e'],
+  salvarEdicaoDespesa:     ['pagar','e'],
+  baixarDespesa:           ['pagar','e'],
+  excluirDespesa:          ['pagar','x'],
+
+  // CAIXA & BANCOS (módulo 'caixa_bancos')
+  modalNovaConta:          ['caixa_bancos','c'],
+  salvarConta:             ['caixa_bancos','c'],
+  editarConta:             ['caixa_bancos','e'],
+  salvarEdicaoConta:       ['caixa_bancos','e'],
+  excluirConta:            ['caixa_bancos','x'],
+
+  // CADASTROS — clientes/fornecedores/categorias (módulo 'cadastros')
+  modalNovoCliente:        ['cadastros','c'],
+  salvarCliente:           ['cadastros','c'],
+  editarCliente:           ['cadastros','e'],
+  salvarEdicaoCliente:     ['cadastros','e'],
+  excluirCliente:          ['cadastros','x'],
+
+  modalNovoFornecedor:     ['cadastros','c'],
+  salvarFornecedor:        ['cadastros','c'],
+  editarFornecedor:        ['cadastros','e'],
+  salvarEdicaoFornecedor:  ['cadastros','e'],
+  excluirFornecedor:       ['cadastros','x'],
+
+  modalNovaCategoria:      ['cadastros','c'],
+  salvarCategoria:         ['cadastros','c'],
+  modalEditarCategoria:    ['cadastros','e'],
+  salvarEdicaoCategoria:   ['cadastros','e'],
+  excluirCategoria:        ['cadastros','x'],
+  modalVincularLote:       ['cadastros','e'],
+
+  // METAS
+  modalNovaMeta:           ['metas','c'],
+  salvarMeta:              ['metas','c'],
+  editarMeta:              ['metas','e'],
+  salvarEdicaoMeta:        ['metas','e'],
+  excluirMeta:             ['metas','x'],
+
+  // RECORRÊNCIAS
+  modalNovaRecorrencia:    ['recorrencias','c'],
+  salvarRecorrencia:       ['recorrencias','c'],
+  toggleRecorrencia:       ['recorrencias','e'],
+  excluirRecorrencia:      ['recorrencias','x'],
+
+  // IMPOSTOS
+  modalNovoImposto:        ['impostos','c'],
+  salvarImposto:           ['impostos','c'],
+  pagarImposto:            ['impostos','e'],
+  excluirImposto:          ['impostos','x'],
+
+  // IMPORTAÇÃO IA / ANEXOS
+  anexarDocumento:               ['importacao_ia','c'],
+  confirmarImportacaoExtrato:    ['importacao_ia','c'],
+  confirmarImportacaoNFe:        ['importacao_ia','c'],
+  confirmarAnexoValidado:        ['importacao_ia','c'],
+  confirmarAnexoComAtualizacao:  ['importacao_ia','c'],
+  overrideAdminAnexo:            ['importacao_ia','e'],
+};
+
+// Labels amigáveis pra mensagem de erro
+const _MOD_LABELS = {
+  receber: 'A Receber', pagar: 'A Pagar', caixa_bancos: 'Caixa & Bancos',
+  cadastros: 'Cadastros', metas: 'Metas', recorrencias: 'Recorrências',
+  impostos: 'Impostos', importacao_ia: 'Importação IA', planos: 'Plano de Contas',
+  configuracoes: 'Configurações', usuarios: 'Usuários',
+};
+const _ACAO_LABELS = { v: 'visualizar', c: 'criar', e: 'editar', x: 'excluir' };
+
+// Wrapper que bloqueia execução sem permissão e exibe toast amigável.
+// Se for evento (segundo arg), faz preventDefault/stopPropagation.
+function guardAcao(fn, modulo, acao) {
+  return function(...args) {
+    if (!pode(modulo, acao)) {
+      const e = args.find(a => a && typeof a.preventDefault === 'function');
+      if (e) { try { e.preventDefault(); e.stopPropagation(); } catch(_) {} }
+      toast(`Sem permissão para ${_ACAO_LABELS[acao]||acao} em ${_MOD_LABELS[modulo]||modulo}.`, 'error');
+      return;
+    }
+    return fn.apply(this, args);
+  };
+}
+
+// Compatibilidade reversa: guardAdmin antigo agora delega ao novo sistema.
+// Mantido apenas pra não quebrar chamadas legadas que ainda existam.
 function guardAdmin(fn) {
   return function(...args) {
-    if (!isAdmin() && !podeEditar('configuracoes')) {
-      // Fallback genérico: se não for admin nem tiver permissão de editar configs,
-      // bloqueia. As checagens granulares ficam dentro das funções específicas.
+    if (!isAdmin()) {
+      toast('Esta ação requer permissão de administrador.', 'error');
+      return;
     }
     return fn.apply(this, args);
   };
@@ -11934,14 +12035,8 @@ async function revogarConvite(token) {
 }
 
 // Aplica guard de perfil às funções destrutivas
-const _guardedFns = ['salvarReceita','baixarReceita','editarReceita','salvarEdicaoReceita','excluirReceita',
-  'salvarDespesa','baixarDespesa','editarDespesa','salvarEdicaoDespesa','excluirDespesa',
-  'salvarConta','salvarCliente','salvarFornecedor','salvarCategoria',
-  'salvarMeta','excluirMeta','salvarRecorrencia','toggleRecorrencia','excluirRecorrencia',
-  'salvarImposto','pagarImposto','excluirImposto','editarCliente','salvarEdicaoCliente','excluirCliente','editarFornecedor','salvarEdicaoFornecedor','excluirFornecedor','editarConta','salvarEdicaoConta','excluirConta','editarMeta','salvarEdicaoMeta','anexarDocumento','confirmarImportacaoExtrato','confirmarImportacaoNFe',
-  'confirmarAnexoValidado','confirmarAnexoComAtualizacao','overrideAdminAnexo',
-  'modalNovaReceita','modalNovaDespesa','modalNovaConta','modalNovoCliente',
-  'modalNovoFornecedor','modalNovaCategoria','modalNovaMeta','modalNovaRecorrencia','modalNovoImposto'];
+// v31: lista mantida pra compatibilidade — a aplicação real usa _PERMS_FUNCAO acima
+const _guardedFns = Object.keys(_PERMS_FUNCAO);
 
 // ── MOBILE MENU ────────────────────────────────────────────────
 function updateMobMenu() {
@@ -12517,9 +12612,12 @@ window.confirmarExcluirEmpresaSA = _throttle(confirmarExcluirEmpresaSA, 5000);
 
 // ── INIT ──────────────────────────────────────────────────────
 window.addEventListener('load', () => {
-  // Aplica guard de perfil nas funções destrutivas (viewer = só leitura)
-  _guardedFns.forEach(fn => {
-    if (typeof window[fn] === 'function') window[fn] = guardAdmin(window[fn]);
+  // v31: aplica guards granulares (módulo+ação) usando _PERMS_FUNCAO.
+  // Isso é a 2ª camada de defesa — a 1ª é a RLS do Postgres.
+  Object.entries(_PERMS_FUNCAO).forEach(([nomeFn, [modulo, acao]]) => {
+    if (typeof window[nomeFn] === 'function') {
+      window[nomeFn] = guardAcao(window[nomeFn], modulo, acao);
+    }
   });
   $id('auth-screen').classList.add('visible');
 });

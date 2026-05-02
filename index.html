@@ -1077,6 +1077,89 @@ function openModal(title, body, footer = '') {
 }
 function closeModal() { $id('modal-overlay').classList.remove('open'); }
 
+// ── CONFIRMAÇÃO ───────────────────────────────────────────────
+// Substitui o confirm() nativo do browser por um modal harmônico com o app.
+// Uso: if (!await confirmarAcao('Excluir?', 'Mensagem...')) return;
+// opts: { tipo: 'red'|'amber'|'gold' (default 'red'), labelOk, labelCancelar }
+function confirmarAcao(titulo, mensagem, opts = {}) {
+  return new Promise((resolve) => {
+    const tipo       = opts.tipo || 'red';
+    const labelOk    = opts.labelOk    || (tipo === 'red' ? 'Excluir' : 'Confirmar');
+    const labelCanc  = opts.labelCancelar || 'Cancelar';
+    const corBtn     = tipo === 'red'   ? 'var(--red)'
+                     : tipo === 'amber' ? 'var(--amber)'
+                     :                    'var(--gold)';
+    const icone      = tipo === 'red'   ? '🗑️'
+                     : tipo === 'amber' ? '⚠️'
+                     :                    '❓';
+
+    openModal(titulo, `
+      <div style="display:flex;gap:12px;align-items:flex-start;padding:4px 0">
+        <div style="font-size:26px;line-height:1;flex-shrink:0">${icone}</div>
+        <div style="font-size:13.5px;line-height:1.55;color:var(--text);flex:1">${escapeHtml(mensagem)}</div>
+      </div>`,
+      `<button class="btn btn-outline" id="cf-cancel">${escapeHtml(labelCanc)}</button>
+       <button class="btn" id="cf-ok" style="background:${corBtn};color:#fff;border:none">${escapeHtml(labelOk)}</button>`);
+
+    let resolvido = false;
+    const finalizar = (val) => {
+      if (resolvido) return;
+      resolvido = true;
+      closeModal();
+      resolve(val);
+    };
+
+    const btnCancel = document.getElementById('cf-cancel');
+    const btnOk     = document.getElementById('cf-ok');
+    if (btnCancel) btnCancel.onclick = () => finalizar(false);
+    if (btnOk)     btnOk.onclick     = () => finalizar(true);
+    if (btnOk) btnOk.focus();
+  });
+}
+
+// Pede justificativa em modal (substitui prompt() nativo).
+// minLength: tamanho mínimo da resposta. Retorna string (trimmed) ou null se cancelado.
+function pedirJustificativa(titulo, opts = {}) {
+  return new Promise((resolve) => {
+    const minLength  = opts.minLength || 10;
+    const placeholder = opts.placeholder || 'Justifique a ação…';
+    const labelOk    = opts.labelOk    || 'Confirmar';
+    const labelCanc  = opts.labelCancelar || 'Cancelar';
+    const mensagem   = opts.mensagem || `Informe uma justificativa (mínimo ${minLength} caracteres).`;
+
+    openModal(titulo, `
+      <div style="font-size:13px;color:var(--text-2);margin-bottom:10px;line-height:1.5">${escapeHtml(mensagem)}</div>
+      <div class="form-field full">
+        <textarea class="form-input" id="pj-texto" rows="4" placeholder="${escapeHtml(placeholder)}"
+          style="resize:vertical;min-height:80px;font-family:var(--font);font-size:12.5px"></textarea>
+      </div>`,
+      `<button class="btn btn-outline" id="pj-cancel">${escapeHtml(labelCanc)}</button>
+       <button class="btn btn-gold" id="pj-ok">${escapeHtml(labelOk)}</button>`);
+
+    let resolvido = false;
+    const finalizar = (val) => {
+      if (resolvido) return;
+      resolvido = true;
+      closeModal();
+      resolve(val);
+    };
+
+    const txt    = document.getElementById('pj-texto');
+    const btnC   = document.getElementById('pj-cancel');
+    const btnOk  = document.getElementById('pj-ok');
+    if (btnC)  btnC.onclick  = () => finalizar(null);
+    if (btnOk) btnOk.onclick = () => {
+      const v = (txt?.value || '').trim();
+      if (v.length < minLength) {
+        toast(`Justificativa obrigatória (mín. ${minLength} caracteres).`, 'error');
+        return;
+      }
+      finalizar(v);
+    };
+    if (txt) txt.focus();
+  });
+}
+
 // ── AUTH ──────────────────────────────────────────────────────
 // (Cadastro de novos usuários agora é feito via aba Usuários ou link de convite)
 
@@ -2522,7 +2605,7 @@ async function salvarEdicaoReceita(id) {
 
 async function excluirReceita(id, e) {
   e.stopPropagation();
-  if (!confirm('Excluir esta receita? A ação não pode ser desfeita.')) return;
+  if (!await confirmarAcao('Excluir receita?', 'A ação não pode ser desfeita.')) return;
   try {
     await supa('DELETE', 'fin_receitas', { params: { id: `eq.${id}` } });
     toast('Receita excluída.', 'success');
@@ -2749,7 +2832,7 @@ async function salvarEdicaoDespesa(id) {
 
 async function excluirDespesa(id, e) {
   e.stopPropagation();
-  if (!confirm('Excluir esta despesa? A ação não pode ser desfeita.')) return;
+  if (!await confirmarAcao('Excluir despesa?', 'A ação não pode ser desfeita.')) return;
   try {
     await supa('DELETE', 'fin_despesas', { params: { id: `eq.${id}` } });
     toast('Despesa excluída.', 'success');
@@ -2868,7 +2951,7 @@ async function salvarEdicaoConta(id) {
 }
 
 async function excluirConta(id) {
-  if (!confirm('Excluir esta conta? As movimentações vinculadas não serão removidas.')) return;
+  if (!await confirmarAcao('Excluir conta?', 'As movimentações vinculadas não serão removidas.')) return;
   try {
     await supa('PATCH', 'fin_contas', { params: { id: `eq.${id}` }, body: { ativo: false } });
     toast('Conta desativada.', 'success');
@@ -3917,7 +4000,7 @@ async function salvarEdicaoCliente(id) {
 }
 
 async function excluirCliente(id) {
-  if (!confirm('Excluir este cliente? Os lançamentos vinculados não serão removidos.')) return;
+  if (!await confirmarAcao('Excluir cliente?', 'Os lançamentos vinculados não serão removidos.')) return;
   try {
     await supa('DELETE', 'fin_clientes', { params: { id: `eq.${id}` } });
     toast('Cliente excluído.', 'success');
@@ -4059,7 +4142,7 @@ async function salvarEdicaoFornecedor(id) {
 }
 
 async function excluirFornecedor(id) {
-  if (!confirm('Excluir este fornecedor? Os lançamentos vinculados não serão removidos.')) return;
+  if (!await confirmarAcao('Excluir fornecedor?', 'Os lançamentos vinculados não serão removidos.')) return;
   try {
     await supa('DELETE', 'fin_fornecedores', { params: { id: `eq.${id}` } });
     toast('Fornecedor excluído.', 'success');
@@ -4241,7 +4324,7 @@ async function salvarEdicaoCategoria(id) {
 }
 
 async function excluirCategoria(id) {
-  if (!confirm('Desativar esta categoria? Lançamentos existentes não são afetados.')) return;
+  if (!await confirmarAcao('Desativar categoria?', 'Lançamentos existentes não são afetados.', { tipo:'amber', labelOk:'Desativar' })) return;
   try {
     await supa('PATCH', 'fin_categorias', { params: { id: 'eq.' + id }, body: { ativo: false } });
     removerLocal(CATEGORIAS, id);
@@ -4738,7 +4821,7 @@ async function planoSalvarEdicao(tipo, id) {
 
 async function planoExcluirConta(tipo, id) {
   if (!podeExcluirPlanos()) { toast('Sem permissão para desativar.', 'error'); return; }
-  if (!confirm('Desativar esta conta? Vínculos de-para serão removidos.')) return;
+  if (!await confirmarAcao('Desativar conta?', 'Vínculos de-para serão removidos.', { tipo:'amber', labelOk:'Desativar' })) return;
   const tabela = tipo === 'financeiro' ? 'fin_plano_financeiro' : 'fin_plano_contabil';
   try {
     await supa('PATCH', tabela, { params: { id: 'eq.' + id }, body: { ativo: false } });
@@ -5385,7 +5468,7 @@ async function deparaConfirmarVinculo() {
 
 async function deparaRemoverVinculo(id) {
   if (!podeEditarDePara()) { toast('Sem permissão para remover.', 'error'); return; }
-  if (!confirm('Remover este vínculo?')) return;
+  if (!await confirmarAcao('Remover vínculo?', 'Esta ação removerá o vínculo de-para.', { labelOk:'Remover' })) return;
   try {
     await supa('DELETE', 'fin_plano_depara', { params: { id: 'eq.' + id } });
     const D = PLANOS_STATE.depara;
@@ -5577,7 +5660,7 @@ async function modalRegraCateg(id) {
   if (id) {
     try {
       const rows = await supa('GET', 'fin_regras_categorizacao', {
-        params: { id: `eq.${id}`, select: '*', limit: 1 }
+        params: { id: `eq.${id}`, tenant_id: `eq.${APP.tenantId}`, select: '*', limit: 1 }
       });
       if (rows && rows[0]) r = rows[0];
     } catch(e) { toast('Erro ao carregar: ' + e.message, 'error'); return; }
@@ -5677,7 +5760,7 @@ async function toggleRegraCategAtiva(id, ativo) {
 }
 
 async function excluirRegraCateg(id) {
-  if (!confirm('Excluir esta regra? A ação não pode ser desfeita.')) return;
+  if (!await confirmarAcao('Excluir regra?', 'A ação não pode ser desfeita.')) return;
   try {
     await supa('DELETE', 'fin_regras_categorizacao', { params: { id: `eq.${id}` } });
     toast('Regra excluída', 'success');
@@ -5984,7 +6067,7 @@ async function salvarEdicaoMeta(id) {
 }
 
 async function excluirMeta(id) {
-  if (!confirm('Excluir esta meta?')) return;
+  if (!await confirmarAcao('Excluir meta?', 'Esta ação não pode ser desfeita.')) return;
   try {
     await supa('DELETE', 'fin_metas', { params: { id: `eq.${id}` } });
     removerLocal(METAS, id);
@@ -6309,7 +6392,7 @@ async function toggleRecorrencia(id, novoStatus) {
 }
 
 async function excluirRecorrencia(id) {
-  if (!confirm('Excluir esta recorrência? Os lançamentos já gerados não serão removidos.')) return;
+  if (!await confirmarAcao('Excluir recorrência?', 'Os lançamentos já gerados não serão removidos.')) return;
   try {
     await supa('DELETE', 'fin_recorrencias', { params: { id: `eq.${id}` } });
     removerLocal(RECORRENCIAS, id);
@@ -6545,7 +6628,7 @@ async function pagarImposto(id, e) {
 
 async function excluirImposto(id, e) {
   e.stopPropagation();
-  if (!confirm('Excluir este registro?')) return;
+  if (!await confirmarAcao('Excluir registro?', 'Esta ação não pode ser desfeita.')) return;
   try {
     await supa('DELETE', 'fin_impostos', { params: { id: `eq.${id}` } });
     removerLocal(IMPOSTOS, id);
@@ -6806,7 +6889,7 @@ async function verAnexo(path) {
 }
 
 async function excluirAnexo(id, path) {
-  if (!confirm('Excluir este documento?')) return;
+  if (!await confirmarAcao('Excluir documento?', 'O arquivo será removido permanentemente.')) return;
   try {
     await supa('DELETE', 'fin_anexos', { params: { id: `eq.${id}` } });
     await deleteStorage(path);
@@ -7036,19 +7119,20 @@ async function confirmarAnexoComAtualizacao() {
 }
 
 async function overrideAdminAnexo() {
-  const justificativa = prompt('Justifique por que está anexando um documento com CNPJ divergente:');
-  if (!justificativa || justificativa.trim().length < 10) {
-    toast('Justificativa obrigatória (mín. 10 caracteres).', 'error');
-    return;
-  }
   const ctx = window._anexoValidacao?.contexto;
   if (!ctx) return;
+  const justificativa = await pedirJustificativa('🔓 Override administrativo', {
+    minLength: 10,
+    mensagem: 'Justifique por que está anexando um documento com CNPJ divergente. Esta ação ficará registrada para auditoria.',
+    placeholder: 'Ex: Documento da matriz, NF emitida pela filial...',
+    labelOk: 'Anexar mesmo assim',
+  });
+  if (!justificativa) return;
   console.warn('[OVERRIDE ADMIN] Anexo com CNPJ divergente:', {
     usuario: APP.user?.email, tipoRef: ctx.tipoRef, refId: ctx.refId,
     arquivo: ctx.file?.name, justificativa,
     diag: window._anexoValidacao.diag, timestamp: new Date().toISOString(),
   });
-  closeModal();
   toast('Override registrado. Anexando...', 'default', 5000);
   await executarUploadFinal(ctx);
 }
@@ -7112,7 +7196,7 @@ async function handleAnexoUpload(input, tipoRef, refId) {
 }
 
 async function excluirAnexoModal(id, path) {
-  if (!confirm('Excluir este documento?')) return;
+  if (!await confirmarAcao('Excluir documento?', 'O arquivo será removido permanentemente.')) return;
   try {
     await supa('DELETE', 'fin_anexos', { params: { id: `eq.${id}` } });
     await deleteStorage(path);
@@ -8418,6 +8502,8 @@ async function processarXMLAutoDoc(id, file) {
         `Empresa "${APP.tenant?.nome||'ativa'}" sem CNPJ cadastrado. Configure o CNPJ em "Empresas" antes de importar documentos fiscais.`, null);
       return;
     }
+    // ═══ VALIDAÇÃO CNPJ ═══════════════════════════════════════
+    let autorizacaoNFe = null;
     if (cnpjEmit || cnpjDest) {
       if (cnpjEmpresa !== cnpjEmit && cnpjEmpresa !== cnpjDest) {
         adicionarFilaItem(id, file.name, 'erro',
@@ -8426,7 +8512,7 @@ async function processarXMLAutoDoc(id, file) {
       }
     } else {
       // Sem CNPJ identificável → modal de autorização
-      var autorizacaoNFe = await _autorizarSemCNPJ(file.name, 'NF-e');
+      autorizacaoNFe = await _autorizarSemCNPJ(file.name, 'NF-e');
       if (!autorizacaoNFe) {
         adicionarFilaItem(id, file.name, 'erro',
           `Importação cancelada — documento sem CNPJ não autorizado.`, null);
@@ -8438,7 +8524,7 @@ async function processarXMLAutoDoc(id, file) {
     // tpNF: 0 = entrada (despesa: emitente é fornecedor)
     //       1 = saída  (receita: destinatário é cliente)
     // Sem CNPJ autorizado → tratar como despesa por default
-    const tipo = (typeof autorizacaoNFe !== 'undefined' && autorizacaoNFe)
+    const tipo = autorizacaoNFe
                  ? 'despesa'
                  : (tpNF === '0' ? 'despesa' : 'receita');
     const contraparte = tipo === 'despesa' ? emit : dest;
@@ -8447,20 +8533,18 @@ async function processarXMLAutoDoc(id, file) {
     // Resolver entidade — pula se autorização sem CNPJ
     adicionarFilaItem(id, file.name, 'processando', 'Verificando cadastro da entidade...', null);
     let entidadeResolvida = null;
-    if (typeof autorizacaoNFe === 'undefined' || !autorizacaoNFe) {
-      if (contraparte.cpf_cnpj) {
-        entidadeResolvida = await resolveEntidadeXML(contraparte, categoriaEntidade, 'xml_nfe');
-      }
+    if (!autorizacaoNFe && contraparte.cpf_cnpj) {
+      entidadeResolvida = await resolveEntidadeXML(contraparte, categoriaEntidade, 'xml_nfe');
     }
 
-    const desc = `NF-e nº ${nNF} — ${contraparte.nome || ((typeof autorizacaoNFe !== 'undefined' && autorizacaoNFe) ? 'Sem identificação' : '—')}`;
+    const desc = `NF-e nº ${nNF} — ${contraparte.nome || (autorizacaoNFe ? 'Sem identificação' : '—')}`;
     const body = {
       tenant_id: APP.tenantId,
       descricao: desc,
       valor: vNF,
       vencimento: data,
       status: 'pendente',
-      observacao: `CNPJ: ${contraparte.cpf_cnpj||'—'} | Importado via NF-e XML${(typeof autorizacaoNFe !== 'undefined' && autorizacaoNFe) ? ` | ⚠️ Autorizado sem CNPJ. Motivo: "${autorizacaoNFe.motivo}"` : ''}`,
+      observacao: `CNPJ: ${contraparte.cpf_cnpj||'—'} | Importado via NF-e XML${autorizacaoNFe ? ` | ⚠️ Autorizado sem CNPJ. Motivo: "${autorizacaoNFe.motivo}"` : ''}`,
     };
     if (entidadeResolvida) {
       if (categoriaEntidade === 'cliente')     body.cliente_id = entidadeResolvida.id;
@@ -8851,11 +8935,6 @@ async function processarPDFAutoDoc(id, file) {
       const err = await response.text();
       throw new Error(`Claude API: ${response.status} — ${err.slice(0,200)}`);
     }
-
-    if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`Proxy ${response.status}: ${errText.slice(0,200)}`);
-    }
     const result = await response.json();
     const text   = result.content?.[0]?.text || result.error?.message || '';
     if (result.error) throw new Error('Claude API: ' + result.error.message);
@@ -9034,9 +9113,10 @@ async function processarPDFAutoDoc(id, file) {
                  cnpjsAlucinados.map(c => _formatCNPJ(c)).join(', '));
   }
 
+  let autorizacaoPDF = null;
   if (cnpjsValidados.size === 0) {
     // Nenhum CNPJ confiável → modal de autorização
-    var autorizacaoPDF = await _autorizarSemCNPJ(file.name, 'PDF/IA');
+    autorizacaoPDF = await _autorizarSemCNPJ(file.name, 'PDF/IA');
     if (!autorizacaoPDF) {
       adicionarFilaItem(id, file.name, 'erro',
         `Importação cancelada — documento sem CNPJ identificável não autorizado.`, null);
@@ -9094,7 +9174,7 @@ async function processarPDFAutoDoc(id, file) {
       valor,
       vencimento,
       status:     'pendente',
-      observacao: `${dados.observacao||''} | Beneficiário: ${dados.beneficiario||'—'} | Importado via PDF+IA${(typeof autorizacaoPDF !== 'undefined' && autorizacaoPDF) ? ` | ⚠️ Autorizado sem CNPJ. Motivo: "${autorizacaoPDF.motivo}"` : ''}`,
+      observacao: `${dados.observacao||''} | Beneficiário: ${dados.beneficiario||'—'} | Importado via PDF+IA${autorizacaoPDF ? ` | ⚠️ Autorizado sem CNPJ. Motivo: "${autorizacaoPDF.motivo}"` : ''}`,
     };
     if (entidadeResolvida) {
       if (categoriaEnt === 'cliente')   body.cliente_id = entidadeResolvida.id;
@@ -11950,7 +12030,7 @@ async function alterarTemplate(usuarioId, template) {
 
 // ── REMOVER USUÁRIO ────────────────────────────────────────────
 async function removerUsuario(usuarioId) {
-  if (!confirm('Remover este usuário do acesso a esta empresa? O usuário em si não será excluído do sistema.')) return;
+  if (!await confirmarAcao('Remover usuário?', 'O usuário perderá acesso a esta empresa, mas não será excluído do sistema.', { labelOk:'Remover acesso' })) return;
   try {
     await supaRpc('fin_remover_usuario_empresa', { p_usuario_id: usuarioId });
     toast('Usuário removido desta empresa.', 'success');
@@ -12021,12 +12101,24 @@ async function copiarLinkConvite(token) {
     await navigator.clipboard.writeText(link);
     toast('Link copiado!', 'success');
   } catch(_) {
-    prompt('Copie o link manualmente:', link);
+    // Fallback: clipboard API indisponível (HTTP, browser antigo) → mostra modal
+    openModal('Copie o link manualmente', `
+      <div style="font-size:13px;color:var(--text-2);margin-bottom:10px">
+        Selecione e copie o link abaixo:
+      </div>
+      <input class="form-input" id="copy-link-input" readonly value="${escapeHtml(link)}"
+        style="font-family:var(--mono);font-size:11.5px;width:100%"
+        onclick="this.select()">`,
+      `<button class="btn btn-gold" onclick="closeModal()">OK</button>`);
+    setTimeout(() => {
+      const inp = document.getElementById('copy-link-input');
+      if (inp) inp.select();
+    }, 100);
   }
 }
 
 async function revogarConvite(token) {
-  if (!confirm('Revogar este convite? O link deixará de funcionar.')) return;
+  if (!await confirmarAcao('Revogar convite?', 'O link deixará de funcionar imediatamente.', { tipo:'amber', labelOk:'Revogar' })) return;
   try {
     await supaRpc('fin_revogar_convite', { p_token: token });
     toast('Convite revogado.', 'success');

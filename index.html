@@ -1230,6 +1230,9 @@ async function carregarDados() {
   // Impostos carregado separado (tabela pode não existir)
   try { IMPOSTOS = await _supaFetchTudo('fin_impostos', { tenant_id: `eq.${tid}`, select: '*', order: 'vencimento.desc' }); } catch(_) { IMPOSTOS = []; }
   try { ANEXOS = await _supaFetchTudo('fin_anexos', { tenant_id: `eq.${tid}`, select: '*', order: 'criado_em.desc' }); } catch(_) { ANEXOS = []; }
+  // v31: carrega regras de auto-categorização configuráveis (cache em _REGRAS_CATEG).
+  // Falha silenciosa: se a tabela não existir ainda, _detectarCategoriaAuto cai no fallback hardcoded.
+  try { await carregarRegrasCategorizacao(); } catch(_) { _REGRAS_CATEG = null; }
 }
 
 function mostrarApp() {
@@ -4993,7 +4996,222 @@ function renderConfiguracoes() {
     </div>
   </div>
 
+  <!-- v31: Regras de auto-categorização configuráveis -->
+  <div class="card" id="card-regras-categ">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-size:20px">🏷️</span>
+        <div>
+          <strong style="font-size:14px;color:var(--text);display:block">Regras de auto-categorização</strong>
+          <div style="font-size:11.5px;color:var(--text-3)">Aplicadas em importações e novos lançamentos</div>
+        </div>
+      </div>
+      ${(isAdmin() || podeEditar('configuracoes')) ? `
+        <button class="btn btn-gold btn-sm" onclick="modalRegraCateg()">+ Nova regra</button>
+      ` : ''}
+    </div>
+    <div id="regras-categ-lista" style="font-size:12px;color:var(--text-3)">Carregando...</div>
+  </div>
+
   </div>`;
+  // v31: popula a lista de regras após o innerHTML estar montado
+  _renderListaRegrasCateg();
+}
+
+// ── v31: REGRAS DE AUTO-CATEGORIZAÇÃO (UI) ───────────────────
+async function _renderListaRegrasCateg() {
+  const el = $id('regras-categ-lista');
+  if (!el) return;
+  // Lê direto do banco (não usa _REGRAS_CATEG porque queremos ver inativas também)
+  let regras = [];
+  try {
+    regras = await supa('GET', 'fin_regras_categorizacao', {
+      params: {
+        tenant_id: `eq.${APP.tenantId}`,
+        select:    'id,nome,tipo,padroes,prioridade,ativo,is_default,atualizado_em',
+        order:     'prioridade.asc,nome.asc'
+      }
+    }) || [];
+  } catch(e) {
+    el.innerHTML = `<div style="padding:10px;color:var(--red);font-size:12px">
+      Não foi possível carregar as regras. ${e.message||''}<br>
+      <span style="color:var(--text-3);font-size:11px">Verifique se a migration v31 foi aplicada no Supabase.</span>
+    </div>`;
+    return;
+  }
+  if (!regras.length) {
+    el.innerHTML = `<div style="padding:14px;background:var(--surface-2);border-radius:9px;text-align:center;color:var(--text-3);font-size:12px">
+      Nenhuma regra cadastrada ainda. Use "Nova regra" para criar a primeira.
+    </div>`;
+    return;
+  }
+  const podeEditarConfig = isAdmin() || podeEditar('configuracoes');
+  const podeExcluirConfig = isAdmin() || podeExcluir('configuracoes');
+  const tipoBadge = (t) => {
+    const cores = {
+      receita:  'background:rgba(82,184,130,.14);color:var(--green)',
+      despesa:  'background:rgba(192,57,43,.12);color:var(--red)',
+      ambos:    'background:var(--gold-lt);color:var(--gold-dim)',
+    };
+    return `<span class="badge" style="${cores[t]||cores.ambos}">${t}</span>`;
+  };
+  el.innerHTML = `
+    <div style="font-size:11px;color:var(--text-3);margin-bottom:10px;line-height:1.6">
+      Regras avaliadas em ordem de prioridade (menor = primeiro). Padrões usam expressões regulares (regex).
+      Regras marcadas com <span style="color:var(--gold)">★</span> são padrão do sistema — você pode editar ou desativar.
+    </div>
+    <div style="display:flex;flex-direction:column;gap:8px">
+      ${regras.map(r => {
+        const padroesPrev = (Array.isArray(r.padroes) ? r.padroes : []).slice(0,3).join(' · ');
+        const extra = (Array.isArray(r.padroes) && r.padroes.length > 3) ? ` (+${r.padroes.length-3})` : '';
+        return `
+        <div style="border:1px solid var(--border);border-radius:9px;padding:10px 12px;background:${r.ativo?'var(--bg-2)':'var(--surface-2)'};opacity:${r.ativo?'1':'.6'}">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;flex-wrap:wrap">
+            <strong style="font-size:13px;color:var(--text)">${r.is_default?'<span style="color:var(--gold)">★ </span>':''}${escapeHtml(r.nome)}</strong>
+            ${tipoBadge(r.tipo)}
+            <span style="font-size:11px;color:var(--text-3)">prioridade ${r.prioridade}</span>
+            ${!r.ativo ? '<span class="badge" style="background:var(--surface-2);color:var(--text-3)">inativa</span>' : ''}
+            <div style="margin-left:auto;display:flex;gap:6px">
+              ${podeEditarConfig ? `
+                <button onclick="toggleRegraCategAtiva('${r.id}', ${!r.ativo})" class="btn btn-sm" style="padding:3px 9px;font-size:10.5px;background:var(--surface-2);color:var(--text-2);border:1px solid var(--border)">${r.ativo?'Desativar':'Ativar'}</button>
+                <button onclick="modalRegraCateg('${r.id}')" class="btn btn-sm" style="padding:3px 9px;font-size:10.5px;background:var(--surface-2);color:var(--text-2);border:1px solid var(--border)">Editar</button>
+              `: ''}
+              ${podeExcluirConfig ? `
+                <button onclick="excluirRegraCateg('${r.id}')" class="btn btn-sm" style="padding:3px 9px;font-size:10.5px;background:var(--red-lt);color:var(--red);border:1px solid rgba(192,57,43,.2)">Excluir</button>
+              ` : ''}
+            </div>
+          </div>
+          <div style="font-family:var(--mono);font-size:11px;color:var(--text-2);background:var(--bg);padding:6px 8px;border-radius:5px;border:1px solid var(--border);overflow-x:auto;white-space:nowrap">
+            ${escapeHtml(padroesPrev)}${extra}
+          </div>
+        </div>`;
+      }).join('')}
+    </div>
+  `;
+}
+
+// Util pra escapar HTML em campos vindos do DB
+function escapeHtml(s) {
+  return String(s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// Modal de criar/editar regra. Se id passado, busca no banco e preenche; senão cria nova.
+async function modalRegraCateg(id) {
+  if (!isAdmin() && !podeEditar('configuracoes')) {
+    toast('Você não tem permissão para gerenciar regras.', 'error');
+    return;
+  }
+  let r = { nome:'', tipo:'despesa', padroes:[], prioridade:100, ativo:true };
+  if (id) {
+    try {
+      const rows = await supa('GET', 'fin_regras_categorizacao', {
+        params: { id: `eq.${id}`, select: '*', limit: 1 }
+      });
+      if (rows && rows[0]) r = rows[0];
+    } catch(e) { toast('Erro ao carregar: ' + e.message, 'error'); return; }
+  }
+  const padroesText = (Array.isArray(r.padroes) ? r.padroes : []).join('\n');
+  openModal(id ? 'Editar regra' : 'Nova regra', `
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div class="form-field">
+        <label class="form-label">Nome da categoria *</label>
+        <input class="form-input" id="rc-nome" placeholder="Ex: Tarifas Bancárias" value="${escapeHtml(r.nome)}">
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div class="form-field">
+          <label class="form-label">Tipo *</label>
+          <select class="form-input" id="rc-tipo">
+            <option value="despesa" ${r.tipo==='despesa'?'selected':''}>Despesa</option>
+            <option value="receita" ${r.tipo==='receita'?'selected':''}>Receita</option>
+            <option value="ambos"   ${r.tipo==='ambos'?'selected':''}>Ambos</option>
+          </select>
+        </div>
+        <div class="form-field">
+          <label class="form-label">Prioridade</label>
+          <input class="form-input" id="rc-prio" type="number" min="1" max="9999" value="${r.prioridade||100}">
+        </div>
+      </div>
+      <div class="form-field">
+        <label class="form-label">Padrões (regex, um por linha) *</label>
+        <textarea class="form-input" id="rc-padroes" rows="6" style="font-family:var(--mono);font-size:12px"
+          placeholder="\\bTARIFA\\b&#10;\\bIOF\\b&#10;\\bMANUTEN[CÇ][AÃ]O\\b">${escapeHtml(padroesText)}</textarea>
+        <div style="font-size:11px;color:var(--text-3);margin-top:6px;line-height:1.5">
+          Cada linha é uma expressão regular (case-insensitive). Use <code>\\b</code> para limites de palavra.
+          Exemplos: <code>\\bIOF\\b</code> casa "IOF" mas não "IOFE"; <code>TARIFA.*BANC</code> casa "TARIFA BANCÁRIA".
+        </div>
+      </div>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+        <input type="checkbox" id="rc-ativo" ${r.ativo?'checked':''} style="width:16px;height:16px;accent-color:var(--gold)">
+        <span>Regra ativa</span>
+      </label>
+      <div id="rc-erro" style="display:none;color:var(--red);font-size:12px;background:var(--red-lt);padding:8px 10px;border-radius:6px"></div>
+    </div>
+  `, `
+    <button class="btn" onclick="closeModal()">Cancelar</button>
+    <button class="btn btn-gold" onclick="salvarRegraCateg('${id||''}')">Salvar</button>
+  `);
+}
+
+async function salvarRegraCateg(id) {
+  const nome = ($id('rc-nome').value||'').trim();
+  const tipo = $id('rc-tipo').value;
+  const prio = parseInt($id('rc-prio').value, 10) || 100;
+  const ativo = !!$id('rc-ativo').checked;
+  const padroesRaw = ($id('rc-padroes').value||'').split('\n')
+    .map(s => s.trim()).filter(Boolean);
+  const erro = (msg) => {
+    const e = $id('rc-erro'); if (!e) return;
+    e.style.display = 'block'; e.textContent = msg;
+  };
+  if (!nome) return erro('Nome é obrigatório.');
+  if (!padroesRaw.length) return erro('Adicione pelo menos um padrão.');
+  // Valida cada regex
+  for (const p of padroesRaw) {
+    try { new RegExp(p, 'i'); }
+    catch(e) { return erro(`Regex inválida: "${p}" → ${e.message}`); }
+  }
+  const body = {
+    tenant_id: APP.tenantId,
+    nome, tipo,
+    padroes: padroesRaw, // jsonb array
+    prioridade: prio,
+    ativo,
+  };
+  try {
+    if (id) {
+      await supa('PATCH', 'fin_regras_categorizacao', {
+        params: { id: `eq.${id}` }, body
+      });
+    } else {
+      await supa('POST', 'fin_regras_categorizacao', { body, returning: false });
+    }
+    closeModal();
+    toast(id ? 'Regra atualizada!' : 'Regra criada!', 'success');
+    // Recarrega cache em memória pra próximas detecções
+    await carregarRegrasCategorizacao();
+    _renderListaRegrasCateg();
+  } catch(e) { erro('Erro ao salvar: ' + e.message); }
+}
+
+async function toggleRegraCategAtiva(id, ativo) {
+  try {
+    await supa('PATCH', 'fin_regras_categorizacao', {
+      params: { id: `eq.${id}` }, body: { ativo }
+    });
+    toast(ativo ? 'Regra ativada' : 'Regra desativada', 'success');
+    await carregarRegrasCategorizacao();
+    _renderListaRegrasCateg();
+  } catch(e) { toast('Erro: ' + e.message, 'error'); }
+}
+
+async function excluirRegraCateg(id) {
+  if (!confirm('Excluir esta regra? A ação não pode ser desfeita.')) return;
+  try {
+    await supa('DELETE', 'fin_regras_categorizacao', { params: { id: `eq.${id}` } });
+    toast('Regra excluída', 'success');
+    await carregarRegrasCategorizacao();
+    _renderListaRegrasCateg();
+  } catch(e) { toast('Erro: ' + e.message, 'error'); }
 }
 
 function salvarApiKey() {
@@ -9992,6 +10210,10 @@ async function _cnpjExisteComoTenant(cnpj) {
 
 // Detecta se uma descrição de lançamento é de tarifa bancária ou movimentação
 // interna do banco. Retorna o nome da categoria ou null se não identificar.
+//
+// v31: regras agora vivem em fin_regras_categorizacao (configurável por tenant).
+// Mantemos _CATEGORIAS_AUTO como SEED de fallback caso a tabela ainda não exista
+// ou o cache _REGRAS_CATEG ainda não tenha sido carregado.
 const _CATEGORIAS_AUTO = [
   // Tarifas/encargos (despesa)
   { nome: 'Tarifas Bancárias',  tipo: 'despesa', padroes: [
@@ -10017,9 +10239,52 @@ const _CATEGORIAS_AUTO = [
   ]},
 ];
 
+// Cache em memória das regras carregadas do banco. Estrutura compatível com
+// _CATEGORIAS_AUTO: { nome, tipo, padroes:[RegExp...], _id, _ativo, _prioridade }
+let _REGRAS_CATEG = null;
+
+// Compila uma string de regex (vinda do banco como texto JSON) em RegExp.
+// Aceita formato bruto "\bTARIFA\b" ou já com flags inline. Retorna null se inválido.
+function _compilarPadrao(p) {
+  if (typeof p !== 'string' || !p.length) return null;
+  try { return new RegExp(p, 'i'); } catch(_) { return null; }
+}
+
+// Carrega regras de categorização do tenant atual. Idempotente.
+// Em caso de falha (RLS, rede, tabela ausente), faz fallback pro hardcoded.
+async function carregarRegrasCategorizacao() {
+  if (!APP.tenantId) { _REGRAS_CATEG = null; return; }
+  try {
+    const rows = await supa('GET', 'fin_regras_categorizacao', {
+      params: {
+        tenant_id: `eq.${APP.tenantId}`,
+        ativo:     'eq.true',
+        select:    'id,nome,tipo,padroes,prioridade,is_default',
+        order:     'prioridade.asc,nome.asc'
+      }
+    }) || [];
+    _REGRAS_CATEG = rows.map(r => ({
+      _id:         r.id,
+      _ativo:      true,
+      _prioridade: r.prioridade,
+      _is_default: !!r.is_default,
+      nome:        r.nome,
+      tipo:        r.tipo,
+      padroes:     (Array.isArray(r.padroes) ? r.padroes : [])
+                     .map(_compilarPadrao).filter(Boolean),
+    }));
+  } catch(e) {
+    console.warn('carregarRegrasCategorizacao (fallback):', e.message);
+    _REGRAS_CATEG = null; // sinaliza fallback
+  }
+}
+
 function _detectarCategoriaAuto(descricao, tipo) {
   const d = String(descricao || '');
-  for (const cat of _CATEGORIAS_AUTO) {
+  // Usa cache do banco se disponível; senão fallback pro hardcoded.
+  const fonte = (Array.isArray(_REGRAS_CATEG) && _REGRAS_CATEG.length)
+    ? _REGRAS_CATEG : _CATEGORIAS_AUTO;
+  for (const cat of fonte) {
     if (cat.tipo !== 'ambos' && cat.tipo !== tipo) continue;
     for (const re of cat.padroes) if (re.test(d)) return cat;
   }

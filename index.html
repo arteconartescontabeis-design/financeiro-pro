@@ -4377,7 +4377,11 @@ function renderPlanos() {
     return;
   }
 
-  $id('topbar-actions').innerHTML = '';
+  $id('topbar-actions').innerHTML = (isAdmin() || APP.ehSuperadmin) ? `
+    <button class="btn btn-outline btn-sm" onclick="modalPlanosGerenciar()" title="Migrar de outra empresa ou limpar tudo">
+      ⚙️ Migrar / Limpar
+    </button>
+  ` : '';
   $id('page-content').innerHTML = `
     <nav class="planos-tabs" role="tablist">
       <button class="planos-tab active" data-tab="financeiro" onclick="planosShowTab('financeiro')">💰 Plano Financeiro</button>
@@ -4747,6 +4751,465 @@ async function planoExcluirConta(tipo, id) {
     renderPlanoArvore(tipo);
   } catch(e) { toast('Erro: ' + e.message, 'error'); }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v31: GERENCIAR PLANOS — Migrar entre empresas / Limpar plano completo
+// Apenas admin do tenant ou superadmin podem executar.
+// Toda operação registra em fin_auditoria como op_critica = true.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Modal raiz com 2 ações: Migrar e Limpar
+async function modalPlanosGerenciar() {
+  if (!isAdmin() && !APP.ehSuperadmin) {
+    toast('Apenas administradores podem usar esta funcionalidade.', 'error'); return;
+  }
+  // Lista empresas que o usuário tem acesso (excluindo a atual)
+  const empresasOutras = (APP.empresas || []).filter(e => e.tenant_id !== APP.tenantId);
+  // Para superadmin, busca TODAS as empresas (pode migrar entre quaisquer)
+  let opcoesOrigem = empresasOutras.map(e => ({ id: e.tenant_id, nome: e.nome }));
+  if (APP.ehSuperadmin) {
+    try {
+      const todas = await supa('GET', 'fin_tenants', {
+        params: { select: 'id,nome', order: 'nome.asc' }
+      }) || [];
+      opcoesOrigem = todas.filter(t => t.id !== APP.tenantId).map(t => ({ id: t.id, nome: t.nome }));
+    } catch(_) { /* fallback nas empresas vinculadas */ }
+  }
+
+  openModal('Gerenciar Plano de Contas', `
+    <div style="display:flex;flex-direction:column;gap:14px">
+
+      <div style="background:rgba(26,82,118,.04);border:1px solid rgba(26,82,118,.18);border-radius:10px;padding:13px 16px;font-size:12px;color:var(--text-2);line-height:1.6">
+        <strong style="color:var(--gold)">Empresa atual:</strong> ${escapeHtml(APP.tenant?.nome || '—')}<br>
+        Toda operação aqui é registrada em auditoria e pode levar alguns segundos para grandes volumes.
+      </div>
+
+      <!-- ─── Migrar de outra empresa ─── -->
+      <div class="card" style="padding:14px;border:1px solid var(--border)">
+        <strong style="font-size:13px;color:var(--text);display:block;margin-bottom:10px">📥 Migrar de outra empresa</strong>
+        ${opcoesOrigem.length === 0 ? `
+          <div style="font-size:12px;color:var(--text-3);padding:8px 0">
+            ${APP.ehSuperadmin ? 'Não há outras empresas no sistema para migrar.' : 'Você precisa ter acesso a outra empresa para migrar dela. Peça ao superadmin para vincular você a uma empresa-modelo.'}
+          </div>
+        ` : `
+          <div class="form-field" style="margin-bottom:10px">
+            <label class="form-label">Empresa de origem *</label>
+            <select class="form-input" id="pg-origem">
+              <option value="">— selecione —</option>
+              ${opcoesOrigem.map(e => `<option value="${e.id}">${escapeHtml(e.nome)}</option>`).join('')}
+            </select>
+          </div>
+          <div style="font-size:11px;color:var(--text-3);margin:4px 0 8px">O que migrar:</div>
+          <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px">
+            <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+              <input type="checkbox" id="pg-mig-fin" checked style="width:16px;height:16px;accent-color:var(--gold)">
+              <span>Plano Financeiro</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+              <input type="checkbox" id="pg-mig-cont" checked style="width:16px;height:16px;accent-color:var(--gold)">
+              <span>Plano Contábil</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+              <input type="checkbox" id="pg-mig-dep" style="width:16px;height:16px;accent-color:var(--gold)">
+              <span>Vínculos De-Para <span style="color:var(--text-3);font-size:11px">(requer ambos os planos selecionados)</span></span>
+            </label>
+          </div>
+          <div class="form-field" style="margin-bottom:12px">
+            <label class="form-label">Comportamento se já existir conta com mesmo código</label>
+            <select class="form-input" id="pg-modo">
+              <option value="mesclar" selected>Mesclar — adicionar só o que falta</option>
+              <option value="substituir">Substituir — apagar o atual e copiar tudo</option>
+            </select>
+          </div>
+          <button class="btn btn-outline btn-sm" onclick="planosPrevisualizarMigracao()" style="margin-right:8px">
+            🔍 Pré-visualizar
+          </button>
+          <span id="pg-mig-status" style="font-size:11.5px;color:var(--text-3)"></span>
+          <div id="pg-mig-preview" style="margin-top:10px;display:none"></div>
+        `}
+      </div>
+
+      <!-- ─── Limpar plano completo ─── -->
+      <div class="card" style="padding:14px;border:1px solid rgba(192,57,43,.25);background:rgba(192,57,43,.02)">
+        <strong style="font-size:13px;color:var(--red);display:block;margin-bottom:10px">🗑️ Excluir plano de contas (zona de perigo)</strong>
+        <div style="font-size:11.5px;color:var(--text-3);margin-bottom:10px;line-height:1.6">
+          Remove DEFINITIVAMENTE as contas marcadas. Lançamentos existentes que apontam pra contas removidas ficarão com o vínculo nulo (não são apagados).
+        </div>
+        <div style="font-size:11px;color:var(--text-3);margin:4px 0 8px">O que excluir:</div>
+        <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px">
+          <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+            <input type="checkbox" id="pg-del-fin" style="width:16px;height:16px;accent-color:var(--red)">
+            <span>Plano Financeiro</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+            <input type="checkbox" id="pg-del-cont" style="width:16px;height:16px;accent-color:var(--red)">
+            <span>Plano Contábil</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+            <input type="checkbox" id="pg-del-dep" style="width:16px;height:16px;accent-color:var(--red)">
+            <span>Vínculos De-Para</span>
+          </label>
+        </div>
+        <button class="btn btn-sm" onclick="planosConfirmarExclusao()" style="background:var(--red);color:#fff">
+          Excluir selecionados
+        </button>
+      </div>
+
+    </div>
+  `, `<button class="btn" onclick="closeModal()">Fechar</button>`);
+}
+
+// Carrega contas e vínculos de outro tenant. Usa o mesmo padrão de paginação.
+async function _planosFetchTenant(tenantId) {
+  async function fetchTudo(tabela, paramsBase) {
+    const PAGE = 1000;
+    let offset = 0, acc = [];
+    while (true) {
+      const params = { ...paramsBase, limit: String(PAGE), offset: String(offset) };
+      const chunk = await supa('GET', tabela, { params });
+      if (!chunk || chunk.length === 0) break;
+      acc = acc.concat(chunk);
+      if (chunk.length < PAGE) break;
+      offset += PAGE;
+      if (offset > 50000) break;
+    }
+    return acc;
+  }
+  const [fin, cont, dep] = await Promise.all([
+    fetchTudo('fin_plano_financeiro', { tenant_id: 'eq.' + tenantId, ativo: 'eq.true', select: '*', order: 'ordem.asc' }),
+    fetchTudo('fin_plano_contabil',   { tenant_id: 'eq.' + tenantId, ativo: 'eq.true', select: '*', order: 'ordem.asc' }),
+    fetchTudo('fin_plano_depara',     { tenant_id: 'eq.' + tenantId, select: '*' }),
+  ]);
+  return { financeiro: fin || [], contabil: cont || [], depara: dep || [] };
+}
+
+// Pré-visualização: conta quantas contas serão copiadas / sobrepostas / ignoradas
+async function planosPrevisualizarMigracao() {
+  const origemId = $id('pg-origem')?.value;
+  if (!origemId) { toast('Selecione a empresa de origem.', 'error'); return; }
+  const migFin  = !!$id('pg-mig-fin')?.checked;
+  const migCont = !!$id('pg-mig-cont')?.checked;
+  const migDep  = !!$id('pg-mig-dep')?.checked;
+  if (!migFin && !migCont && !migDep) { toast('Selecione ao menos um item.', 'error'); return; }
+  if (migDep && (!migFin || !migCont)) {
+    toast('Para migrar De-Para, marque também Financeiro e Contábil.', 'error'); return;
+  }
+  const status = $id('pg-mig-status'); status.textContent = 'Carregando...';
+  const preview = $id('pg-mig-preview');
+  try {
+    const origem = await _planosFetchTenant(origemId);
+    // PLANOS_STATE.financeiro/contabil já tem o atual carregado
+    const atualFin  = new Set(PLANOS_STATE.financeiro.contas.map(c => c.codigo));
+    const atualCont = new Set(PLANOS_STATE.contabil.contas.map(c => c.codigo));
+    const stats = {
+      fin:  { total: origem.financeiro.length, novos: 0, conflito: 0 },
+      cont: { total: origem.contabil.length,   novos: 0, conflito: 0 },
+      dep:  { total: origem.depara.length },
+    };
+    origem.financeiro.forEach(c => atualFin.has(c.codigo)  ? stats.fin.conflito++  : stats.fin.novos++);
+    origem.contabil.forEach(c   => atualCont.has(c.codigo) ? stats.cont.conflito++ : stats.cont.novos++);
+
+    const linha = (label, s) => `
+      <div style="display:flex;justify-content:space-between;padding:6px 10px;border-bottom:1px solid var(--border);font-size:12px">
+        <span style="color:var(--text-2)">${label}</span>
+        <span><strong style="color:var(--green)">+${s.novos||0} novos</strong>${s.conflito ? ` · <span style="color:var(--amber)">${s.conflito} conflito${s.conflito>1?'s':''}</span>` : ''} <span style="color:var(--text-3)">de ${s.total} na origem</span></span>
+      </div>`;
+    preview.style.display = 'block';
+    preview.innerHTML = `
+      <div style="background:var(--bg-2);border:1px solid var(--border);border-radius:9px;overflow:hidden">
+        ${migFin  ? linha('Financeiro', stats.fin)  : ''}
+        ${migCont ? linha('Contábil',   stats.cont) : ''}
+        ${migDep  ? `<div style="display:flex;justify-content:space-between;padding:6px 10px;font-size:12px"><span style="color:var(--text-2)">De-Para</span><span style="color:var(--text-3)">${stats.dep.total} vínculos na origem</span></div>` : ''}
+      </div>
+      <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
+        <button class="btn btn-gold btn-sm" onclick="planosExecutarMigracao('${origemId}')">Confirmar e migrar</button>
+        <span style="font-size:11px;color:var(--text-3)">Pode demorar alguns segundos.</span>
+      </div>
+    `;
+    status.textContent = '';
+  } catch(e) {
+    status.textContent = '';
+    toast('Erro ao carregar origem: ' + e.message, 'error');
+  }
+}
+
+// Executa migração de fato. Faz mapeamento código→novo_id pra ajustar
+// conta_pai_id (a hierarquia interna) e fin_plano_depara (referências cruzadas).
+async function planosExecutarMigracao(origemId) {
+  const migFin  = !!$id('pg-mig-fin')?.checked;
+  const migCont = !!$id('pg-mig-cont')?.checked;
+  const migDep  = !!$id('pg-mig-dep')?.checked;
+  const modo    = $id('pg-modo')?.value || 'mesclar';
+  const status  = $id('pg-mig-status');
+  status.textContent = 'Migrando... ';
+  try {
+    const origem = await _planosFetchTenant(origemId);
+
+    // ── 1) Modo "substituir": apaga atual antes de copiar ────────────
+    if (modo === 'substituir') {
+      if (migDep) {
+        await supa('DELETE', 'fin_plano_depara',   { params: { tenant_id: `eq.${APP.tenantId}` } });
+      }
+      if (migFin) {
+        // Precisa apagar de-para primeiro pra liberar FKs (mesmo que migDep=false, FK pode existir)
+        if (!migDep) await supa('DELETE', 'fin_plano_depara', { params: { tenant_id: `eq.${APP.tenantId}` } });
+        await supa('DELETE', 'fin_plano_financeiro', { params: { tenant_id: `eq.${APP.tenantId}` } });
+      }
+      if (migCont) {
+        if (!migDep && !migFin) await supa('DELETE', 'fin_plano_depara', { params: { tenant_id: `eq.${APP.tenantId}` } });
+        await supa('DELETE', 'fin_plano_contabil', { params: { tenant_id: `eq.${APP.tenantId}` } });
+      }
+    }
+
+    // ── 2) Recarrega estado atual (após possíveis deletes) ───────────
+    const atualFin  = (modo === 'substituir' && migFin)  ? [] : PLANOS_STATE.financeiro.contas.slice();
+    const atualCont = (modo === 'substituir' && migCont) ? [] : PLANOS_STATE.contabil.contas.slice();
+    const idxFinPorCod  = new Map(atualFin.map(c => [c.codigo, c.id]));
+    const idxContPorCod = new Map(atualCont.map(c => [c.codigo, c.id]));
+
+    // ── 3) Migra Financeiro ─────────────────────────────────────────
+    // Bulk insert por nível: contas do mesmo nível não dependem entre si,
+    // apenas de níveis menores já presentes em idxFinPorCod. Ordena ASC,
+    // batches de 200 por POST. ~70x mais rápido que inserts sequenciais.
+    let inseridosFin = 0, ignoradosFin = 0;
+    const mapFinOrigemParaDestino = new Map(); // origem.id → destino.id (pra usar em depara)
+    if (migFin) {
+      const origemIdPorCod = new Map(origem.financeiro.map(c => [c.id, c.codigo]));
+      // Agrupa por nível
+      const porNivel = new Map();
+      for (const c of origem.financeiro) {
+        if (!porNivel.has(c.nivel)) porNivel.set(c.nivel, []);
+        porNivel.get(c.nivel).push(c);
+      }
+      const niveis = [...porNivel.keys()].sort((a,b) => a - b);
+      for (const nivel of niveis) {
+        const lote = porNivel.get(nivel);
+        const aInserir = [];
+        const refsOrigem = []; // mantém referência à conta original na mesma posição
+        for (const c of lote) {
+          if (idxFinPorCod.has(c.codigo)) {
+            mapFinOrigemParaDestino.set(c.id, idxFinPorCod.get(c.codigo));
+            ignoradosFin++;
+            continue;
+          }
+          const codigoPai = c.conta_pai_id ? origemIdPorCod.get(c.conta_pai_id) : null;
+          const novoPaiId = codigoPai ? idxFinPorCod.get(codigoPai) : null;
+          aInserir.push({
+            tenant_id: APP.tenantId,
+            codigo: c.codigo, descricao: c.descricao,
+            nivel: c.nivel, ordem: c.ordem,
+            conta_pai_id: novoPaiId,
+            tipo: c.tipo, grupo: c.grupo,
+            ativo: true,
+          });
+          refsOrigem.push(c);
+        }
+        // Envia em batches de 200 (Postgres aceita array no body)
+        const BATCH = 200;
+        for (let i = 0; i < aInserir.length; i += BATCH) {
+          const slice  = aInserir.slice(i, i + BATCH);
+          const refs   = refsOrigem.slice(i, i + BATCH);
+          const r = await supa('POST', 'fin_plano_financeiro', { returning: true, body: slice });
+          if (Array.isArray(r)) {
+            // O backend pode reordenar — casa por código (único por tenant)
+            const porCodNovo = new Map(r.map(x => [x.codigo, x.id]));
+            refs.forEach(orig => {
+              const novoId = porCodNovo.get(orig.codigo);
+              if (novoId) {
+                idxFinPorCod.set(orig.codigo, novoId);
+                mapFinOrigemParaDestino.set(orig.id, novoId);
+                inseridosFin++;
+              }
+            });
+          }
+          status.textContent = `Migrando financeiro... ${inseridosFin}`;
+        }
+      }
+    }
+
+    // ── 4) Migra Contábil (mesmo padrão por nível) ───────────────────
+    let inseridosCont = 0, ignoradosCont = 0;
+    const mapContOrigemParaDestino = new Map();
+    if (migCont) {
+      const origemIdPorCod = new Map(origem.contabil.map(c => [c.id, c.codigo]));
+      const porNivel = new Map();
+      for (const c of origem.contabil) {
+        if (!porNivel.has(c.nivel)) porNivel.set(c.nivel, []);
+        porNivel.get(c.nivel).push(c);
+      }
+      const niveis = [...porNivel.keys()].sort((a,b) => a - b);
+      for (const nivel of niveis) {
+        const lote = porNivel.get(nivel);
+        const aInserir = [];
+        const refsOrigem = [];
+        for (const c of lote) {
+          if (idxContPorCod.has(c.codigo)) {
+            mapContOrigemParaDestino.set(c.id, idxContPorCod.get(c.codigo));
+            ignoradosCont++;
+            continue;
+          }
+          const codigoPai = c.conta_pai_id ? origemIdPorCod.get(c.conta_pai_id) : null;
+          const novoPaiId = codigoPai ? idxContPorCod.get(codigoPai) : null;
+          aInserir.push({
+            tenant_id: APP.tenantId,
+            codigo: c.codigo, descricao: c.descricao,
+            nivel: c.nivel, ordem: c.ordem,
+            conta_pai_id: novoPaiId,
+            sintetica: c.sintetica, apelido: c.apelido,
+            natureza: c.natureza, entra_balanco: c.entra_balanco,
+            ativo: true,
+          });
+          refsOrigem.push(c);
+        }
+        const BATCH = 200;
+        for (let i = 0; i < aInserir.length; i += BATCH) {
+          const slice  = aInserir.slice(i, i + BATCH);
+          const refs   = refsOrigem.slice(i, i + BATCH);
+          const r = await supa('POST', 'fin_plano_contabil', { returning: true, body: slice });
+          if (Array.isArray(r)) {
+            const porCodNovo = new Map(r.map(x => [x.codigo, x.id]));
+            refs.forEach(orig => {
+              const novoId = porCodNovo.get(orig.codigo);
+              if (novoId) {
+                idxContPorCod.set(orig.codigo, novoId);
+                mapContOrigemParaDestino.set(orig.id, novoId);
+                inseridosCont++;
+              }
+            });
+          }
+          status.textContent = `Migrando contábil... ${inseridosCont}`;
+        }
+      }
+    }
+
+    // ── 5) Migra De-Para (bulk de 200) ───────────────────────────────
+    let inseridosDep = 0, ignoradosDep = 0;
+    if (migDep) {
+      const ensureFinMap = mapFinOrigemParaDestino.size ? mapFinOrigemParaDestino
+        : new Map(origem.financeiro
+            .filter(c => idxFinPorCod.has(c.codigo))
+            .map(c => [c.id, idxFinPorCod.get(c.codigo)]));
+      const ensureContMap = mapContOrigemParaDestino.size ? mapContOrigemParaDestino
+        : new Map(origem.contabil
+            .filter(c => idxContPorCod.has(c.codigo))
+            .map(c => [c.id, idxContPorCod.get(c.codigo)]));
+      const atuais = new Set(PLANOS_STATE.depara.vinculos.map(v => `${v.conta_financeira_id}|${v.conta_contabil_id}`));
+      const aInserirDep = [];
+      for (const v of origem.depara) {
+        const novoFin  = ensureFinMap.get(v.conta_financeira_id);
+        const novoCont = ensureContMap.get(v.conta_contabil_id);
+        if (!novoFin || !novoCont) { ignoradosDep++; continue; }
+        const k = `${novoFin}|${novoCont}`;
+        if (atuais.has(k)) { ignoradosDep++; continue; }
+        atuais.add(k); // evita duplicatas dentro do próprio batch também
+        aInserirDep.push({ tenant_id: APP.tenantId, conta_financeira_id: novoFin, conta_contabil_id: novoCont });
+      }
+      const BATCH = 200;
+      for (let i = 0; i < aInserirDep.length; i += BATCH) {
+        const slice = aInserirDep.slice(i, i + BATCH);
+        try {
+          await supa('POST', 'fin_plano_depara', { returning: false, body: slice });
+          inseridosDep += slice.length;
+        } catch(_) { ignoradosDep += slice.length; }
+        status.textContent = `Migrando de-para... ${inseridosDep}`;
+      }
+    }
+
+    // ── 6) Auditoria ─────────────────────────────────────────────────
+    try {
+      await supaRpc('fin_registrar_autorizacao', {
+        p_tabela: 'fin_plano_*',
+        p_acao: 'MIGRAR_PLANO',
+        p_motivo: `Migração de ${origemId} → atual. Modo: ${modo}. Fin: ${inseridosFin}+/${ignoradosFin}=. Cont: ${inseridosCont}+/${ignoradosCont}=. Dep: ${inseridosDep}+/${ignoradosDep}=.`
+      });
+    } catch(_) { /* auditoria opcional */ }
+
+    closeModal();
+    toast(`Migração concluída! Fin: +${inseridosFin}, Cont: +${inseridosCont}, Dep: +${inseridosDep}`, 'success');
+    // Recarrega tela
+    PLANOS_STATE.carregado = false;
+    await planosCarregarDados();
+    planosShowTab(PLANOS_STATE.tabAtual);
+  } catch(e) {
+    status.textContent = '';
+    toast('Erro na migração: ' + e.message, 'error');
+  }
+}
+
+// Confirmação digitada antes de excluir (segurança)
+async function planosConfirmarExclusao() {
+  const delFin  = !!$id('pg-del-fin')?.checked;
+  const delCont = !!$id('pg-del-cont')?.checked;
+  const delDep  = !!$id('pg-del-dep')?.checked;
+  if (!delFin && !delCont && !delDep) { toast('Selecione ao menos um item.', 'error'); return; }
+
+  const totFin  = PLANOS_STATE.financeiro.contas.length;
+  const totCont = PLANOS_STATE.contabil.contas.length;
+  const totDep  = PLANOS_STATE.depara.vinculos.length;
+  const itens = [];
+  if (delFin)  itens.push(`Plano Financeiro (${totFin} conta${totFin!==1?'s':''})`);
+  if (delCont) itens.push(`Plano Contábil (${totCont} conta${totCont!==1?'s':''})`);
+  if (delDep)  itens.push(`De-Para (${totDep} vínculo${totDep!==1?'s':''})`);
+
+  // Modal de confirmação dobrada
+  openModal('Confirmar exclusão', `
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div style="background:rgba(192,57,43,.06);border:1px solid rgba(192,57,43,.25);border-radius:10px;padding:13px 16px;font-size:12.5px;color:var(--text-2);line-height:1.7">
+        <strong style="color:var(--red);font-size:13px">⚠️ Você está prestes a excluir:</strong>
+        <ul style="margin:8px 0 0 18px;padding:0">
+          ${itens.map(i => `<li>${i}</li>`).join('')}
+        </ul>
+        <div style="margin-top:10px;font-size:11.5px;color:var(--text-3)">
+          Esta ação <strong>não pode ser desfeita</strong>. Lançamentos que apontam pra contas removidas terão a referência limpa.
+        </div>
+      </div>
+      <div class="form-field">
+        <label class="form-label">Para confirmar, digite <code style="background:var(--surface-2);padding:2px 6px;border-radius:4px">EXCLUIR</code> abaixo *</label>
+        <input class="form-input" id="pg-del-confirm" autocomplete="off" placeholder="EXCLUIR">
+      </div>
+    </div>
+  `, `
+    <button class="btn" onclick="modalPlanosGerenciar()">Voltar</button>
+    <button class="btn btn-sm" onclick="planosExecutarExclusao(${delFin}, ${delCont}, ${delDep})" style="background:var(--red);color:#fff">Excluir definitivamente</button>
+  `);
+}
+
+async function planosExecutarExclusao(delFin, delCont, delDep) {
+  const txt = ($id('pg-del-confirm')?.value || '').trim();
+  if (txt !== 'EXCLUIR') { toast('Digite "EXCLUIR" exatamente para confirmar.', 'error'); return; }
+  const tid = APP.tenantId;
+  try {
+    // De-Para precisa ir primeiro pra liberar FKs (caso existam)
+    if (delDep || delFin || delCont) {
+      // Mesmo se delDep=false, se vamos apagar plano fin/cont, é necessário limpar de-para antes
+      await supa('DELETE', 'fin_plano_depara', { params: { tenant_id: `eq.${tid}` } });
+    }
+    if (delFin) {
+      await supa('DELETE', 'fin_plano_financeiro', { params: { tenant_id: `eq.${tid}` } });
+    }
+    if (delCont) {
+      await supa('DELETE', 'fin_plano_contabil', { params: { tenant_id: `eq.${tid}` } });
+    }
+
+    // Auditoria
+    try {
+      await supaRpc('fin_registrar_autorizacao', {
+        p_tabela: 'fin_plano_*',
+        p_acao: 'EXCLUIR_PLANO_COMPLETO',
+        p_motivo: `Exclusão completa. Fin:${delFin?'sim':'não'} Cont:${delCont?'sim':'não'} Dep:${delDep||delFin||delCont?'sim':'não'}`
+      });
+    } catch(_) {}
+
+    closeModal();
+    toast('Plano(s) excluído(s) com sucesso.', 'success');
+    PLANOS_STATE.carregado = false;
+    await planosCarregarDados();
+    planosShowTab(PLANOS_STATE.tabAtual);
+  } catch(e) {
+    toast('Erro: ' + e.message, 'error');
+  }
+}
+
 
 // ── DE-PARA ──────────────────────────────────────────────────────
 function renderDePara() {

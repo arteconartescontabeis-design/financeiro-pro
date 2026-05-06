@@ -1160,6 +1160,75 @@ function pedirJustificativa(titulo, opts = {}) {
   });
 }
 
+// ── v34 · Modal para informar data de recebimento/pagamento ──────
+// Usado em baixarReceita/baixarDespesa quando a data efetiva difere do
+// vencimento. Pré-preenche com today() e permite escolher uma conta.
+// Retorna { data, conta_id } ou null se cancelado.
+function perguntarDataBaixa(opts = {}) {
+  return new Promise((resolve) => {
+    const titulo     = opts.titulo     || 'Confirmar baixa';
+    const descricao  = opts.descricao  || '';
+    const valor      = opts.valor      || 0;
+    const vencimento = opts.vencimento || '';
+    const labelData  = opts.label      || 'Data efetiva';
+    const cor        = opts.cor === 'red' ? 'var(--red)' : 'var(--green)';
+    const corLt      = opts.cor === 'red' ? 'var(--red-lt)' : 'var(--green-lt)';
+    const contaIdAtu = opts.contaId    || '';
+
+    const optionsContas = (CONTAS||[]).map(c =>
+      `<option value="${c.id}" ${contaIdAtu===c.id?'selected':''}>${escapeHtml(c.nome)}</option>`
+    ).join('');
+
+    openModal(titulo, `
+      <div style="display:flex;flex-direction:column;gap:14px">
+        <div style="background:${corLt};border:1px solid rgba(0,0,0,.06);border-radius:10px;padding:12px 14px">
+          <div style="font-size:11px;color:var(--text-3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Lançamento</div>
+          <div style="font-size:13.5px;font-weight:600;color:var(--text);line-height:1.4">${escapeHtml(descricao)}</div>
+          <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:8px">
+            <div style="font-size:11px;color:var(--text-3)">Vencimento: <strong style="color:var(--text-2);font-family:var(--mono)">${fmtData(vencimento)}</strong></div>
+            <div style="font-size:15px;font-weight:700;font-family:var(--mono);color:${cor}">${fmtMoeda(valor)}</div>
+          </div>
+        </div>
+        <div class="form-field">
+          <label class="form-label">${escapeHtml(labelData)} *</label>
+          <input class="form-input" type="date" id="pdb-data" value="${today()}">
+          <div style="font-size:11px;color:var(--text-3);margin-top:4px">Informe a data em que o valor de fato entrou/saiu (pode ser diferente do vencimento).</div>
+        </div>
+        <div class="form-field">
+          <label class="form-label">Conta</label>
+          <select class="form-select" id="pdb-conta">
+            <option value="">— Não movimentar conta —</option>
+            ${optionsContas}
+          </select>
+          <div style="font-size:11px;color:var(--text-3);margin-top:4px">A conta selecionada terá o saldo atualizado.</div>
+        </div>
+      </div>`,
+      `<button class="btn btn-outline" id="pdb-cancel">Cancelar</button>
+       <button class="btn" id="pdb-ok" style="background:${cor};color:#fff;border:none">Confirmar baixa</button>`);
+
+    let resolvido = false;
+    const finalizar = (val) => {
+      if (resolvido) return;
+      resolvido = true;
+      closeModal();
+      resolve(val);
+    };
+
+    const btnC  = document.getElementById('pdb-cancel');
+    const btnOk = document.getElementById('pdb-ok');
+    const inpD  = document.getElementById('pdb-data');
+    const selC  = document.getElementById('pdb-conta');
+
+    if (btnC)  btnC.onclick  = () => finalizar(null);
+    if (btnOk) btnOk.onclick = () => {
+      const data = inpD?.value;
+      if (!data) { toast('Informe a data.', 'error'); return; }
+      finalizar({ data, conta_id: selC?.value || null });
+    };
+    if (inpD) { inpD.focus(); inpD.select(); }
+  });
+}
+
 // ── AUTH ──────────────────────────────────────────────────────
 // (Cadastro de novos usuários agora é feito via aba Usuários ou link de convite)
 
@@ -2459,11 +2528,16 @@ function renderReceber() {
         : pagList.map(r => {
             const vencHoje = r.vencimento === hoje;
             const vencAtras = r.status==='pendente' && r.vencimento < hoje;
+            // ── v34 · Indica data de recebimento se diferente do venc. ──
+            const recebDif = r.status==='recebido' && r.recebido_em && r.recebido_em !== r.vencimento;
             return `<tr style="${vencAtras?'background:rgba(224,92,92,.04)':''}">
               <td style="font-weight:500;color:var(--text);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.descricao}</td>
               <td style="color:var(--text-2)">${getNome(CLIENTES, r.cliente_id)}</td>
               <td style="color:var(--text-3)">${getNome(CATEGORIAS, r.categoria_id)}</td>
-              <td style="font-family:var(--mono);font-size:12px;color:${vencAtras?'var(--red)':vencHoje?'var(--amber)':'var(--text-2)'};font-weight:${vencAtras||vencHoje?700:400}">${fmtData(r.vencimento)}${vencHoje?' · hoje':''}</td>
+              <td style="font-family:var(--mono);font-size:12px;color:${vencAtras?'var(--red)':vencHoje?'var(--amber)':'var(--text-2)'};font-weight:${vencAtras||vencHoje?700:400}">
+                ${fmtData(r.vencimento)}${vencHoje?' · hoje':''}
+                ${recebDif?`<div style="font-size:10px;color:var(--green);font-weight:500;margin-top:2px">↳ recebido ${fmtData(r.recebido_em)}</div>`:''}
+              </td>
               <td style="font-family:var(--mono);font-weight:700;color:var(--green)">${fmtMoeda(r.valor)}</td>
               <td>${badgeStatus(r.status)}</td>
               <td style="white-space:nowrap">
@@ -2534,17 +2608,50 @@ async function salvarReceita() {
 async function baixarReceita(id, e) {
   e.stopPropagation();
   const r = RECEITAS.find(x => x.id === id); if (!r) return;
+
+  // ── v34 · Modal pergunta a data efetiva do recebimento ────────
+  // Pré-preenche com a data de hoje, mas o usuário pode informar
+  // qualquer data (ex: receita venceu dia 10, mas só caiu na conta dia 13).
+  const dataEfetiva = await perguntarDataBaixa({
+    titulo:    'Baixar Receita',
+    descricao: r.descricao,
+    valor:     r.valor,
+    vencimento: r.vencimento,
+    contaId:   r.conta_id,
+    label:     'Data do recebimento',
+    cor:       'green',
+  });
+  if (!dataEfetiva) return; // usuário cancelou
+
+  const dataReceb = dataEfetiva.data;
+  const contaId   = dataEfetiva.conta_id || r.conta_id || null;
+
   try {
-    const atualizada = await supa('PATCH', 'fin_receitas', { params: { id: `eq.${id}` }, returning: true, body: { status: 'recebido', recebido_em: today() } });
-    if (r.conta_id) {
-      await supa('POST', 'fin_movimentacoes', { body: { tenant_id: APP.tenantId, conta_id: r.conta_id, tipo: 'entrada', valor: r.valor, data: today(), descricao: r.descricao, receita_id: id } });
+    const atualizada = await supa('PATCH', 'fin_receitas', { params: { id: `eq.${id}` }, returning: true, body: { status: 'recebido', recebido_em: dataReceb, conta_id: contaId } });
+    if (contaId) {
+      await supa('POST', 'fin_movimentacoes', { body: { tenant_id: APP.tenantId, conta_id: contaId, tipo: 'entrada', valor: r.valor, data: dataReceb, descricao: r.descricao, receita_id: id } });
     }
     toast('Receita baixada!', 'success');
     // ── Performance · Fase B ──
     // Receita: atualização local. Conta: precisa recarregar pq saldo
     // é calculado server-side via trigger/view (não dá pra recalcular aqui).
     if (Array.isArray(atualizada) && atualizada[0]) atualizarLocal(RECEITAS, atualizada[0]);
-    if (r.conta_id) await recarregarApenas('fin_contas');
+    if (contaId) {
+      // ── v34 · Fallback de saldo ───────────────────────────────
+      // Se o trigger do banco não atualizar o saldo_atual, somamos
+      // localmente para não exibir saldo zerado/desatualizado.
+      const saldoAntes = (CONTAS.find(c=>c.id===contaId)||{}).saldo_atual;
+      await recarregarApenas('fin_contas');
+      const cAfter = CONTAS.find(c=>c.id===contaId);
+      if (cAfter && parseFloat(cAfter.saldo_atual) === parseFloat(saldoAntes)) {
+        // trigger não disparou — força recálculo client-side e persiste
+        const novoSaldo = (parseFloat(cAfter.saldo_atual)||0) + (parseFloat(r.valor)||0);
+        try {
+          const atualizadaConta = await supa('PATCH', 'fin_contas', { params: { id: `eq.${contaId}` }, returning: true, body: { saldo_atual: novoSaldo } });
+          if (Array.isArray(atualizadaConta) && atualizadaConta[0]) atualizarLocal(CONTAS, atualizadaConta[0]);
+        } catch(_) { cAfter.saldo_atual = novoSaldo; }
+      }
+    }
     rerenderTelaAtual();
   } catch(e) { toast('Erro: ' + e.message, 'error'); }
 }
@@ -2562,6 +2669,7 @@ function editarReceita(id, e) {
         <option value="recebido"  ${r.status==='recebido'?'selected':''}>Recebido</option>
         <option value="cancelado" ${r.status==='cancelado'?'selected':''}>Cancelado</option>
       </select></div>
+      <div class="form-field full"><label class="form-label">Data de recebimento <span style="color:var(--text-3);font-weight:400">(se diferente do vencimento)</span></label><input class="form-input" type="date" id="er-receb" value="${r.recebido_em||''}"></div>
       <div class="form-field"><label class="form-label">Cliente</label><select class="form-select" id="er-cli">
         <option value="">— Nenhum —</option>
         ${CLIENTES.map(c=>`<option value="${c.id}" ${r.cliente_id===c.id?'selected':''}>${c.nome}</option>`).join('')}
@@ -2588,9 +2696,19 @@ async function salvarEdicaoReceita(id) {
   const venc  = $id('er-venc').value;
   if (!desc || !valor || !venc) { toast('Preencha os campos obrigatórios.', 'error'); return; }
   try {
+    // ── v34 · Persiste data de recebimento (se status='recebido') ──
+    const status   = $id('er-status').value;
+    const recebInp = $id('er-receb')?.value || null;
+    // Regra: se status='recebido' e usuário não informou data de recebimento,
+    // usa o vencimento como default. Se status mudou de 'recebido' para outro,
+    // limpa a data.
+    const recebido_em = status === 'recebido'
+      ? (recebInp || venc)
+      : null;
     const atualizada = await supa('PATCH', 'fin_receitas', { params: { id: `eq.${id}` }, returning: true, body: {
       descricao:    desc, valor, vencimento: venc,
-      status:       $id('er-status').value,
+      status,
+      recebido_em,
       cliente_id:   $id('er-cli').value   || null,
       categoria_id: $id('er-cat').value   || null,
       conta_id:     $id('er-conta').value || null,
@@ -2690,11 +2808,16 @@ function renderPagar() {
         : pagList.map(d => {
             const vencHoje  = d.vencimento === hoje;
             const vencAtras = d.status==='pendente' && d.vencimento < hoje;
+            // ── v34 · Indica data de pagamento se diferente do venc. ──
+            const pagoDif = d.status==='pago' && d.pago_em && d.pago_em !== d.vencimento;
             return `<tr style="${vencAtras?'background:rgba(224,92,92,.04)':''}">
               <td style="font-weight:500;color:var(--text);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d.descricao}</td>
               <td style="color:var(--text-2)">${getNome(FORNECEDORES, d.fornecedor_id)}</td>
               <td style="color:var(--text-3)">${getNome(CATEGORIAS, d.categoria_id)}</td>
-              <td style="font-family:var(--mono);font-size:12px;color:${vencAtras?'var(--red)':vencHoje?'var(--amber)':'var(--text-2)'};font-weight:${vencAtras||vencHoje?700:400}">${fmtData(d.vencimento)}${vencHoje?' · hoje':''}</td>
+              <td style="font-family:var(--mono);font-size:12px;color:${vencAtras?'var(--red)':vencHoje?'var(--amber)':'var(--text-2)'};font-weight:${vencAtras||vencHoje?700:400}">
+                ${fmtData(d.vencimento)}${vencHoje?' · hoje':''}
+                ${pagoDif?`<div style="font-size:10px;color:var(--red);font-weight:500;margin-top:2px">↳ pago ${fmtData(d.pago_em)}</div>`:''}
+              </td>
               <td style="font-family:var(--mono);font-weight:700;color:var(--red)">${fmtMoeda(d.valor)}</td>
               <td>${badgeStatus(d.status)}</td>
               <td style="white-space:nowrap">
@@ -2763,15 +2886,43 @@ async function salvarDespesa() {
 async function baixarDespesa(id, e) {
   e.stopPropagation();
   const d = DESPESAS.find(x => x.id === id); if (!d) return;
+
+  // ── v34 · Modal pergunta a data efetiva do pagamento ──────────
+  const dataEfetiva = await perguntarDataBaixa({
+    titulo:    'Baixar Despesa',
+    descricao: d.descricao,
+    valor:     d.valor,
+    vencimento: d.vencimento,
+    contaId:   d.conta_id,
+    label:     'Data do pagamento',
+    cor:       'red',
+  });
+  if (!dataEfetiva) return;
+
+  const dataPago = dataEfetiva.data;
+  const contaId  = dataEfetiva.conta_id || d.conta_id || null;
+
   try {
-    const atualizada = await supa('PATCH', 'fin_despesas', { params: { id: `eq.${id}` }, returning: true, body: { status: 'pago', pago_em: today() } });
-    if (d.conta_id) {
-      await supa('POST', 'fin_movimentacoes', { body: { tenant_id: APP.tenantId, conta_id: d.conta_id, tipo: 'saida', valor: d.valor, data: today(), descricao: d.descricao, despesa_id: id } });
+    const atualizada = await supa('PATCH', 'fin_despesas', { params: { id: `eq.${id}` }, returning: true, body: { status: 'pago', pago_em: dataPago, conta_id: contaId } });
+    if (contaId) {
+      await supa('POST', 'fin_movimentacoes', { body: { tenant_id: APP.tenantId, conta_id: contaId, tipo: 'saida', valor: d.valor, data: dataPago, descricao: d.descricao, despesa_id: id } });
     }
     toast('Despesa baixada!', 'success');
     // ── Performance · Fase B ──
     if (Array.isArray(atualizada) && atualizada[0]) atualizarLocal(DESPESAS, atualizada[0]);
-    if (d.conta_id) await recarregarApenas('fin_contas');
+    if (contaId) {
+      // ── v34 · Fallback de saldo ───────────────────────────────
+      const saldoAntes = (CONTAS.find(c=>c.id===contaId)||{}).saldo_atual;
+      await recarregarApenas('fin_contas');
+      const cAfter = CONTAS.find(c=>c.id===contaId);
+      if (cAfter && parseFloat(cAfter.saldo_atual) === parseFloat(saldoAntes)) {
+        const novoSaldo = (parseFloat(cAfter.saldo_atual)||0) - (parseFloat(d.valor)||0);
+        try {
+          const atualizadaConta = await supa('PATCH', 'fin_contas', { params: { id: `eq.${contaId}` }, returning: true, body: { saldo_atual: novoSaldo } });
+          if (Array.isArray(atualizadaConta) && atualizadaConta[0]) atualizarLocal(CONTAS, atualizadaConta[0]);
+        } catch(_) { cAfter.saldo_atual = novoSaldo; }
+      }
+    }
     rerenderTelaAtual();
   } catch(e) { toast('Erro: ' + e.message, 'error'); }
 }
@@ -2789,6 +2940,7 @@ function editarDespesa(id, e) {
         <option value="pago"      ${d.status==='pago'?'selected':''}>Pago</option>
         <option value="cancelado" ${d.status==='cancelado'?'selected':''}>Cancelado</option>
       </select></div>
+      <div class="form-field full"><label class="form-label">Data de pagamento <span style="color:var(--text-3);font-weight:400">(se diferente do vencimento)</span></label><input class="form-input" type="date" id="ed-pago" value="${d.pago_em||''}"></div>
       <div class="form-field"><label class="form-label">Fornecedor</label><select class="form-select" id="ed-for">
         <option value="">— Nenhum —</option>
         ${FORNECEDORES.map(f=>`<option value="${f.id}" ${d.fornecedor_id===f.id?'selected':''}>${f.nome}</option>`).join('')}
@@ -2815,9 +2967,16 @@ async function salvarEdicaoDespesa(id) {
   const venc  = $id('ed-venc').value;
   if (!desc || !valor || !venc) { toast('Preencha os campos obrigatórios.', 'error'); return; }
   try {
+    // ── v34 · Persiste data de pagamento (se status='pago') ──────
+    const status  = $id('ed-status').value;
+    const pagoInp = $id('ed-pago')?.value || null;
+    const pago_em = status === 'pago'
+      ? (pagoInp || venc)
+      : null;
     const atualizada = await supa('PATCH', 'fin_despesas', { params: { id: `eq.${id}` }, returning: true, body: {
       descricao:     desc, valor, vencimento: venc,
-      status:        $id('ed-status').value,
+      status,
+      pago_em,
       fornecedor_id: $id('ed-for').value   || null,
       categoria_id:  $id('ed-cat').value   || null,
       conta_id:      $id('ed-conta').value || null,
@@ -10115,6 +10274,147 @@ function gerarPdfExtrato() {
   abrirPDF(`Extrato · ${mes.slice(5,7)}/${mes.slice(0,4)}`, html);
 }
 
+// ── v34 · PDF: CLIENTES A RECEBER ─────────────────────────────
+// Agrupa receitas em aberto (pendente/vencido) por cliente e gera
+// um relatório de cobrança com totais a vencer e vencidos.
+//   modo='todos'    → todas as pendentes
+//   modo='vencidos' → só as já vencidas
+function gerarPdfClientesReceber(modo) {
+  modo = modo || 'todos';
+  const hoje = today();
+
+  // Filtra receitas em aberto
+  let abertas = (RECEITAS||[]).filter(r => r.status === 'pendente' || r.status === 'vencido');
+  if (modo === 'vencidos') abertas = abertas.filter(r => r.vencimento < hoje);
+  if (abertas.length === 0) {
+    toast(modo==='vencidos' ? 'Sem títulos vencidos.' : 'Sem títulos em aberto.', 'info');
+    return;
+  }
+
+  // Agrupa por cliente_id (null vira "Sem cliente")
+  const grupos = {};
+  abertas.forEach(r => {
+    const k = r.cliente_id || '__SEM__';
+    if (!grupos[k]) {
+      const c = (CLIENTES||[]).find(x => x.id === r.cliente_id) || {};
+      grupos[k] = {
+        nome:      c.nome      || 'Sem cliente',
+        documento: c.documento || c.cpf_cnpj || '',
+        telefone:  c.telefone  || c.fone     || '',
+        email:     c.email     || '',
+        itens:     [],
+      };
+    }
+    grupos[k].itens.push(r);
+  });
+
+  // Calcula totais e ordena
+  const lista = Object.values(grupos).map(g => {
+    g.itens.sort((a,b) => (a.vencimento||'').localeCompare(b.vencimento||''));
+    g.totalAberto = g.itens.reduce((s,r)=>s+(parseFloat(r.valor)||0),0);
+    g.totalVencido = g.itens.filter(r=>r.vencimento<hoje).reduce((s,r)=>s+(parseFloat(r.valor)||0),0);
+    g.totalAVencer = g.totalAberto - g.totalVencido;
+    g.qtdVencida   = g.itens.filter(r=>r.vencimento<hoje).length;
+    return g;
+  }).sort((a,b) => b.totalAberto - a.totalAberto);
+
+  // Totais gerais
+  const totalGeralAberto  = lista.reduce((s,g)=>s+g.totalAberto, 0);
+  const totalGeralVencido = lista.reduce((s,g)=>s+g.totalVencido, 0);
+  const totalGeralAVencer = totalGeralAberto - totalGeralVencido;
+  const qtdTitulos = abertas.length;
+  const qtdClientes = lista.length;
+
+  // Função: dias em atraso
+  const diasAtraso = (venc) => {
+    if (!venc || venc >= hoje) return 0;
+    const d1 = new Date(venc + 'T12:00:00');
+    const d2 = new Date(hoje + 'T12:00:00');
+    return Math.round((d2 - d1) / 86400000);
+  };
+
+  const subtitulo = modo === 'vencidos' ? 'Apenas títulos vencidos' : 'Todos os títulos em aberto';
+
+  const html = `
+    ${pdfHeader('Clientes a Receber', subtitulo)}
+    <div class="rpt-title">Posição de Recebíveis por Cliente</div>
+    <div class="rpt-period">Posição em ${fmtData(hoje)}</div>
+
+    <div class="kpi-row" style="grid-template-columns:1fr 1fr 1fr 1fr">
+      <div class="kpi-cell"><div class="lbl">Total em aberto</div><div class="val" style="color:#16804a">${fmtMoeda(totalGeralAberto)}</div><div class="sub">${qtdTitulos} título(s)</div></div>
+      <div class="kpi-cell"><div class="lbl">A vencer</div><div class="val" style="color:#1a5276">${fmtMoeda(totalGeralAVencer)}</div></div>
+      <div class="kpi-cell"><div class="lbl">Vencidos</div><div class="val" style="color:#c0392b">${fmtMoeda(totalGeralVencido)}</div></div>
+      <div class="kpi-cell"><div class="lbl">Clientes</div><div class="val">${qtdClientes}</div></div>
+    </div>
+
+    <div class="section-title">Resumo por Cliente</div>
+    <table>
+      <thead><tr>
+        <th>Cliente</th>
+        <th style="text-align:center">Títulos</th>
+        <th style="text-align:right">A vencer</th>
+        <th style="text-align:right">Vencido</th>
+        <th style="text-align:right">Total em aberto</th>
+      </tr></thead>
+      <tbody>
+        ${lista.map(g => `<tr>
+          <td style="font-weight:600">${escapeHtml(g.nome)}${g.documento?`<div style="font-size:9px;color:#888;font-weight:400">${escapeHtml(g.documento)}</div>`:''}</td>
+          <td style="text-align:center;font-family:'DM Mono'">${g.itens.length}${g.qtdVencida>0?` <span style="color:#c0392b">(${g.qtdVencida}v)</span>`:''}</td>
+          <td style="text-align:right;font-family:'DM Mono';color:#1a5276">${fmtMoeda(g.totalAVencer)}</td>
+          <td style="text-align:right;font-family:'DM Mono';color:${g.totalVencido>0?'#c0392b':'#aaa'};font-weight:${g.totalVencido>0?700:400}">${fmtMoeda(g.totalVencido)}</td>
+          <td style="text-align:right;font-family:'DM Mono';font-weight:700;color:#16804a">${fmtMoeda(g.totalAberto)}</td>
+        </tr>`).join('')}
+        <tr class="total-row highlight-green">
+          <td>Totais</td>
+          <td style="text-align:center;font-family:'DM Mono'">${qtdTitulos}</td>
+          <td style="text-align:right;font-family:'DM Mono'">${fmtMoeda(totalGeralAVencer)}</td>
+          <td style="text-align:right;font-family:'DM Mono';color:#c0392b">${fmtMoeda(totalGeralVencido)}</td>
+          <td style="text-align:right;font-family:'DM Mono'">${fmtMoeda(totalGeralAberto)}</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="section-title">Detalhamento</div>
+    ${lista.map(g => `
+      <div style="margin:18px 0 6px 0;padding:8px 12px;background:#f4f6f9;border-left:3px solid #1a5276">
+        <div style="font-size:11.5px;font-weight:700;color:#1a2332">${escapeHtml(g.nome)}</div>
+        ${g.documento || g.telefone || g.email ? `<div style="font-size:9px;color:#666;margin-top:2px">
+          ${g.documento?`Doc: ${escapeHtml(g.documento)}`:''}${g.documento && (g.telefone||g.email)?' · ':''}
+          ${g.telefone?`Tel: ${escapeHtml(g.telefone)}`:''}${g.telefone && g.email?' · ':''}
+          ${g.email?escapeHtml(g.email):''}
+        </div>`:''}
+      </div>
+      <table>
+        <thead><tr>
+          <th>Descrição</th>
+          <th style="text-align:right">Vencimento</th>
+          <th style="text-align:center">Atraso</th>
+          <th style="text-align:right">Valor</th>
+          <th>Categoria</th>
+        </tr></thead>
+        <tbody>
+          ${g.itens.map(r => {
+            const atraso = diasAtraso(r.vencimento);
+            return `<tr>
+              <td style="font-weight:500">${escapeHtml(r.descricao||'')}</td>
+              <td style="text-align:right;font-family:'DM Mono';font-size:10px;color:${atraso>0?'#c0392b':'#1a2332'};font-weight:${atraso>0?700:400}">${fmtData(r.vencimento)}</td>
+              <td style="text-align:center;font-size:9.5px;color:${atraso>0?'#c0392b':'#aaa'};font-weight:${atraso>0?700:400}">${atraso>0?atraso+' dia(s)':'—'}</td>
+              <td style="text-align:right;font-family:'DM Mono';font-weight:700;color:${atraso>0?'#c0392b':'#16804a'}">${fmtMoeda(r.valor)}</td>
+              <td style="font-size:9.5px;color:#888">${escapeHtml(getNome(CATEGORIAS, r.categoria_id))}</td>
+            </tr>`;
+          }).join('')}
+          <tr class="total-row">
+            <td colspan="3">Total ${escapeHtml(g.nome)}</td>
+            <td style="text-align:right;font-family:'DM Mono';font-weight:700">${fmtMoeda(g.totalAberto)}</td>
+            <td></td>
+          </tr>
+        </tbody>
+      </table>
+    `).join('')}`;
+
+  abrirPDF(`Clientes a Receber · ${fmtData(hoje)}`, html);
+}
+
 // ── PÁGINA: RELATÓRIOS ────────────────────────────────────────
 function renderRelatorios() {
   $id('topbar-actions').innerHTML = '';
@@ -10198,6 +10498,24 @@ function renderRelatorios() {
         </div>
         <div style="display:flex;gap:6px">
           <button class="btn btn-sm btn-gold" onclick="gerarPdfMetas()">Gerar PDF</button>
+        </div>
+      </div>
+
+      <!-- v34 · Clientes a Receber -->
+      <div class="card" style="display:flex;flex-direction:column;gap:14px">
+        <div style="display:flex;align-items:center;gap:12px">
+          <div style="width:42px;height:42px;background:var(--green-lt);border-radius:11px;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0">👥</div>
+          <div>
+            <div style="font-size:14px;font-weight:700;color:var(--text)">Clientes a Receber</div>
+            <div style="font-size:11px;color:var(--text-3)">Posição de títulos em aberto por cliente</div>
+          </div>
+        </div>
+        <div style="font-size:12px;color:var(--text-2);line-height:1.6">
+          Receitas pendentes agrupadas por cliente, com totais de vencidos e a vencer. Útil para cobrança e conciliação.
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button class="btn btn-sm btn-gold" onclick="gerarPdfClientesReceber('todos')">Todos</button>
+          <button class="btn btn-sm" style="background:var(--surface-2);color:var(--text-2);border:1px solid var(--border-lt)" onclick="gerarPdfClientesReceber('vencidos')">Só vencidos</button>
         </div>
       </div>
 

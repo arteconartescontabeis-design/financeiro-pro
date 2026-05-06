@@ -767,6 +767,10 @@ tbody td { padding: 11px 16px; font-size: 13px; }
         Dashboard
       </button>
       <div class="nav-section">Financeiro</div>
+      <button class="nav-item" onclick="go('lancamentos')" data-page="lancamentos">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z"/></svg>
+        Lançamentos
+      </button>
       <button class="nav-item" onclick="go('receber')" data-page="receber">
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 4H4c-1.11 0-2 .89-2 2v12c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V6c0-1.11-.89-2-2-2zm0 14H4v-6h16v6zm0-10H4V6h16v2z"/></svg>
         A Receber
@@ -1160,20 +1164,22 @@ function pedirJustificativa(titulo, opts = {}) {
   });
 }
 
-// ── v34 · Modal para informar data de recebimento/pagamento ──────
+// ── v34/v35 · Modal para informar data de recebimento/pagamento ──
 // Usado em baixarReceita/baixarDespesa quando a data efetiva difere do
 // vencimento. Pré-preenche com today() e permite escolher uma conta.
-// Retorna { data, conta_id } ou null se cancelado.
+// v35: adiciona campos opcionais para Juros, Multa e Desconto.
+// Retorna { data, conta_id, juros, multa, desconto, valor_efetivo } ou null se cancelado.
 function perguntarDataBaixa(opts = {}) {
   return new Promise((resolve) => {
     const titulo     = opts.titulo     || 'Confirmar baixa';
     const descricao  = opts.descricao  || '';
-    const valor      = opts.valor      || 0;
+    const valor      = parseFloat(opts.valor) || 0;
     const vencimento = opts.vencimento || '';
     const labelData  = opts.label      || 'Data efetiva';
     const cor        = opts.cor === 'red' ? 'var(--red)' : 'var(--green)';
     const corLt      = opts.cor === 'red' ? 'var(--red-lt)' : 'var(--green-lt)';
     const contaIdAtu = opts.contaId    || '';
+    const labelExtra = opts.cor === 'red' ? 'pagamento' : 'recebimento';
 
     const optionsContas = (CONTAS||[]).map(c =>
       `<option value="${c.id}" ${contaIdAtu===c.id?'selected':''}>${escapeHtml(c.nome)}</option>`
@@ -1182,34 +1188,91 @@ function perguntarDataBaixa(opts = {}) {
     openModal(titulo, `
       <div style="display:flex;flex-direction:column;gap:14px">
         <div style="background:${corLt};border:1px solid rgba(0,0,0,.06);border-radius:10px;padding:12px 14px">
-          <div style="font-size:11px;color:var(--text-3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Lançamento</div>
+          <div style="font-size:11px;color:var(--text-3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Lançamento original</div>
           <div style="font-size:13.5px;font-weight:600;color:var(--text);line-height:1.4">${escapeHtml(descricao)}</div>
           <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:8px">
             <div style="font-size:11px;color:var(--text-3)">Vencimento: <strong style="color:var(--text-2);font-family:var(--mono)">${fmtData(vencimento)}</strong></div>
             <div style="font-size:15px;font-weight:700;font-family:var(--mono);color:${cor}">${fmtMoeda(valor)}</div>
           </div>
         </div>
-        <div class="form-field">
-          <label class="form-label">${escapeHtml(labelData)} *</label>
-          <input class="form-input" type="date" id="pdb-data" value="${today()}">
-          <div style="font-size:11px;color:var(--text-3);margin-top:4px">Informe a data em que o valor de fato entrou/saiu (pode ser diferente do vencimento).</div>
+
+        <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:10px">
+          <div class="form-field">
+            <label class="form-label">${escapeHtml(labelData)} *</label>
+            <input class="form-input" type="date" id="pdb-data" value="${today()}">
+          </div>
+          <div class="form-field">
+            <label class="form-label">Conta</label>
+            <select class="form-select" id="pdb-conta">
+              <option value="">— Não movimentar conta —</option>
+              ${optionsContas}
+            </select>
+          </div>
         </div>
-        <div class="form-field">
-          <label class="form-label">Conta</label>
-          <select class="form-select" id="pdb-conta">
-            <option value="">— Não movimentar conta —</option>
-            ${optionsContas}
-          </select>
-          <div style="font-size:11px;color:var(--text-3);margin-top:4px">A conta selecionada terá o saldo atualizado.</div>
+
+        <!-- v35 · Juros / Multa / Desconto ─────────────────────── -->
+        <details id="pdb-extras" style="background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:10px 12px">
+          <summary style="cursor:pointer;font-size:12px;color:var(--text-2);font-weight:600;user-select:none">
+            💸 Juros / Multa / Desconto
+            <span style="font-weight:400;color:var(--text-3);font-size:11px">— clique para expandir</span>
+          </summary>
+          <div class="form-grid" style="grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:10px">
+            <div class="form-field">
+              <label class="form-label" style="font-size:11px">Juros (R$)</label>
+              <input class="form-input" type="number" id="pdb-juros" step="0.01" min="0" placeholder="0,00" oninput="atualizarTotalBaixa(${valor})">
+            </div>
+            <div class="form-field">
+              <label class="form-label" style="font-size:11px">Multa (R$)</label>
+              <input class="form-input" type="number" id="pdb-multa" step="0.01" min="0" placeholder="0,00" oninput="atualizarTotalBaixa(${valor})">
+            </div>
+            <div class="form-field">
+              <label class="form-label" style="font-size:11px">Desconto (R$)</label>
+              <input class="form-input" type="number" id="pdb-desc" step="0.01" min="0" placeholder="0,00" oninput="atualizarTotalBaixa(${valor})">
+            </div>
+          </div>
+          <div id="pdb-resumo" style="margin-top:10px;padding:8px 10px;background:var(--bg);border-radius:6px;font-size:11.5px;color:var(--text-2);line-height:1.6;display:none">
+            <!-- preenchido dinamicamente -->
+          </div>
+          <div style="font-size:10.5px;color:var(--text-3);margin-top:8px;line-height:1.5">
+            Os valores informados criam lançamentos automáticos na categoria "Juros e Multas",
+            mantendo o lançamento original com seu valor de face.
+          </div>
+        </details>
+
+        <div style="font-size:11px;color:var(--text-3);line-height:1.5;padding:0 2px">
+          Informe a data em que o valor de fato entrou/saiu (pode diferir do vencimento). A conta selecionada terá o saldo atualizado automaticamente.
         </div>
       </div>`,
       `<button class="btn btn-outline" id="pdb-cancel">Cancelar</button>
        <button class="btn" id="pdb-ok" style="background:${cor};color:#fff;border:none">Confirmar baixa</button>`);
 
+    // Helper global temporário para o oninput dos campos
+    window.atualizarTotalBaixa = function(valorBase) {
+      const j = parseFloat(document.getElementById('pdb-juros')?.value) || 0;
+      const m = parseFloat(document.getElementById('pdb-multa')?.value) || 0;
+      const d = parseFloat(document.getElementById('pdb-desc')?.value)  || 0;
+      const totalEfetivo = valorBase + j + m - d;
+      const resumo = document.getElementById('pdb-resumo');
+      if (!resumo) return;
+      if (j === 0 && m === 0 && d === 0) {
+        resumo.style.display = 'none';
+        return;
+      }
+      resumo.style.display = 'block';
+      const corVal = totalEfetivo >= valorBase ? '#16804a' : '#c0392b';
+      resumo.innerHTML = `
+        <div style="display:flex;justify-content:space-between"><span>Valor original</span><span style="font-family:var(--mono)">${fmtMoeda(valorBase)}</span></div>
+        ${j>0?`<div style="display:flex;justify-content:space-between;color:#b7770d"><span>+ Juros</span><span style="font-family:var(--mono)">${fmtMoeda(j)}</span></div>`:''}
+        ${m>0?`<div style="display:flex;justify-content:space-between;color:#b7770d"><span>+ Multa</span><span style="font-family:var(--mono)">${fmtMoeda(m)}</span></div>`:''}
+        ${d>0?`<div style="display:flex;justify-content:space-between;color:#16804a"><span>− Desconto</span><span style="font-family:var(--mono)">${fmtMoeda(d)}</span></div>`:''}
+        <div style="display:flex;justify-content:space-between;border-top:1px solid var(--border-lt);margin-top:5px;padding-top:5px;font-weight:700"><span>Total efetivo ${labelExtra}</span><span style="font-family:var(--mono);color:${corVal}">${fmtMoeda(totalEfetivo)}</span></div>`;
+    };
+
     let resolvido = false;
     const finalizar = (val) => {
       if (resolvido) return;
       resolvido = true;
+      try { delete window.atualizarTotalBaixa; } catch(_) {}
       closeModal();
       resolve(val);
     };
@@ -1223,7 +1286,13 @@ function perguntarDataBaixa(opts = {}) {
     if (btnOk) btnOk.onclick = () => {
       const data = inpD?.value;
       if (!data) { toast('Informe a data.', 'error'); return; }
-      finalizar({ data, conta_id: selC?.value || null });
+      finalizar({
+        data,
+        conta_id: selC?.value || null,
+        juros:    parseFloat(document.getElementById('pdb-juros')?.value) || 0,
+        multa:    parseFloat(document.getElementById('pdb-multa')?.value) || 0,
+        desconto: parseFloat(document.getElementById('pdb-desc')?.value)  || 0,
+      });
     };
     if (inpD) { inpD.focus(); inpD.select(); }
   });
@@ -1594,6 +1663,7 @@ async function finalizarOnboarding() {
 // ── NAVEGAÇÃO ─────────────────────────────────────────────────
 const PAGES = {
   dashboard:    { title: 'Dashboard',       render: renderDashboard },
+  lancamentos:  { title: 'Lançamentos',     render: renderLancamentos },
   receber:      { title: 'A Receber',       render: renderReceber },
   pagar:        { title: 'A Pagar',         render: renderPagar },
   recorrencias: { title: 'Recorrências',    render: renderRecorrencias },
@@ -1741,6 +1811,192 @@ function rerenderTelaAtual() {
   if (cfg && typeof cfg.render === 'function') {
     cfg.render();
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// v35 · Recálculo de saldo via RPC autoritativa
+// ─────────────────────────────────────────────────────────────────────
+// Usa fin_recalcular_saldos (criada na migration_v35) que recalcula
+// saldo_atual = saldo_inicial + entradas - saídas. Atualiza o array
+// local CONTAS com os valores retornados pela RPC.
+//
+// Se a RPC não existir (banco ainda sem migration), faz fallback para
+// recarregarApenas + warn no console pedindo ao admin rodar a migration.
+async function recalcularSaldoConta(contaId) {
+  if (!contaId) return;
+  try {
+    const res = await supaRpc('fin_recalcular_saldos', { p_conta_id: contaId });
+    if (Array.isArray(res)) {
+      res.forEach(row => {
+        const idx = CONTAS.findIndex(c => c.id === row.conta_id);
+        if (idx >= 0) CONTAS[idx].saldo_atual = row.saldo_atual;
+      });
+      return;
+    }
+  } catch (e) {
+    console.warn('[recalcularSaldoConta] RPC falhou — execute migration_v35_saldo_trigger.sql no Supabase:', e.message);
+  }
+  // Fallback: ao menos recarrega para pegar qualquer atualização
+  await recarregarApenas('fin_contas');
+}
+
+async function recalcularTodosSaldos() {
+  try {
+    const res = await supaRpc('fin_recalcular_saldos', { p_conta_id: null });
+    if (Array.isArray(res)) {
+      res.forEach(row => {
+        const idx = CONTAS.findIndex(c => c.id === row.conta_id);
+        if (idx >= 0) CONTAS[idx].saldo_atual = row.saldo_atual;
+      });
+      return res.length;
+    }
+  } catch (e) {
+    console.warn('[recalcularTodosSaldos] RPC falhou:', e.message);
+  }
+  await recarregarApenas('fin_contas');
+  return CONTAS.length;
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// v35 · Auto-criação de lançamentos de Juros / Multa / Desconto
+// ─────────────────────────────────────────────────────────────────────
+// Quando o usuário baixa uma receita/despesa informando juros, multa
+// ou desconto, criamos lançamentos separados (com origem rastreada
+// via observação) ligados à categoria 'Juros e Multas'.
+//
+// Regras:
+//   - Receita paga COM juros/multa: ganho extra → fin_receitas (juros recebidos)
+//   - Receita paga COM desconto:    abatimento  → fin_despesas  (descontos concedidos)
+//   - Despesa paga COM juros/multa: custo extra → fin_despesas  (juros pagos)
+//   - Despesa paga COM desconto:    redução     → fin_receitas  (descontos obtidos)
+async function criarLancamentosAjuste(o) {
+  // Garante existência da categoria "Juros e Multas"
+  const catJuros = await garantirCategoriaJurosMultas();
+
+  const acrescimos = (parseFloat(o.juros)||0) + (parseFloat(o.multa)||0);
+  const desconto   = parseFloat(o.desconto)||0;
+
+  try {
+    if (o.origem === 'receita') {
+      // Acréscimos viram RECEITA extra
+      if (acrescimos > 0) {
+        const desc = `Juros/Multa recebidos · ${o.descBase}`;
+        const criada = await supa('POST', 'fin_receitas', { returning: true, body: {
+          tenant_id:    APP.tenantId,
+          descricao:    desc,
+          valor:        acrescimos,
+          vencimento:   o.data,
+          recebido_em:  o.data,
+          status:       'recebido',
+          cliente_id:   o.clienteId || null,
+          categoria_id: catJuros,
+          conta_id:     o.contaId || null,
+          observacao:   `Auto-gerado da baixa de receita ${o.origemId}`,
+        }});
+        if (Array.isArray(criada) && criada[0]) atualizarLocal(RECEITAS, criada[0]);
+        if (o.contaId) {
+          await supa('POST', 'fin_movimentacoes', { body: {
+            tenant_id: APP.tenantId, conta_id: o.contaId, tipo: 'entrada',
+            valor: acrescimos, data: o.data, descricao: desc,
+            receita_id: criada?.[0]?.id || null,
+          }});
+        }
+      }
+      // Desconto vira DESPESA (abatimento concedido)
+      if (desconto > 0) {
+        const desc = `Desconto concedido · ${o.descBase}`;
+        const criada = await supa('POST', 'fin_despesas', { returning: true, body: {
+          tenant_id:    APP.tenantId,
+          descricao:    desc,
+          valor:        desconto,
+          vencimento:   o.data,
+          pago_em:      o.data,
+          status:       'pago',
+          fornecedor_id: null,
+          categoria_id: catJuros,
+          conta_id:     null, // não movimenta caixa
+          observacao:   `Auto-gerado da baixa de receita ${o.origemId}`,
+        }});
+        if (Array.isArray(criada) && criada[0]) atualizarLocal(DESPESAS, criada[0]);
+      }
+    } else { // origem === 'despesa'
+      // Acréscimos viram DESPESA extra
+      if (acrescimos > 0) {
+        const desc = `Juros/Multa pagos · ${o.descBase}`;
+        const criada = await supa('POST', 'fin_despesas', { returning: true, body: {
+          tenant_id:    APP.tenantId,
+          descricao:    desc,
+          valor:        acrescimos,
+          vencimento:   o.data,
+          pago_em:      o.data,
+          status:       'pago',
+          fornecedor_id: o.fornecedorId || null,
+          categoria_id: catJuros,
+          conta_id:     o.contaId || null,
+          observacao:   `Auto-gerado da baixa de despesa ${o.origemId}`,
+        }});
+        if (Array.isArray(criada) && criada[0]) atualizarLocal(DESPESAS, criada[0]);
+        if (o.contaId) {
+          await supa('POST', 'fin_movimentacoes', { body: {
+            tenant_id: APP.tenantId, conta_id: o.contaId, tipo: 'saida',
+            valor: acrescimos, data: o.data, descricao: desc,
+            despesa_id: criada?.[0]?.id || null,
+          }});
+        }
+      }
+      // Desconto vira RECEITA (abatimento obtido)
+      if (desconto > 0) {
+        const desc = `Desconto obtido · ${o.descBase}`;
+        const criada = await supa('POST', 'fin_receitas', { returning: true, body: {
+          tenant_id:    APP.tenantId,
+          descricao:    desc,
+          valor:        desconto,
+          vencimento:   o.data,
+          recebido_em:  o.data,
+          status:       'recebido',
+          cliente_id:   null,
+          categoria_id: catJuros,
+          conta_id:     null,
+          observacao:   `Auto-gerado da baixa de despesa ${o.origemId}`,
+        }});
+        if (Array.isArray(criada) && criada[0]) atualizarLocal(RECEITAS, criada[0]);
+      }
+    }
+    // Recalcula saldo se tocou alguma conta
+    if (acrescimos > 0 && o.contaId) {
+      await recalcularSaldoConta(o.contaId);
+    }
+  } catch (e) {
+    console.error('[criarLancamentosAjuste] falha:', e);
+    toast('Aviso: lançamento principal OK, mas falhou ao criar juros/multa.', 'amber');
+  }
+}
+
+async function garantirCategoriaJurosMultas() {
+  // Procura local primeiro
+  const cat = (CATEGORIAS||[]).find(c =>
+    c.nome && c.nome.toLowerCase().includes('juros') &&
+    (c.tipo === 'ambos' || c.tipo === 'receita' || c.tipo === 'despesa')
+  );
+  if (cat) return cat.id;
+
+  // Cria
+  try {
+    const criada = await supa('POST', 'fin_categorias', { returning: true, body: {
+      tenant_id: APP.tenantId,
+      nome:      'Juros e Multas',
+      tipo:      'ambos',
+      icone:     '💸',
+      ativo:     true,
+    }});
+    if (Array.isArray(criada) && criada[0]) {
+      atualizarLocal(CATEGORIAS, criada[0]);
+      return criada[0].id;
+    }
+  } catch (e) {
+    console.warn('[garantirCategoriaJurosMultas] não foi possível criar:', e.message);
+  }
+  return null;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1921,6 +2177,20 @@ function renderDashboard() {
     return `<span style="font-size:10px;font-weight:700;color:${up?'var(--green)':'var(--red)'}">${up?'▲':'▼'} ${Math.abs(diff)}% vs média 3m</span>`;
   }
 
+  // ── v35 · Juros e Multas do mês ────────────────────────────
+  // Detecta lançamentos com categoria de juros/multa OU descrição
+  // contendo "juros"/"multa" para somar no KPI dedicado.
+  const ehJurosMulta = (item) => {
+    const cat = (CATEGORIAS||[]).find(c => c.id === item.categoria_id);
+    if (cat && /juros|multa/i.test(cat.nome||'')) return true;
+    return /juros|multa/i.test(item.descricao||'');
+  };
+  const jurosRecebMes = RECEITAS.filter(r => r.status==='recebido' && r.vencimento?.startsWith(mesAtual) && ehJurosMulta(r))
+    .reduce((s,r) => s + (parseFloat(r.valor)||0), 0);
+  const jurosPagosMes = DESPESAS.filter(d => d.status==='pago' && d.vencimento?.startsWith(mesAtual) && ehJurosMulta(d))
+    .reduce((s,d) => s + (parseFloat(d.valor)||0), 0);
+  const jurosLiqMes = jurosRecebMes - jurosPagosMes;
+
   // ── Projeção do mês ───────────────────────────────────────
   const temMovimento = recMes > 0 || despMes > 0;
   const recProjetado  = (temMovimento && diaAtual > 0) ? Math.round((recMes  / diaAtual) * diasNoMes) : 0;
@@ -2051,6 +2321,233 @@ function renderDashboard() {
     return `<svg width="100%" viewBox="0 0 ${W} ${H}" style="overflow:visible;display:block">${out}</svg>`;
   }
 
+  // ── v35 · Gráfico 1: Barras agrupadas Receita×Despesa 6 meses ───
+  function svgGraficoBarras6m(meses) {
+    const W=420, H=180, BOT=30, TOP=10, PAD_L=46, PAD_R=12;
+    const innerW = W - PAD_L - PAD_R;
+    const innerH = H - BOT - TOP;
+    const max = Math.max(...meses.flatMap(m => [m.r, m.dp]), 1);
+    // Arredonda max pra cima pra dar uma escala bonita
+    const escala = Math.ceil(max / 1000) * 1000;
+    const sc = v => TOP + innerH - (v / escala) * innerH;
+    const slot = innerW / meses.length;
+    const bW = Math.min(slot * 0.32, 22);
+
+    let grid = '';
+    for (let i=1; i<=4; i++) {
+      const v = (escala / 4) * i;
+      const y = sc(v);
+      grid += `<line x1="${PAD_L}" y1="${y.toFixed(1)}" x2="${W-PAD_R}" y2="${y.toFixed(1)}" stroke="#e5e7eb" stroke-width="1" stroke-dasharray="2,3"/>`;
+      grid += `<text x="${PAD_L-6}" y="${(y+3).toFixed(1)}" text-anchor="end" font-size="8.5" fill="#9ca3af" font-family="DM Mono">${(v/1000).toFixed(0)}k</text>`;
+    }
+
+    let bars = '';
+    meses.forEach((m, i) => {
+      const cx = PAD_L + slot * i + slot / 2;
+      const yR = sc(m.r), yD = sc(m.dp);
+      const hR = Math.max(TOP+innerH - yR, 0);
+      const hD = Math.max(TOP+innerH - yD, 0);
+      bars += `
+        <rect x="${(cx - bW - 1.5).toFixed(1)}" y="${yR.toFixed(1)}" width="${bW.toFixed(1)}" height="${hR.toFixed(1)}" fill="${m.isCur?'#1e8449':'#1e844988'}" rx="3">
+          <animate attributeName="height" from="0" to="${hR.toFixed(1)}" dur=".5s" begin="${i*.06}s" fill="freeze"/>
+          <animate attributeName="y" from="${TOP+innerH}" to="${yR.toFixed(1)}" dur=".5s" begin="${i*.06}s" fill="freeze"/>
+        </rect>
+        <rect x="${(cx + 1.5).toFixed(1)}" y="${yD.toFixed(1)}" width="${bW.toFixed(1)}" height="${hD.toFixed(1)}" fill="${m.isCur?'#c0392b':'#c0392b88'}" rx="3">
+          <animate attributeName="height" from="0" to="${hD.toFixed(1)}" dur=".5s" begin="${i*.06+.04}s" fill="freeze"/>
+          <animate attributeName="y" from="${TOP+innerH}" to="${yD.toFixed(1)}" dur=".5s" begin="${i*.06+.04}s" fill="freeze"/>
+        </rect>
+        <text x="${cx.toFixed(1)}" y="${H-10}" text-anchor="middle" font-size="9.5" fill="${m.isCur?'#1a5276':'#9ca3af'}" font-weight="${m.isCur?700:400}" font-family="DM Sans">${m.lb}</text>`;
+    });
+
+    const eixoY = `<line x1="${PAD_L}" y1="${TOP}" x2="${PAD_L}" y2="${TOP+innerH}" stroke="#cbd5e0" stroke-width="1.2"/>`;
+    const eixoX = `<line x1="${PAD_L}" y1="${TOP+innerH}" x2="${W-PAD_R}" y2="${TOP+innerH}" stroke="#cbd5e0" stroke-width="1.2"/>`;
+
+    return `<svg width="100%" viewBox="0 0 ${W} ${H}" style="overflow:visible;display:block;max-height:200px">${grid}${eixoY}${eixoX}${bars}</svg>`;
+  }
+
+  // ── v35 · Gráfico 2: Rosca Top categorias de despesa ─────────────
+  function svgGraficoRoscaCategorias() {
+    // Agrupa despesas pagas do mês atual por categoria
+    const despMesAtu = DESPESAS.filter(d => d.status==='pago' && d.vencimento?.startsWith(mesAtual));
+    const porCat = {};
+    despMesAtu.forEach(d => {
+      const nome = getNome(CATEGORIAS, d.categoria_id) || 'Sem categoria';
+      porCat[nome] = (porCat[nome] || 0) + (parseFloat(d.valor)||0);
+    });
+    const entries = Object.entries(porCat).sort((a,b) => b[1]-a[1]);
+    const top = entries.slice(0, 5);
+    const outros = entries.slice(5).reduce((s,[,v]) => s+v, 0);
+    if (outros > 0) top.push(['Outros', outros]);
+    const total = top.reduce((s,[,v]) => s+v, 0);
+
+    if (total === 0) {
+      return `<div style="text-align:center;padding:40px 0;color:var(--text-3);font-size:12px">Sem despesas pagas no mês</div>`;
+    }
+
+    const cores = ['#c0392b', '#e05c5c', '#b7770d', '#1a5276', '#5b7ae0', '#8896a8'];
+    const W = 360, H = 200, cx = 90, cy = 100, r = 70, rIn = 44;
+
+    let acumulado = 0;
+    let paths = '';
+    let legenda = '';
+    top.forEach(([nome, valor], i) => {
+      const frac = valor / total;
+      const a0 = (acumulado * 2 * Math.PI) - Math.PI/2;
+      acumulado += frac;
+      const a1 = (acumulado * 2 * Math.PI) - Math.PI/2;
+      const large = frac > 0.5 ? 1 : 0;
+      const x0 = cx + r * Math.cos(a0);
+      const y0 = cy + r * Math.sin(a0);
+      const x1 = cx + r * Math.cos(a1);
+      const y1 = cy + r * Math.sin(a1);
+      const xi0 = cx + rIn * Math.cos(a0);
+      const yi0 = cy + rIn * Math.sin(a0);
+      const xi1 = cx + rIn * Math.cos(a1);
+      const yi1 = cy + rIn * Math.sin(a1);
+      const cor = cores[i % cores.length];
+      paths += `<path d="M ${x0.toFixed(2)} ${y0.toFixed(2)} A ${r} ${r} 0 ${large} 1 ${x1.toFixed(2)} ${y1.toFixed(2)} L ${xi1.toFixed(2)} ${yi1.toFixed(2)} A ${rIn} ${rIn} 0 ${large} 0 ${xi0.toFixed(2)} ${yi0.toFixed(2)} Z" fill="${cor}"><title>${escapeHtml(nome)}: ${fmtMoeda(valor)} (${(frac*100).toFixed(1)}%)</title></path>`;
+
+      const truncado = nome.length > 22 ? nome.slice(0,20)+'…' : nome;
+      legenda += `<g transform="translate(190, ${20 + i*22})">
+        <rect width="11" height="11" rx="2" fill="${cor}"/>
+        <text x="18" y="9" font-size="10.5" font-family="DM Sans" fill="#4a5568">${escapeHtml(truncado)}</text>
+        <text x="18" y="20" font-size="9.5" font-family="DM Mono" fill="#8896a8">${fmtMoeda(valor)} · ${(frac*100).toFixed(0)}%</text>
+      </g>`;
+    });
+
+    const centroTexto = `
+      <text x="${cx}" y="${cy-4}" text-anchor="middle" font-size="9.5" fill="#8896a8" font-family="DM Sans">Total</text>
+      <text x="${cx}" y="${cy+12}" text-anchor="middle" font-size="13" font-weight="700" fill="#c0392b" font-family="DM Mono">${fmtMoeda(total).replace(/\s/g,' ')}</text>`;
+
+    return `<svg width="100%" viewBox="0 0 ${W} ${H}" style="overflow:visible;display:block;max-height:220px">${paths}${centroTexto}${legenda}</svg>`;
+  }
+
+  // ── v35 · Gráfico 3: Top clientes a receber (barras horizontais) ──
+  function svgGraficoTopClientes() {
+    const abertas = RECEITAS.filter(r => r.status==='pendente' || r.status==='vencido');
+    const porCli = {};
+    abertas.forEach(r => {
+      const nome = getNome(CLIENTES, r.cliente_id) || 'Sem cliente';
+      porCli[nome] = (porCli[nome] || 0) + (parseFloat(r.valor)||0);
+    });
+    const top = Object.entries(porCli).sort((a,b) => b[1]-a[1]).slice(0, 5);
+
+    if (top.length === 0) {
+      return `<div style="text-align:center;padding:40px 0;color:var(--text-3);font-size:12px">Nenhum recebível em aberto 🎉</div>`;
+    }
+
+    const max = top[0][1];
+    const W = 380, rowH = 32, marginX = 130, padBar = 8;
+    const H = top.length * rowH + 20;
+
+    let bars = '';
+    top.forEach(([nome, valor], i) => {
+      const y = 10 + i * rowH;
+      const wPct = max > 0 ? valor/max : 0;
+      const wBar = (W - marginX - 60) * wPct;
+      const truncado = nome.length > 16 ? nome.slice(0,15)+'…' : nome;
+      // Verifica se tem vencidos
+      const cliId = (CLIENTES.find(c => c.nome === nome) || {}).id;
+      const temVencidos = abertas.some(r => r.cliente_id === cliId && r.vencimento < today());
+      const cor = temVencidos ? '#c0392b' : '#1a5276';
+
+      bars += `
+        <text x="${marginX-8}" y="${y+rowH/2+3}" text-anchor="end" font-size="11" font-family="DM Sans" fill="#1a2332" font-weight="500">${escapeHtml(truncado)}</text>
+        <rect x="${marginX}" y="${y+padBar}" width="${(W-marginX-60).toFixed(0)}" height="${rowH-padBar*2}" fill="#f0f2f5" rx="4"/>
+        <rect x="${marginX}" y="${y+padBar}" width="0" height="${rowH-padBar*2}" fill="${cor}" rx="4">
+          <animate attributeName="width" from="0" to="${wBar.toFixed(1)}" dur=".5s" begin="${i*.08}s" fill="freeze"/>
+        </rect>
+        <text x="${(W-6).toFixed(0)}" y="${y+rowH/2+4}" text-anchor="end" font-size="10.5" font-family="DM Mono" fill="${cor}" font-weight="700">${fmtMoeda(valor)}</text>`;
+    });
+
+    return `<svg width="100%" viewBox="0 0 ${W} ${H}" style="overflow:visible;display:block">${bars}</svg>`;
+  }
+
+  // ── v35 · Gráfico 4: Saldo evolutivo (linha) 12 meses ────────────
+  function svgGraficoSaldoEvolutivo() {
+    // Calcula saldo "pseudo-histórico": saldo atual - movimentações futuras + movimentações passadas
+    // Como não temos histórico perfeito, vamos somar receitas recebidas - despesas pagas
+    // por mês, partindo do saldo atual e descontando para trás.
+    const meses = [];
+    const hojeData = new Date();
+    for (let i = 11; i >= 0; i--) {
+      const d = new Date(hojeData.getFullYear(), hojeData.getMonth() - i, 1);
+      const k = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0');
+      const lb = d.toLocaleDateString('pt-BR', { month: 'short' }).replace('.','');
+      const r = RECEITAS.filter(x => x.vencimento?.startsWith(k) && x.status==='recebido')
+        .reduce((s,x) => s + (parseFloat(x.valor)||0), 0);
+      const dp = DESPESAS.filter(x => x.vencimento?.startsWith(k) && x.status==='pago')
+        .reduce((s,x) => s + (parseFloat(x.valor)||0), 0);
+      meses.push({ k, lb, fluxo: r - dp });
+    }
+    // Calcula saldo acumulado partindo do saldo atual
+    // saldoAcc[i] = saldo no fim do mês i
+    // saldoAcc[ultimo] = saldoTotal
+    const saldos = new Array(meses.length).fill(0);
+    saldos[meses.length - 1] = saldoTotal;
+    for (let i = meses.length - 2; i >= 0; i--) {
+      saldos[i] = saldos[i+1] - meses[i+1].fluxo;
+    }
+
+    if (saldos.every(s => s === 0)) {
+      return `<div style="text-align:center;padding:40px 0;color:var(--text-3);font-size:12px">Sem dados suficientes</div>`;
+    }
+
+    const W = 420, H = 180, TOP = 14, BOT = 26, PAD_L = 50, PAD_R = 14;
+    const innerW = W - PAD_L - PAD_R;
+    const innerH = H - TOP - BOT;
+    const minS = Math.min(...saldos, 0);
+    const maxS = Math.max(...saldos, 1);
+    const range = maxS - minS || 1;
+    const sx = i => PAD_L + (i / (meses.length - 1)) * innerW;
+    const sy = v => TOP + innerH - ((v - minS) / range) * innerH;
+
+    // Grid + escala Y
+    let grid = '';
+    for (let i = 0; i <= 4; i++) {
+      const v = minS + (range * i / 4);
+      const y = sy(v);
+      grid += `<line x1="${PAD_L}" y1="${y.toFixed(1)}" x2="${W-PAD_R}" y2="${y.toFixed(1)}" stroke="#e5e7eb" stroke-width="1" stroke-dasharray="2,3"/>`;
+      grid += `<text x="${PAD_L-6}" y="${(y+3).toFixed(1)}" text-anchor="end" font-size="8.5" fill="#9ca3af" font-family="DM Mono">${v>=1000?(v/1000).toFixed(0)+'k':v.toFixed(0)}</text>`;
+    }
+
+    // Área preenchida (path)
+    let pathLine = `M ${sx(0).toFixed(1)} ${sy(saldos[0]).toFixed(1)}`;
+    let pathArea = `M ${sx(0).toFixed(1)} ${(TOP+innerH).toFixed(1)} L ${sx(0).toFixed(1)} ${sy(saldos[0]).toFixed(1)}`;
+    saldos.forEach((s, i) => {
+      if (i === 0) return;
+      pathLine += ` L ${sx(i).toFixed(1)} ${sy(s).toFixed(1)}`;
+      pathArea += ` L ${sx(i).toFixed(1)} ${sy(s).toFixed(1)}`;
+    });
+    pathArea += ` L ${sx(meses.length-1).toFixed(1)} ${(TOP+innerH).toFixed(1)} Z`;
+
+    // Pontos
+    let pontos = '';
+    saldos.forEach((s, i) => {
+      const isCur = meses[i].k === mesAtual;
+      pontos += `<circle cx="${sx(i).toFixed(1)}" cy="${sy(s).toFixed(1)}" r="${isCur?5:3}" fill="${isCur?'#1a5276':'#5b7ae0'}" stroke="#fff" stroke-width="${isCur?2:1.5}"><title>${meses[i].lb}: ${fmtMoeda(s)}</title></circle>`;
+    });
+
+    // Labels eixo X
+    let xLabels = '';
+    meses.forEach((m, i) => {
+      // Mostra labels alternados pra não poluir
+      if (i % 2 !== 0 && i !== meses.length-1) return;
+      const isCur = m.k === mesAtual;
+      xLabels += `<text x="${sx(i).toFixed(1)}" y="${H-8}" text-anchor="middle" font-size="9" fill="${isCur?'#1a5276':'#9ca3af'}" font-weight="${isCur?700:400}" font-family="DM Sans">${m.lb}</text>`;
+    });
+
+    return `<svg width="100%" viewBox="0 0 ${W} ${H}" style="overflow:visible;display:block;max-height:200px">
+      ${grid}
+      <line x1="${PAD_L}" y1="${TOP}" x2="${PAD_L}" y2="${TOP+innerH}" stroke="#cbd5e0" stroke-width="1.2"/>
+      <line x1="${PAD_L}" y1="${TOP+innerH}" x2="${W-PAD_R}" y2="${TOP+innerH}" stroke="#cbd5e0" stroke-width="1.2"/>
+      <path d="${pathArea}" fill="#5b7ae020"/>
+      <path d="${pathLine}" fill="none" stroke="#1a5276" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+      ${pontos}
+      ${xLabels}
+    </svg>`;
+  }
+
   $id('topbar-actions').innerHTML = `
     <button class="btn btn-sm btn-green" onclick="go('receber')">+ Receita</button>
     <button class="btn btn-sm btn-red" onclick="go('pagar')">+ Despesa</button>`;
@@ -2077,7 +2574,29 @@ function renderDashboard() {
 
   ${alertaVenc}
 
-  <!-- KPI ROW -->
+  <!-- v35 · KPIs DE DESTAQUE: Receitas + Despesas + Juros -->
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px">
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:18px 20px;box-shadow:var(--shadow);position:relative;overflow:hidden">
+      <div style="position:absolute;top:0;left:0;width:4px;height:100%;background:var(--green)"></div>
+      <div style="font-size:10.5px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">Receitas do Mês</div>
+      <div style="font-size:24px;font-weight:700;font-family:var(--mono);color:var(--green);letter-spacing:-.5px">${fmtMoeda(recMes)}</div>
+      <div style="margin-top:6px;font-size:11px;color:var(--text-3)">${tendencia(recMes,mediaRec3)||'<span style="color:var(--text-3)">primeiro mês com dados</span>'}</div>
+    </div>
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:18px 20px;box-shadow:var(--shadow);position:relative;overflow:hidden">
+      <div style="position:absolute;top:0;left:0;width:4px;height:100%;background:var(--red)"></div>
+      <div style="font-size:10.5px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">Despesas do Mês</div>
+      <div style="font-size:24px;font-weight:700;font-family:var(--mono);color:var(--red);letter-spacing:-.5px">${fmtMoeda(despMes)}</div>
+      <div style="margin-top:6px;font-size:11px;color:var(--text-3)">${tendencia(despMes,mediaDesp3)||'<span style="color:var(--text-3)">primeiro mês com dados</span>'}</div>
+    </div>
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:18px 20px;box-shadow:var(--shadow);position:relative;overflow:hidden">
+      <div style="position:absolute;top:0;left:0;width:4px;height:100%;background:var(--amber)"></div>
+      <div style="font-size:10.5px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">Juros e Multas (líquido)</div>
+      <div style="font-size:24px;font-weight:700;font-family:var(--mono);color:${jurosLiqMes>=0?'var(--green)':'var(--red)'};letter-spacing:-.5px">${fmtMoeda(jurosLiqMes)}</div>
+      <div style="margin-top:6px;font-size:11px;color:var(--text-3)">+${fmtMoeda(jurosRecebMes)} recebido · ${fmtMoeda(jurosPagosMes)} pago</div>
+    </div>
+  </div>
+
+  <!-- KPI ROW (segunda linha, mantida) -->
   <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:10px 16px;display:grid;grid-template-columns:repeat(5,1fr);gap:0;box-shadow:var(--shadow)">
     ${[
       {l:'Saldo Total',     v:fmtMoeda(saldoTotal),   td:tendencia(saldoTotal,0), c:'var(--gold)',  click:"go('contas')"},
@@ -2368,13 +2887,49 @@ function renderDashboard() {
     </div>
   </div>
 
+  <!-- v35 · GRÁFICOS DO DASHBOARD -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+    <!-- Gráfico 1: Receitas vs Despesas dos últimos 6 meses -->
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:16px;box-shadow:var(--shadow)">
+      <div style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center">
+        <span>Receitas × Despesas · 6 meses</span>
+        <span style="display:flex;gap:10px;font-size:10px;color:var(--text-3);text-transform:none;font-weight:500">
+          <span style="display:flex;align-items:center;gap:4px"><span style="width:8px;height:8px;background:var(--green);border-radius:2px;display:inline-block"></span>Receitas</span>
+          <span style="display:flex;align-items:center;gap:4px"><span style="width:8px;height:8px;background:var(--red);border-radius:2px;display:inline-block"></span>Despesas</span>
+        </span>
+      </div>
+      ${svgGraficoBarras6m(meses6)}
+    </div>
+
+    <!-- Gráfico 2: Top categorias de despesa -->
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:16px;box-shadow:var(--shadow)">
+      <div style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:14px">Top Categorias de Despesa · ${mesAtual}</div>
+      ${svgGraficoRoscaCategorias()}
+    </div>
+
+    <!-- Gráfico 3: Top clientes a receber -->
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:16px;box-shadow:var(--shadow)">
+      <div style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center">
+        <span>Top 5 Clientes a Receber</span>
+        <button onclick="go('clifinanceiro')" style="font-size:10px;color:var(--gold);background:none;border:none;cursor:pointer;font-weight:600;font-family:var(--font);text-transform:none;letter-spacing:0">Ver tudo →</button>
+      </div>
+      ${svgGraficoTopClientes()}
+    </div>
+
+    <!-- Gráfico 4: Saldo evolutivo (12 meses) -->
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:16px;box-shadow:var(--shadow)">
+      <div style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:14px">Evolução do Saldo · 12 meses</div>
+      ${svgGraficoSaldoEvolutivo()}
+    </div>
+  </div>
+
   </div>`;
 }
 
 // ── A RECEBER ─────────────────────────────────────────────────
 
 // ── PAGINAÇÃO ─────────────────────────────────────────────────
-const _PAG = { receber:1, pagar:1, clientes:1, fornecedores:1 };
+const _PAG = { receber:1, pagar:1, lancamentos:1, clientes:1, fornecedores:1 };
 const PAG_SIZE = 20;
 
 function paginaBar(total, pag, pagKey, renderFn) {
@@ -2418,6 +2973,7 @@ function exportarCSV(dados, nome) {
 const _F = {
   receber:      { busca:'', status:'', periodo:'', ordem:'vencimento', dir:'asc' },
   pagar:        { busca:'', status:'', periodo:'', ordem:'vencimento', dir:'asc' },
+  lancamentos:  { busca:'', tipo:'', status:'', periodo:'', ordem:'vencimento', dir:'asc' },
   clientes:     { busca:'', ordem:'nome', dir:'asc' },
   fornecedores: { busca:'', ordem:'nome', dir:'asc' },
 };
@@ -2443,15 +2999,183 @@ function sortTabela(pag, campo) {
   else { f.ordem = campo; f.dir = 'asc'; }
   if (pag==='receber')      renderReceber();
   if (pag==='pagar')        renderPagar();
+  if (pag==='lancamentos')  renderLancamentos();
   if (pag==='clientes')     renderClientes();
   if (pag==='fornecedores') renderFornecedores();
 }
 function limparFiltros(pag) {
-  Object.assign(_F[pag], { busca:'', status:'', periodo:'' });
+  Object.assign(_F[pag], { busca:'', status:'', periodo:'', tipo:'' });
   if (pag==='receber')      renderReceber();
   if (pag==='pagar')        renderPagar();
+  if (pag==='lancamentos')  renderLancamentos();
   if (pag==='clientes')     renderClientes();
   if (pag==='fornecedores') renderFornecedores();
+}
+
+function renderLancamentos() {
+  // ── v35 · Tela consolidada de Lançamentos ───────────────────────
+  // Une receitas e despesas numa única visão, com filtro por tipo,
+  // status e período. Cada linha herda o renderizador da sua origem.
+  const f    = _F.lancamentos;
+  const hoje = today();
+  const mes  = hoje.slice(0,7);
+
+  $id('topbar-actions').innerHTML = `
+    <button class="btn btn-sm" onclick="exportarLancamentosCSV()" style="background:var(--surface-2);color:var(--text-2);border:1px solid var(--border-lt)">⬇ CSV</button>
+    ${podeCriar('receber') ? `<button class="btn btn-sm" style="background:var(--green-lt);color:var(--green);border:1px solid rgba(30,132,73,.25)" onclick="modalNovaReceita()">+ Receita</button>` : ''}
+    ${podeCriar('pagar')   ? `<button class="btn btn-sm" style="background:var(--red-lt);color:var(--red);border:1px solid rgba(192,57,43,.25)" onclick="modalNovaDespesa()">+ Despesa</button>` : ''}`;
+
+  // Combina receitas e despesas marcando o tipo
+  let list = [
+    ...(RECEITAS||[]).map(r => ({...r, _tipo:'receita'})),
+    ...(DESPESAS||[]).map(d => ({...d, _tipo:'despesa'})),
+  ];
+
+  // Filtros
+  if (f.tipo)    list = list.filter(x => x._tipo === f.tipo);
+  if (f.status)  list = list.filter(x => x.status === f.status);
+  if (f.busca) {
+    const q = f.busca.toLowerCase();
+    list = list.filter(x =>
+      x.descricao?.toLowerCase().includes(q)
+      || getNome(CLIENTES, x.cliente_id).toLowerCase().includes(q)
+      || getNome(FORNECEDORES, x.fornecedor_id).toLowerCase().includes(q)
+    );
+  }
+  if (f.periodo === 'mes')      list = list.filter(x => x.vencimento?.startsWith(mes));
+  if (f.periodo === 'vencido')  list = list.filter(x => x.status==='pendente' && x.vencimento < hoje);
+  if (f.periodo === '7d')       { const lim=new Date(); lim.setDate(lim.getDate()+7); list = list.filter(x => x.vencimento>=hoje && x.vencimento<=lim.toISOString().slice(0,10)); }
+
+  // Ordenação
+  list.sort((a,b) => {
+    let va = a[f.ordem]||'', vb = b[f.ordem]||'';
+    if (f.ordem==='valor') { va=parseFloat(a.valor)||0; vb=parseFloat(b.valor)||0; }
+    if (va < vb) return f.dir==='asc' ? -1 : 1;
+    if (va > vb) return f.dir==='asc' ? 1 : -1;
+    return 0;
+  });
+
+  // KPIs
+  const totalReceitas = list.filter(x=>x._tipo==='receita').reduce((s,x)=>s+(parseFloat(x.valor)||0),0);
+  const totalDespesas = list.filter(x=>x._tipo==='despesa').reduce((s,x)=>s+(parseFloat(x.valor)||0),0);
+  const recebidos     = list.filter(x=>x._tipo==='receita' && x.status==='recebido').reduce((s,x)=>s+(parseFloat(x.valor)||0),0);
+  const pagos         = list.filter(x=>x._tipo==='despesa' && x.status==='pago').reduce((s,x)=>s+(parseFloat(x.valor)||0),0);
+
+  const temFiltro = f.busca||f.status||f.periodo||f.tipo;
+  if (temFiltro) _PAG.lancamentos = 1;
+  const pagAtual = _PAG.lancamentos;
+  const totalLinhas = list.length;
+  const pagList = list.slice((pagAtual-1)*PAG_SIZE, pagAtual*PAG_SIZE);
+
+  $id('page-content').innerHTML = `
+  <!-- KPIs -->
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:16px">
+    <div class="kpi-card k-green">
+      <div class="kpi-label">Receitas</div>
+      <div class="kpi-value" style="color:var(--green)">${fmtMoeda(totalReceitas)}</div>
+      <div class="kpi-sub">${fmtMoeda(recebidos)} recebido(s)</div>
+    </div>
+    <div class="kpi-card k-red">
+      <div class="kpi-label">Despesas</div>
+      <div class="kpi-value" style="color:var(--red)">${fmtMoeda(totalDespesas)}</div>
+      <div class="kpi-sub">${fmtMoeda(pagos)} pago(s)</div>
+    </div>
+    <div class="kpi-card k-gold">
+      <div class="kpi-label">Resultado</div>
+      <div class="kpi-value" style="color:${totalReceitas-totalDespesas>=0?'var(--green)':'var(--red)'}">${fmtMoeda(totalReceitas-totalDespesas)}</div>
+      <div class="kpi-sub">${list.length} lançamento(s)</div>
+    </div>
+  </div>
+
+  <!-- Filtros -->
+  <div style="${filterBarStyle()}">
+    <input style="${inputFiltroStyle()};flex:1;min-width:200px" placeholder="🔍  Buscar descrição, cliente ou fornecedor…"
+      value="${escapeHtml(f.busca)}" oninput="_F.lancamentos.busca=this.value;renderLancamentos()">
+    <select style="${selectFiltroStyle()}" onchange="_F.lancamentos.tipo=this.value;renderLancamentos()">
+      <option value=""        ${!f.tipo?'selected':''}>Todos os tipos</option>
+      <option value="receita" ${f.tipo==='receita'?'selected':''}>📥 Apenas Receitas</option>
+      <option value="despesa" ${f.tipo==='despesa'?'selected':''}>📤 Apenas Despesas</option>
+    </select>
+    <select style="${selectFiltroStyle()}" onchange="_F.lancamentos.status=this.value;renderLancamentos()">
+      <option value=""          ${!f.status?'selected':''}>Todos os status</option>
+      <option value="pendente"  ${f.status==='pendente'?'selected':''}>Pendente</option>
+      <option value="recebido"  ${f.status==='recebido'?'selected':''}>Recebido</option>
+      <option value="pago"      ${f.status==='pago'?'selected':''}>Pago</option>
+      <option value="cancelado" ${f.status==='cancelado'?'selected':''}>Cancelado</option>
+    </select>
+    <select style="${selectFiltroStyle()}" onchange="_F.lancamentos.periodo=this.value;renderLancamentos()">
+      <option value=""        ${!f.periodo?'selected':''}>Todo período</option>
+      <option value="mes"     ${f.periodo==='mes'?'selected':''}>Este mês</option>
+      <option value="vencido" ${f.periodo==='vencido'?'selected':''}>Vencidos</option>
+      <option value="7d"      ${f.periodo==='7d'?'selected':''}>Próximos 7 dias</option>
+    </select>
+    ${temFiltro ? `<button class="btn btn-sm" style="background:var(--surface-2);color:var(--text-2);border:1px solid var(--border-lt)" onclick="limparFiltros('lancamentos')">Limpar</button>` : ''}
+  </div>
+
+  <!-- Tabela -->
+  <div class="table-wrap">
+  <table>
+    <thead><tr>
+      <th style="width:36px"></th>
+      ${thSort('Descrição','descricao','lancamentos')}
+      <th>Cliente / Fornecedor</th>
+      ${thSort('Categoria','categoria_id','lancamentos')}
+      ${thSort('Vencimento','vencimento','lancamentos')}
+      ${thSort('Valor','valor','lancamentos')}
+      <th>Status</th>
+      <th></th>
+    </tr></thead>
+    <tbody>
+    ${list.length === 0
+      ? `<tr><td colspan="8"><div class="empty-state"><div class="empty-icon">📋</div><h3>${temFiltro?'Nenhum resultado para os filtros aplicados':'Nenhum lançamento cadastrado'}</h3></div></td></tr>`
+      : pagList.map(x => {
+          const isRec = x._tipo === 'receita';
+          const vencHoje  = x.vencimento === hoje;
+          const vencAtras = x.status==='pendente' && x.vencimento < hoje;
+          const dataEfet  = isRec ? x.recebido_em : x.pago_em;
+          const dataDif   = (isRec ? x.status==='recebido' : x.status==='pago') && dataEfet && dataEfet !== x.vencimento;
+          const corValor  = isRec ? 'var(--green)' : 'var(--red)';
+          const ico       = isRec ? '📥' : '📤';
+          const nomeContraparte = isRec ? getNome(CLIENTES, x.cliente_id) : getNome(FORNECEDORES, x.fornecedor_id);
+          const fnBaixar  = isRec ? `baixarReceita('${x.id}',event)` : `baixarDespesa('${x.id}',event)`;
+          const fnEditar  = isRec ? `editarReceita('${x.id}',event)` : `editarDespesa('${x.id}',event)`;
+          const fnExcluir = isRec ? `excluirReceita('${x.id}',event)` : `excluirDespesa('${x.id}',event)`;
+          const podeBaixar = isRec ? podeEditar('receber') : podeEditar('pagar');
+          const podeEd     = isRec ? podeEditar('receber') : podeEditar('pagar');
+          const podeEx     = isRec ? podeExcluir('receber') : podeExcluir('pagar');
+          const corBaixar  = isRec ? 'btn-green' : 'btn-red';
+          return `<tr style="${vencAtras?'background:rgba(224,92,92,.04)':''}">
+            <td style="font-size:14px;text-align:center" title="${isRec?'Receita':'Despesa'}">${ico}</td>
+            <td style="font-weight:500;color:var(--text);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(x.descricao||'')}</td>
+            <td style="color:var(--text-2);max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(nomeContraparte)}</td>
+            <td style="color:var(--text-3)">${escapeHtml(getNome(CATEGORIAS, x.categoria_id))}</td>
+            <td style="font-family:var(--mono);font-size:12px;color:${vencAtras?'var(--red)':vencHoje?'var(--amber)':'var(--text-2)'};font-weight:${vencAtras||vencHoje?700:400}">
+              ${fmtData(x.vencimento)}${vencHoje?' · hoje':''}
+              ${dataDif?`<div style="font-size:10px;color:${corValor};font-weight:500;margin-top:2px">↳ ${isRec?'recebido':'pago'} ${fmtData(dataEfet)}</div>`:''}
+            </td>
+            <td style="font-family:var(--mono);font-weight:700;color:${corValor}">${fmtMoeda(x.valor)}</td>
+            <td>${badgeStatus(x.status)}</td>
+            <td style="white-space:nowrap">
+              <div style="display:flex;gap:5px;align-items:center">
+                ${(x.status==='pendente'||x.status==='vencido') && podeBaixar ? `<button class="btn btn-sm ${corBaixar}" onclick="${fnBaixar}" style="padding:4px 10px;font-size:11px">✓</button>` : ''}
+                ${podeEd ? `<button class="btn btn-sm" onclick="${fnEditar}" style="padding:4px 10px;font-size:11px;background:var(--surface-2);color:var(--text-2);border:1px solid var(--border-lt)">✏</button>` : ''}
+                ${podeEx ? `<button class="btn btn-sm" onclick="${fnExcluir}" style="padding:4px 10px;font-size:11px;background:var(--red-lt);color:var(--red);border:1px solid rgba(224,92,92,.2)">✕</button>` : ''}
+              </div>
+            </td>
+          </tr>`;
+        }).join('')}
+    </tbody>
+  </table>
+  </div>
+  ${paginaBar(totalLinhas, pagAtual, 'lancamentos', 'renderLancamentos')}`;
+}
+
+function exportarLancamentosCSV() {
+  const arr = [
+    ...(RECEITAS||[]).map(r => ({...r, _tipo:'Receita'})),
+    ...(DESPESAS||[]).map(d => ({...d, _tipo:'Despesa'})),
+  ].sort((a,b)=>(b.vencimento||'').localeCompare(a.vencimento||''));
+  exportarCSV(arr, 'lancamentos_artecon');
 }
 
 function renderReceber() {
@@ -2637,20 +3361,23 @@ async function baixarReceita(id, e) {
     // é calculado server-side via trigger/view (não dá pra recalcular aqui).
     if (Array.isArray(atualizada) && atualizada[0]) atualizarLocal(RECEITAS, atualizada[0]);
     if (contaId) {
-      // ── v34 · Fallback de saldo ───────────────────────────────
-      // Se o trigger do banco não atualizar o saldo_atual, somamos
-      // localmente para não exibir saldo zerado/desatualizado.
-      const saldoAntes = (CONTAS.find(c=>c.id===contaId)||{}).saldo_atual;
-      await recarregarApenas('fin_contas');
-      const cAfter = CONTAS.find(c=>c.id===contaId);
-      if (cAfter && parseFloat(cAfter.saldo_atual) === parseFloat(saldoAntes)) {
-        // trigger não disparou — força recálculo client-side e persiste
-        const novoSaldo = (parseFloat(cAfter.saldo_atual)||0) + (parseFloat(r.valor)||0);
-        try {
-          const atualizadaConta = await supa('PATCH', 'fin_contas', { params: { id: `eq.${contaId}` }, returning: true, body: { saldo_atual: novoSaldo } });
-          if (Array.isArray(atualizadaConta) && atualizadaConta[0]) atualizarLocal(CONTAS, atualizadaConta[0]);
-        } catch(_) { cAfter.saldo_atual = novoSaldo; }
-      }
+      // ── v35 · Recálculo via RPC (autoritativo) ────────────────
+      await recalcularSaldoConta(contaId);
+    }
+
+    // ── v35 · Auto-criação de Juros + Multa + Desconto ──────────
+    if (dataEfetiva.juros > 0 || dataEfetiva.multa > 0 || dataEfetiva.desconto > 0) {
+      await criarLancamentosAjuste({
+        origem:    'receita',
+        origemId:  id,
+        descBase:  r.descricao,
+        clienteId: r.cliente_id,
+        contaId,
+        data:      dataReceb,
+        juros:     dataEfetiva.juros    || 0,
+        multa:     dataEfetiva.multa    || 0,
+        desconto:  dataEfetiva.desconto || 0,
+      });
     }
     rerenderTelaAtual();
   } catch(e) { toast('Erro: ' + e.message, 'error'); }
@@ -2911,17 +3638,23 @@ async function baixarDespesa(id, e) {
     // ── Performance · Fase B ──
     if (Array.isArray(atualizada) && atualizada[0]) atualizarLocal(DESPESAS, atualizada[0]);
     if (contaId) {
-      // ── v34 · Fallback de saldo ───────────────────────────────
-      const saldoAntes = (CONTAS.find(c=>c.id===contaId)||{}).saldo_atual;
-      await recarregarApenas('fin_contas');
-      const cAfter = CONTAS.find(c=>c.id===contaId);
-      if (cAfter && parseFloat(cAfter.saldo_atual) === parseFloat(saldoAntes)) {
-        const novoSaldo = (parseFloat(cAfter.saldo_atual)||0) - (parseFloat(d.valor)||0);
-        try {
-          const atualizadaConta = await supa('PATCH', 'fin_contas', { params: { id: `eq.${contaId}` }, returning: true, body: { saldo_atual: novoSaldo } });
-          if (Array.isArray(atualizadaConta) && atualizadaConta[0]) atualizarLocal(CONTAS, atualizadaConta[0]);
-        } catch(_) { cAfter.saldo_atual = novoSaldo; }
-      }
+      // ── v35 · Recálculo via RPC (autoritativo) ────────────────
+      await recalcularSaldoConta(contaId);
+    }
+
+    // ── v35 · Auto-criação de Juros + Multa + Desconto ──────────
+    if (dataEfetiva.juros > 0 || dataEfetiva.multa > 0 || dataEfetiva.desconto > 0) {
+      await criarLancamentosAjuste({
+        origem:       'despesa',
+        origemId:     id,
+        descBase:     d.descricao,
+        fornecedorId: d.fornecedor_id,
+        contaId,
+        data:         dataPago,
+        juros:        dataEfetiva.juros    || 0,
+        multa:        dataEfetiva.multa    || 0,
+        desconto:     dataEfetiva.desconto || 0,
+      });
     }
     rerenderTelaAtual();
   } catch(e) { toast('Erro: ' + e.message, 'error'); }
@@ -6802,6 +7535,7 @@ async function excluirImposto(id, e) {
 
 let _concItems = []; // itens do extrato importado
 let _concMes   = today().slice(0,7);
+let _concContaId = null; // v35 · conta selecionada para a importação
 
 function renderConciliacao() {
   $id('topbar-actions').innerHTML = '';
@@ -6815,50 +7549,69 @@ function renderConciliacao() {
     ...despM.map(d => ({ ...d, _t:'dep', _valor: -(parseFloat(d.valor)||0) })),
   ].sort((a,b) => a.vencimento.localeCompare(b.vencimento));
 
-  // Matching com extrato importado
+  // v35 · Match com tolerância configurável
+  // Match exato: mesma data + mesmo valor → grava conferido automático
+  // Match próximo: ±2 dias + ±R$2 → grava como pendente de revisão
   function matchItem(ext) {
-    const delta = 2; // tolerância R$2
-    const match = todos.find(l =>
-      Math.abs(Math.abs(l._valor) - Math.abs(ext.valor)) <= delta &&
-      Math.abs(new Date(l.vencimento+' 12:00:00') - new Date(ext.data+' 12:00:00')) <= 3*86400000
+    const exato = todos.find(l =>
+      Math.abs(Math.abs(l._valor) - Math.abs(ext.valor)) < 0.01 &&
+      l.vencimento === ext.data
     );
-    return match || null;
+    if (exato) return { lanc: exato, exato: true };
+    const proximo = todos.find(l =>
+      Math.abs(Math.abs(l._valor) - Math.abs(ext.valor)) <= 2 &&
+      Math.abs(new Date(l.vencimento+'T12:00:00') - new Date(ext.data+'T12:00:00')) <= 3*86400000
+    );
+    return proximo ? { lanc: proximo, exato: false } : null;
   }
 
-  const conciliados  = _concItems.filter(i => matchItem(i));
-  const semMatch     = _concItems.filter(i => !matchItem(i));
-  const naoExtrato   = todos.filter(l => !_concItems.some(i => {
-    const delta=2;
-    return Math.abs(Math.abs(l._valor)-Math.abs(i.valor))<=delta &&
-           Math.abs(new Date(l.vencimento+' 12:00:00')-new Date(i.data+' 12:00:00'))<=3*86400000;
+  const itensComMatch = _concItems.map(i => ({ ...i, _match: matchItem(i) }));
+  const conciliados   = itensComMatch.filter(i => i._match);
+  const matchExatos   = itensComMatch.filter(i => i._match?.exato);
+  const matchProx     = itensComMatch.filter(i => i._match && !i._match.exato);
+  const semMatch      = itensComMatch.filter(i => !i._match);
+  const naoExtrato    = todos.filter(l => !_concItems.some(i => {
+    return Math.abs(Math.abs(l._valor)-Math.abs(i.valor))<=2 &&
+           Math.abs(new Date(l.vencimento+'T12:00:00')-new Date(i.data+'T12:00:00'))<=3*86400000;
   }));
 
   const saldoExtrato = _concItems.reduce((s,i)=>s+i.valor,0);
   const saldoSist    = todos.reduce((s,l)=>s+l._valor,0);
 
+  // Conta selecionada (default: primeira conta ativa)
+  if (!_concContaId && CONTAS.length > 0) _concContaId = CONTAS[0].id;
+  const contaSel = (CONTAS||[]).find(c => c.id === _concContaId);
+
   $id('page-content').innerHTML = `
   <div style="display:flex;flex-direction:column;gap:16px">
 
-  <!-- Seletor de mês + importar -->
-  <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+  <!-- Seletor de mês + conta + importar -->
+  <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;background:var(--surface-2);padding:10px 14px;border-radius:10px;border:1px solid var(--border)">
     <div style="display:flex;align-items:center;gap:8px">
-      <label style="font-size:12px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.06em">Competência</label>
+      <label style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.06em">Competência</label>
       <input type="month" value="${mes}" onchange="_concMes=this.value;_concItems=[];renderConciliacao()"
-        style="padding:7px 12px;border:1.5px solid var(--border-lt);border-radius:8px;font-family:var(--font);font-size:13px;background:var(--bg-2);color:var(--text);outline:none">
+        style="padding:6px 10px;border:1.5px solid var(--border-lt);border-radius:8px;font-family:var(--font);font-size:12.5px;background:var(--bg-2);color:var(--text);outline:none">
     </div>
-    <label class="btn btn-sm" style="cursor:pointer;background:var(--surface-2);color:var(--text-2);border:1px solid var(--border-lt)">
+    <div style="display:flex;align-items:center;gap:8px">
+      <label style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.06em">Conta</label>
+      <select onchange="_concContaId=this.value;renderConciliacao()"
+        style="padding:6px 10px;border:1.5px solid var(--border-lt);border-radius:8px;font-family:var(--font);font-size:12.5px;background:var(--bg-2);color:var(--text);outline:none">
+        ${(CONTAS||[]).map(c => `<option value="${c.id}" ${c.id===_concContaId?'selected':''}>${escapeHtml(c.nome)}</option>`).join('')}
+      </select>
+    </div>
+    <label class="btn btn-sm" style="cursor:pointer;background:var(--gold);color:#fff;border:none">
       📂 Importar CSV
       <input type="file" accept=".csv,.txt,.ofx" style="display:none" onchange="importarExtrato(this)">
     </label>
     ${_concItems.length ? `<button onclick="_concItems=[];renderConciliacao()" class="btn btn-sm" style="background:var(--red-lt);color:var(--red);border:1px solid rgba(224,92,92,.2)">✕ Limpar extrato</button>` : ''}
-    <span style="font-size:11px;color:var(--text-3)">${_concItems.length} item(ns) no extrato</span>
+    <span style="font-size:11px;color:var(--text-3);margin-left:auto">${_concItems.length} item(ns) no extrato</span>
   </div>
 
   <!-- KPIs -->
   <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr)">
-    <div class="kpi-card k-green"><div class="kpi-label">Conciliados</div><div class="kpi-value" style="color:var(--green)">${conciliados.length}</div><div class="kpi-sub">de ${_concItems.length} no extrato</div></div>
-    <div class="kpi-card k-red"><div class="kpi-label">Sem correspondência</div><div class="kpi-value" style="color:var(--red)">${semMatch.length}</div><div class="kpi-sub">só no extrato</div></div>
-    <div class="kpi-card k-amber"><div class="kpi-label">Não conciliados</div><div class="kpi-value" style="color:var(--amber)">${naoExtrato.length}</div><div class="kpi-sub">só no sistema</div></div>
+    <div class="kpi-card k-green"><div class="kpi-label">Match exato</div><div class="kpi-value" style="color:var(--green)">${matchExatos.length}</div><div class="kpi-sub">grava conferido auto</div></div>
+    <div class="kpi-card k-amber"><div class="kpi-label">Match aproximado</div><div class="kpi-value" style="color:var(--amber)">${matchProx.length}</div><div class="kpi-sub">precisa confirmar</div></div>
+    <div class="kpi-card k-red"><div class="kpi-label">Sem match</div><div class="kpi-value" style="color:var(--red)">${semMatch.length}</div><div class="kpi-sub">criar manualmente</div></div>
     <div class="kpi-card ${Math.abs(saldoExtrato-saldoSist)<1?'k-green':'k-red'}"><div class="kpi-label">Diferença</div><div class="kpi-value" style="color:${Math.abs(saldoExtrato-saldoSist)<1?'var(--green)':'var(--red)'}">${fmtMoeda(saldoExtrato-saldoSist)}</div><div class="kpi-sub">extrato vs sistema</div></div>
   </div>
 
@@ -6867,9 +7620,12 @@ function renderConciliacao() {
   <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:32px;text-align:center;box-shadow:var(--shadow)">
     <div style="font-size:36px;margin-bottom:12px;opacity:.4">🏦</div>
     <div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:8px">Importe o extrato bancário</div>
-    <div style="font-size:12.5px;color:var(--text-3);line-height:1.7;max-width:420px;margin:0 auto">
-      Exporte o extrato do seu banco em <strong style="color:var(--text-2)">CSV</strong> e importe aqui.
-      O sistema cruza automaticamente com os lançamentos cadastrados pelo valor e data (tolerância ±2 dias, ±R$2).
+    <div style="font-size:12.5px;color:var(--text-3);line-height:1.7;max-width:480px;margin:0 auto">
+      Exporte o extrato em <strong style="color:var(--text-2)">CSV</strong> e importe aqui.
+      O sistema cruza automaticamente com os lançamentos existentes:<br>
+      • <strong style="color:var(--green)">Match exato</strong> (data + valor): gravado como <strong>conferido</strong> automaticamente<br>
+      • <strong style="color:var(--amber)">Match aproximado</strong> (±2 dias, ±R$2): aguarda sua confirmação<br>
+      • <strong style="color:var(--red)">Sem match</strong>: você cria o lançamento manualmente
       <br><br>
       <strong style="color:var(--text-2)">Formato esperado do CSV:</strong><br>
       <code style="background:var(--surface-2);padding:4px 10px;border-radius:6px;font-family:var(--mono);font-size:11px">data;descricao;valor</code><br>
@@ -6877,43 +7633,64 @@ function renderConciliacao() {
     </div>
   </div>` : `
 
+  <!-- Ações em massa -->
+  ${(matchExatos.length > 0 || matchProx.length > 0) && _concContaId ? `
+  <div style="display:flex;gap:10px;flex-wrap:wrap;background:var(--gold-lt);border:1px solid rgba(26,82,118,.2);border-radius:10px;padding:12px 14px">
+    <div style="font-size:12px;color:var(--text-2);flex:1;min-width:200px">
+      <strong style="color:var(--gold)">Pronto para gravar:</strong>
+      ${matchExatos.length > 0 ? `${matchExatos.length} movimentação(ões) com match exato serão gravadas como conferidas. ` : ''}
+      ${matchProx.length > 0 ? `${matchProx.length} aproximadas ficam pendentes.` : ''}
+    </div>
+    <button class="btn btn-sm btn-gold" onclick="processarExtrato()">⚡ Processar e gravar</button>
+  </div>` : ''}
+  ${!_concContaId ? `<div style="background:var(--red-lt);border:1px solid rgba(224,92,92,.2);border-radius:10px;padding:10px 14px;font-size:12px;color:var(--red)">⚠ Selecione uma conta acima antes de processar.</div>` : ''}
+
   <!-- Tabela de conciliação -->
   <div class="card" style="padding:0;overflow:hidden">
     <div style="padding:12px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px">
       <span style="font-size:11px;font-weight:700;color:var(--text)">Resultado da Conciliação · ${mes}</span>
     </div>
+    <div class="table-wrap">
     <table>
       <thead><tr>
         <th>Data Extrato</th><th>Descrição Extrato</th>
-        <th style="text-align:right">Valor Extrato</th>
+        <th style="text-align:right">Valor</th>
         <th>Lançamento Sistema</th>
-        <th style="text-align:right">Valor Sistema</th>
         <th>Status</th>
+        <th></th>
       </tr></thead>
       <tbody>
-        ${_concItems.map(ext => {
-          const match = matchItem(ext);
-          const status = match ? 'conciliado' : 'sem_match';
-          return `<tr style="${status==='sem_match'?'background:rgba(224,92,92,.04)':''}">
+        ${itensComMatch.map((ext, idx) => {
+          const status = ext._match ? (ext._match.exato ? 'exato' : 'proximo') : 'sem_match';
+          const corBg = status==='exato'?'rgba(30,132,73,.04)':status==='sem_match'?'rgba(224,92,92,.04)':'rgba(183,119,13,.04)';
+          const lanc = ext._match?.lanc;
+          const badge = status==='exato'?'<span class="badge badge-green">✓ Exato</span>':
+                        status==='proximo'?'<span class="badge badge-amber">~ Aproximado</span>':
+                        '<span class="badge badge-red">✕ Sem match</span>';
+          return `<tr style="background:${corBg}">
             <td style="font-family:var(--mono);font-size:11px;color:var(--text-2)">${ext.data}</td>
-            <td style="color:var(--text);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${ext.descricao}</td>
+            <td style="color:var(--text);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(ext.descricao)}</td>
             <td style="text-align:right;font-family:var(--mono);font-weight:700;color:${ext.valor>=0?'var(--green)':'var(--red)'}">${fmtMoeda(ext.valor)}</td>
-            <td style="color:${match?'var(--text-2)':'var(--text-3)'};max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${match?match.descricao:'—'}</td>
-            <td style="text-align:right;font-family:var(--mono);font-weight:700;color:${match?(match._valor>=0?'var(--green)':'var(--red)'):'var(--text-3)'}">${match?fmtMoeda(Math.abs(match._valor)):'—'}</td>
-            <td><span class="badge ${status==='conciliado'?'badge-green':'badge-red'}">${status==='conciliado'?'Conciliado':'Sem match'}</span></td>
+            <td style="color:${lanc?'var(--text-2)':'var(--text-3)'};max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${lanc?escapeHtml(lanc.descricao):'—'}</td>
+            <td>${badge}</td>
+            <td style="text-align:right;white-space:nowrap">
+              ${status==='sem_match' && _concContaId ? `<button class="btn btn-sm btn-gold" onclick="criarLancDoExtrato(${idx})" style="font-size:10.5px;padding:4px 10px">+ Criar</button>` : ''}
+              ${status==='proximo' && _concContaId ? `<button class="btn btn-sm" onclick="confirmarMatchAproximado(${idx})" style="font-size:10.5px;padding:4px 10px;background:var(--green);color:#fff;border:none">✓ Confirmar</button>` : ''}
+            </td>
           </tr>`;
         }).join('')}
         ${naoExtrato.map(l => `
           <tr style="background:rgba(224,154,58,.04)">
-            <td style="font-family:var(--mono);font-size:11px;color:var(--text-3)">—</td>
+            <td style="font-family:var(--mono);font-size:11px;color:var(--text-3)">${fmtData(l.vencimento)}</td>
             <td style="color:var(--text-3)">Só no sistema</td>
-            <td style="text-align:right;color:var(--text-3)">—</td>
-            <td style="color:var(--text);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${l.descricao}</td>
             <td style="text-align:right;font-family:var(--mono);font-weight:700;color:${l._valor>=0?'var(--green)':'var(--red)'}">${fmtMoeda(Math.abs(l._valor))}</td>
+            <td style="color:var(--text);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(l.descricao)}</td>
             <td><span class="badge badge-amber">Só sistema</span></td>
+            <td></td>
           </tr>`).join('')}
       </tbody>
     </table>
+    </div>
   </div>`}
 
   <!-- Resumo saldos -->
@@ -6933,20 +7710,209 @@ function renderConciliacao() {
   </div>`;
 }
 
+// ── v35 · Processa extrato gravando matches automaticamente ───────
+// Para cada item com match exato, marca o lançamento sistema como
+// recebido/pago e cria movimentação conferida na conta selecionada.
+async function processarExtrato() {
+  if (!_concContaId) { toast('Selecione uma conta primeiro.', 'error'); return; }
+
+  const recsM = RECEITAS.filter(r => r.vencimento?.startsWith(_concMes));
+  const despM = DESPESAS.filter(d => d.vencimento?.startsWith(_concMes));
+  const todos  = [
+    ...recsM.map(r => ({ ...r, _t:'rec', _valor: parseFloat(r.valor)||0 })),
+    ...despM.map(d => ({ ...d, _t:'dep', _valor: -(parseFloat(d.valor)||0) })),
+  ];
+
+  // Reidentifica matches exatos para gravar
+  const exatos = [];
+  for (const ext of _concItems) {
+    const m = todos.find(l =>
+      Math.abs(Math.abs(l._valor) - Math.abs(ext.valor)) < 0.01 &&
+      l.vencimento === ext.data &&
+      l.status !== 'recebido' && l.status !== 'pago' // não reprocessa
+    );
+    if (m) exatos.push({ ext, lanc: m });
+  }
+
+  if (exatos.length === 0) {
+    toast('Nada novo para gravar (todos já estão baixados ou não há match exato).', 'info');
+    return;
+  }
+
+  if (!await confirmarAcao(
+    `Processar ${exatos.length} matche(s) exato(s)?`,
+    `Os lançamentos serão marcados como ${exatos.some(e=>e.lanc._t==='rec')?'recebidos/':''}pagos e gravados como conferidos na conta selecionada.`,
+    { tipo:'gold', labelOk:'Processar' }
+  )) return;
+
+  let ok = 0, erro = 0;
+  for (const { ext, lanc } of exatos) {
+    try {
+      const tabela = lanc._t === 'rec' ? 'fin_receitas' : 'fin_despesas';
+      const novoStatus = lanc._t === 'rec' ? 'recebido' : 'pago';
+      const campoData = lanc._t === 'rec' ? 'recebido_em' : 'pago_em';
+      // 1) Marca lançamento como baixado
+      await supa('PATCH', tabela, {
+        params: { id: `eq.${lanc.id}` },
+        body: { status: novoStatus, [campoData]: ext.data, conta_id: _concContaId },
+      });
+      // 2) Cria movimentação JÁ conferida
+      const mov = {
+        tenant_id: APP.tenantId,
+        conta_id:  _concContaId,
+        tipo:      lanc._t === 'rec' ? 'entrada' : 'saida',
+        valor:     Math.abs(parseFloat(lanc.valor)||0),
+        data:      ext.data,
+        descricao: lanc.descricao || ext.descricao,
+        origem:    'importacao_extrato',
+        conferido: true,
+        conferido_em: new Date().toISOString(),
+      };
+      if (lanc._t === 'rec') mov.receita_id = lanc.id;
+      else                   mov.despesa_id = lanc.id;
+      await supa('POST', 'fin_movimentacoes', { body: mov });
+      ok++;
+    } catch(e) {
+      console.error('Erro processando match:', e.message);
+      erro++;
+    }
+  }
+
+  toast(`${ok} lançamento(s) gravado(s) e conferido(s)${erro?` · ${erro} erro(s)`:''}.`, ok?'success':'error');
+  // Recarrega tudo afetado
+  await Promise.all([
+    recarregarApenas('fin_receitas'),
+    recarregarApenas('fin_despesas'),
+    recarregarApenas('fin_contas'),
+  ]);
+  renderConciliacao();
+}
+
+// ── v35 · Confirma um match aproximado (cliente confirma) ─────────
+async function confirmarMatchAproximado(idx) {
+  const ext = _concItems[idx]; if (!ext) return;
+  if (!_concContaId) { toast('Selecione uma conta primeiro.', 'error'); return; }
+
+  // Refaz o match
+  const recsM = RECEITAS.filter(r => r.vencimento?.startsWith(_concMes));
+  const despM = DESPESAS.filter(d => d.vencimento?.startsWith(_concMes));
+  const todos  = [
+    ...recsM.map(r => ({ ...r, _t:'rec', _valor: parseFloat(r.valor)||0 })),
+    ...despM.map(d => ({ ...d, _t:'dep', _valor: -(parseFloat(d.valor)||0) })),
+  ];
+  const lanc = todos.find(l =>
+    Math.abs(Math.abs(l._valor) - Math.abs(ext.valor)) <= 2 &&
+    Math.abs(new Date(l.vencimento+'T12:00:00') - new Date(ext.data+'T12:00:00')) <= 3*86400000
+  );
+  if (!lanc) { toast('Match não encontrado.', 'error'); return; }
+
+  if (!await confirmarAcao(
+    'Confirmar match aproximado?',
+    `Sistema: ${lanc.descricao} · ${fmtMoeda(Math.abs(lanc._valor))} em ${fmtData(lanc.vencimento)}\nExtrato: ${ext.descricao} · ${fmtMoeda(ext.valor)} em ${ext.data}`,
+    { tipo:'gold', labelOk:'Confirmar' }
+  )) return;
+
+  try {
+    const tabela = lanc._t === 'rec' ? 'fin_receitas' : 'fin_despesas';
+    const novoStatus = lanc._t === 'rec' ? 'recebido' : 'pago';
+    const campoData = lanc._t === 'rec' ? 'recebido_em' : 'pago_em';
+    await supa('PATCH', tabela, {
+      params: { id: `eq.${lanc.id}` },
+      body: { status: novoStatus, [campoData]: ext.data, conta_id: _concContaId },
+    });
+    const mov = {
+      tenant_id: APP.tenantId,
+      conta_id:  _concContaId,
+      tipo:      lanc._t === 'rec' ? 'entrada' : 'saida',
+      valor:     Math.abs(parseFloat(lanc.valor)||0),
+      data:      ext.data,
+      descricao: lanc.descricao,
+      origem:    'importacao_extrato',
+      conferido: true,
+      conferido_em: new Date().toISOString(),
+    };
+    if (lanc._t === 'rec') mov.receita_id = lanc.id;
+    else                   mov.despesa_id = lanc.id;
+    await supa('POST', 'fin_movimentacoes', { body: mov });
+
+    toast('Conciliado!', 'success');
+    await Promise.all([
+      recarregarApenas('fin_receitas'),
+      recarregarApenas('fin_despesas'),
+      recarregarApenas('fin_contas'),
+    ]);
+    renderConciliacao();
+  } catch(e) { toast('Erro: ' + e.message, 'error'); }
+}
+
+// ── v35 · Cria lançamento avulso a partir de item de extrato ──────
+async function criarLancDoExtrato(idx) {
+  const ext = _concItems[idx]; if (!ext) return;
+  if (!_concContaId) { toast('Selecione uma conta primeiro.', 'error'); return; }
+  const ehReceita = ext.valor >= 0;
+  const valor = Math.abs(ext.valor);
+
+  if (!await confirmarAcao(
+    `Criar ${ehReceita?'receita':'despesa'} a partir do extrato?`,
+    `${ext.descricao} · ${fmtMoeda(ext.valor)} em ${ext.data}\n\nO lançamento será criado já como ${ehReceita?'recebido':'pago'} e conferido.`,
+    { tipo:'gold', labelOk:'Criar' }
+  )) return;
+
+  try {
+    const tabela = ehReceita ? 'fin_receitas' : 'fin_despesas';
+    const body = {
+      tenant_id:   APP.tenantId,
+      descricao:   ext.descricao,
+      valor,
+      vencimento:  ext.data,
+      conta_id:    _concContaId,
+      status:      ehReceita ? 'recebido' : 'pago',
+    };
+    if (ehReceita) body.recebido_em = ext.data;
+    else           body.pago_em = ext.data;
+
+    const criado = await supa('POST', tabela, { returning: true, body });
+    const reg = Array.isArray(criado) ? criado[0] : null;
+
+    if (reg) {
+      const mov = {
+        tenant_id: APP.tenantId,
+        conta_id:  _concContaId,
+        tipo:      ehReceita ? 'entrada' : 'saida',
+        valor,
+        data:      ext.data,
+        descricao: ext.descricao,
+        origem:    'importacao_extrato',
+        conferido: true,
+        conferido_em: new Date().toISOString(),
+      };
+      if (ehReceita) mov.receita_id = reg.id;
+      else           mov.despesa_id = reg.id;
+      await supa('POST', 'fin_movimentacoes', { body: mov });
+    }
+
+    toast('Lançamento criado e conferido!', 'success');
+    await Promise.all([
+      recarregarApenas('fin_receitas'),
+      recarregarApenas('fin_despesas'),
+      recarregarApenas('fin_contas'),
+    ]);
+    renderConciliacao();
+  } catch(e) { toast('Erro: ' + e.message, 'error'); }
+}
+
 function importarExtrato(input) {
   const file = input.files[0]; if (!file) return;
   const reader = new FileReader();
-  reader.onload = e => {
+  reader.onload = async e => {
     const text = e.target.result;
     const linhas = text.split('\n').map(l => l.trim()).filter(Boolean);
     const items = [];
     for (const linha of linhas) {
-      // Suporta ; e , como separador
       const sep = linha.includes(';') ? ';' : ',';
       const cols = linha.split(sep).map(c => c.replace(/"/g,'').trim());
       if (cols.length < 3) continue;
       const [col0, col1, col2] = cols;
-      // Ignora cabeçalho
       if (isNaN(parseFloat(col2.replace(',','.'))) ) continue;
       const data = col0.length===10 ? col0 : null;
       if (!data) continue;
@@ -6958,11 +7924,112 @@ function importarExtrato(input) {
     }
     if (!items.length) { toast('Nenhum item encontrado no CSV. Verifique o formato.', 'error'); return; }
     _concItems = items;
-    toast(`${items.length} itens importados!`, 'success');
+
+    // ── v35 · Auto-gravação de match exato sem clique adicional ─────
+    // Conta o número de matches exatos com lançamentos ainda não baixados
+    if (_concContaId && CONTAS.length > 0) {
+      const recsM = (RECEITAS||[]).filter(r => r.vencimento?.startsWith(_concMes));
+      const despM = (DESPESAS||[]).filter(d => d.vencimento?.startsWith(_concMes));
+      const todos = [
+        ...recsM.map(r => ({ ...r, _t:'rec', _valor: parseFloat(r.valor)||0 })),
+        ...despM.map(d => ({ ...d, _t:'dep', _valor: -(parseFloat(d.valor)||0) })),
+      ];
+      const exatosNovos = items.filter(ext =>
+        todos.some(l =>
+          Math.abs(Math.abs(l._valor) - Math.abs(ext.valor)) < 0.01
+          && l.vencimento === ext.data
+          && l.status !== 'recebido' && l.status !== 'pago'
+        )
+      ).length;
+
+      if (exatosNovos > 0) {
+        toast(`${items.length} itens importados · ${exatosNovos} match(es) exato(s) → gravando como conferido…`, 'success');
+        // Renderiza primeiro para o usuário ver os matches
+        renderConciliacao();
+        // Depois processa os matches exatos automaticamente, sem confirmação
+        await processarExtratoAuto();
+        return;
+      }
+    }
+
+    toast(`${items.length} itens importados! Revise os matches abaixo.`, 'success');
     renderConciliacao();
   };
   reader.readAsText(file, 'UTF-8');
   input.value = '';
+}
+
+// ── v35 · Versão silenciosa de processarExtrato (sem confirmação) ──
+// Usada após importação de CSV: grava matches exatos automaticamente
+// e os não-match seguem como pendente de revisão manual.
+async function processarExtratoAuto() {
+  if (!_concContaId || !_concItems.length) return;
+
+  const recsM = (RECEITAS||[]).filter(r => r.vencimento?.startsWith(_concMes));
+  const despM = (DESPESAS||[]).filter(d => d.vencimento?.startsWith(_concMes));
+  const todos = [
+    ...recsM.map(r => ({ ...r, _t:'rec', _valor: parseFloat(r.valor)||0 })),
+    ...despM.map(d => ({ ...d, _t:'dep', _valor: -(parseFloat(d.valor)||0) })),
+  ];
+
+  const exatos = [];
+  const usados = new Set();
+  for (const ext of _concItems) {
+    const m = todos.find(l =>
+      !usados.has(l.id) &&
+      Math.abs(Math.abs(l._valor) - Math.abs(ext.valor)) < 0.01 &&
+      l.vencimento === ext.data &&
+      l.status !== 'recebido' && l.status !== 'pago'
+    );
+    if (m) { exatos.push({ ext, lanc: m }); usados.add(m.id); }
+  }
+
+  if (exatos.length === 0) return;
+
+  let ok = 0, erro = 0;
+  for (const { ext, lanc } of exatos) {
+    try {
+      const tabela     = lanc._t === 'rec' ? 'fin_receitas' : 'fin_despesas';
+      const novoStatus = lanc._t === 'rec' ? 'recebido' : 'pago';
+      const campoData  = lanc._t === 'rec' ? 'recebido_em' : 'pago_em';
+      await supa('PATCH', tabela, {
+        params: { id: `eq.${lanc.id}` },
+        body: { status: novoStatus, [campoData]: ext.data, conta_id: _concContaId },
+      });
+      const mov = {
+        tenant_id: APP.tenantId,
+        conta_id:  _concContaId,
+        tipo:      lanc._t === 'rec' ? 'entrada' : 'saida',
+        valor:     Math.abs(parseFloat(lanc.valor)||0),
+        data:      ext.data,
+        descricao: lanc.descricao || ext.descricao,
+        origem:    'importacao_extrato',
+        conferido: true,
+        conferido_em: new Date().toISOString(),
+      };
+      if (lanc._t === 'rec') mov.receita_id = lanc.id;
+      else                   mov.despesa_id = lanc.id;
+      await supa('POST', 'fin_movimentacoes', { body: mov });
+      ok++;
+    } catch(e) {
+      console.error('Erro processando match auto:', e.message);
+      erro++;
+    }
+  }
+
+  // Remove os items processados do _concItems para não exibirem mais
+  const dataValorProcessados = new Set(exatos.map(x => `${x.ext.data}|${x.ext.valor}`));
+  _concItems = _concItems.filter(i => !dataValorProcessados.has(`${i.data}|${i.valor}`));
+
+  toast(`${ok} lançamento(s) gravado(s) automaticamente como conferido(s)${erro?` · ${erro} erro(s)`:''}.`, ok?'success':'error');
+  await Promise.all([
+    recarregarApenas('fin_receitas'),
+    recarregarApenas('fin_despesas'),
+    recarregarApenas('fin_contas'),
+  ]);
+  // Recalcula saldo da conta usada
+  if (_concContaId) await recalcularSaldoConta(_concContaId);
+  renderConciliacao();
 }
 
 

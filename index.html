@@ -941,6 +941,19 @@ tbody td { padding: 11px 16px; font-size: 13px; }
 </div>
 
 <script>
+// ═══════════════════════════════════════════════════════════════════
+// FINANCEIRO PRO · v36 (2026-05-09)
+// ═══════════════════════════════════════════════════════════════════
+// Mudanças desde v35:
+//   ✓ importarPlanoContabil agora persiste em fin_plano_contabil (Supabase)
+//     em vez de localStorage — corrige multi-tenancy do plano contábil.
+//   ✓ rc-tipo (Recorrência) renomeado para rec-tipo — elimina conflito
+//     de DOM com o select da Regra de Categorização.
+//   ✓ abrirPDF detecta popup-blocker (toast em vez de null deref no Android).
+//   ✓ Aviso permanente "Crie tabela fin_impostos" removido da UI.
+//   ✓ ~440 linhas de código morto removidas (16 funções órfãs).
+// ═══════════════════════════════════════════════════════════════════
+
 // ── CONFIG ────────────────────────────────────────────────────
 const SUPA_URL = 'https://vuwgxndahrzinfdlapxz.supabase.co';
 const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ1d2d4bmRhaHJ6aW5mZGxhcHh6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ3NTA0ODgsImV4cCI6MjA5MDMyNjQ4OH0.9DaPGHIxt0CO-pjYPBwsHaoSqDN35CwVU0lJUyTXQIQ';
@@ -2080,37 +2093,8 @@ function invalidarCacheDashboard() {
   }
 }
 
-async function fetchDashboardKpis(dataRef) {
-  return _rpcCacheado('fin_dashboard_kpis', {
-    p_tenant_id: APP.tenantId,
-    p_data_ref:  dataRef || today(),
-  });
-}
-
-async function fetchDre(dataInicio, dataFim) {
-  return _rpcCacheado('fin_dre', {
-    p_tenant_id:   APP.tenantId,
-    p_data_inicio: dataInicio,
-    p_data_fim:    dataFim,
-  });
-}
-
-async function fetchFluxo(dataInicio, dataFim) {
-  return _rpcCacheado('fin_fluxo', {
-    p_tenant_id:   APP.tenantId,
-    p_data_inicio: dataInicio,
-    p_data_fim:    dataFim,
-  });
-}
-
-// Helper para período de mês a partir de uma string YYYY-MM
-function _periodoMes(yyyymm) {
-  const [yyyy, mm] = yyyymm.split('-').map(Number);
-  const inicio = `${yyyy}-${String(mm).padStart(2,'0')}-01`;
-  const ultDia = new Date(yyyy, mm, 0).getDate();
-  const fim    = `${yyyy}-${String(mm).padStart(2,'0')}-${ultDia}`;
-  return { inicio, fim };
-}
+// v36 · fetchDashboardKpis, fetchDre, fetchFluxo e _periodoMes removidos
+//   (eram wrappers triviais sobre _rpcCacheado, hoje chamado direto onde precisa).
 
 // ── DASHBOARD ─────────────────────────────────────────────────
 // ── v35 · Estado de período do Dashboard ──────────────────────
@@ -2174,11 +2158,7 @@ function dashToggleGraf(qual) {
   renderDashboard();
 }
 
-// Filtra um array de lançamentos pelo período (usa vencimento)
-function dashFiltrarPeriodo(arr, periodo, campo='vencimento') {
-  const { ini, fim } = dashIntervalo(periodo);
-  return arr.filter(x => x[campo] >= ini && x[campo] <= fim);
-}
+// v36 · dashFiltrarPeriodo removido (não usado).
 
 function renderDashboard() {
   const hoje = today();
@@ -7155,7 +7135,7 @@ function modalNovaRecorrencia() {
     <div class="form-grid">
       <div class="form-field full"><label class="form-label">Descrição *</label><input class="form-input" id="rc-desc" placeholder="Ex: Honorário contábil mensal"></div>
       <div class="form-field"><label class="form-label">Tipo *</label>
-        <select class="form-select" id="rc-tipo" onchange="atualizarCamposRecorrencia()">
+        <select class="form-select" id="rec-tipo" onchange="atualizarCamposRecorrencia()">
           <option value="receita">Receita</option>
           <option value="despesa">Despesa</option>
         </select>
@@ -7204,7 +7184,7 @@ function modalNovaRecorrencia() {
 }
 
 function atualizarCamposRecorrencia() {
-  const tipo  = ($id('rc-tipo')||{}).value;
+  const tipo  = ($id('rec-tipo')||{}).value;
   const freq  = ($id('rc-freq')||{}).value;
   const cliW  = $id('rc-cli-wrap');
   const forW  = $id('rc-for-wrap');
@@ -7218,7 +7198,7 @@ async function salvarRecorrencia() {
   const desc  = $id('rc-desc').value.trim();
   const valor = parseFloat($id('rc-valor').value);
   const inicio = $id('rc-inicio').value;
-  const tipo  = $id('rc-tipo').value;
+  const tipo  = $id('rec-tipo').value;
   const freq  = $id('rc-freq').value;
   if (!desc || !valor || !inicio) { toast('Preencha os campos obrigatórios.', 'error'); return; }
   try {
@@ -7356,11 +7336,6 @@ function renderImpostos() {
 
   $id('page-content').innerHTML = `
   <div style="display:flex;flex-direction:column;gap:16px">
-
-  <!-- SQL helper -->
-  <div style="background:rgba(201,168,76,.06);border:1px solid rgba(201,168,76,.2);border-radius:10px;padding:12px 16px;font-size:12px;color:var(--text-2);line-height:1.6">
-    <strong style="color:var(--gold)">Configuração:</strong> Crie a tabela <code style="background:var(--surface-2);padding:1px 6px;border-radius:4px;font-family:var(--mono);font-size:11px">fin_impostos</code> no Supabase SQL Editor antes de usar. Script no código-fonte.
-  </div>
 
   <!-- KPIs -->
   <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr)">
@@ -8150,9 +8125,7 @@ function htmlWidgetAnexos(tipoRef, refId) {
 // ============================================================
 const CLAUDE_PROXY_URL = `${SUPA_URL}/functions/v1/validar-anexos`;
 
-function soDigitos(s) {
-  return (s || '').toString().replace(/\D/g, '');
-}
+// v36 · soDigitos removido (não usado; substituído por .replace(/\D/g,'') inline).
 
 function fileToBase64(file) {
   return new Promise((resolve, reject) => {
@@ -9078,13 +9051,7 @@ function _xmlBatchResumo() {
   window._XMLBatch.ativo = false;
 }
 
-// ── Helpers de XML (extração robusta) ──────────────────────────────
-function _xmlGetNested(doc, rootTag, childTag) {
-  const root = doc.getElementsByTagName(rootTag)[0];
-  if (!root) return '';
-  const child = root.getElementsByTagName(childTag)[0];
-  return child?.textContent?.trim() || '';
-}
+// v36 · _xmlGetNested removido (não usado).
 
 // Extrai dados de uma entidade (<emit>/<dest> da NFe, ou <Prestador>/<Tomador> da NFSe)
 // Retorna objeto normalizado: { cpf_cnpj, nome, nome_fantasia, ie, im, endereco... }
@@ -10425,338 +10392,9 @@ async function processarPDFAutoDoc(id, file) {
     dadosLista[0]?.tipo || null);
 }
 
-// ── MÓDULO 2: IMPORTAR EXTRATO OFX/CSV → LANÇAMENTOS ──────────
-let _extratoPreview = [];
-
-function renderImportarExtrato() {
-  openModal('Importar Extrato Bancário', `
-    <div style="font-size:12.5px;color:var(--text-2);line-height:1.6;margin-bottom:16px">
-      Importe seu extrato bancário e gere lançamentos automaticamente.
-      Formatos suportados: <strong>OFX</strong> (padrão bancário) e <strong>CSV</strong>.
-    </div>
-    <div style="background:var(--surface-2);border-radius:9px;padding:12px 14px;border:1px solid var(--border);margin-bottom:14px;font-size:11.5px;color:var(--text-3)">
-      <strong style="color:var(--text-2)">Formato CSV esperado:</strong><br>
-      <code style="font-family:var(--mono);font-size:11px">data;descricao;valor</code><br>
-      Ex: <code style="font-family:var(--mono);font-size:11px">2025-04-01;Honorário cliente;5000.00</code>
-    </div>
-    <label style="display:flex;align-items:center;gap:10px;padding:14px;background:var(--gold-lt);border:2px dashed var(--gold);border-radius:9px;cursor:pointer;font-size:13px;color:var(--gold);font-weight:600;justify-content:center">
-      📂 Clique para selecionar o arquivo OFX ou CSV
-      <input type="file" accept=".ofx,.csv,.txt" style="display:none" onchange="processarArquivoExtrato(this)">
-    </label>
-    <div id="extrato-preview"></div>`,
-    `<button class="btn btn-outline" onclick="closeModal()">Fechar</button>
-     <button class="btn btn-gold" id="btn-importar-extrato" style="display:none" onclick="confirmarImportacaoExtrato()">Importar lançamentos</button>`
-  );
-}
-
-function processarArquivoExtrato(input) {
-  const file = input.files[0]; if (!file) return;
-  const reader = new FileReader();
-  reader.onload = e => {
-    const text = e.target.result;
-    let items = [];
-
-    // Tentar OFX
-    if (file.name.toLowerCase().endsWith('.ofx') || text.includes('<OFX>') || text.includes('<STMTTRN>')) {
-      items = parseOFX(text);
-    } else {
-      // CSV
-      const linhas = text.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
-      for (const linha of linhas) {
-        const sep = linha.includes(';') ? ';' : ',';
-        const cols = linha.split(sep).map(c=>c.replace(/"/g,'').trim());
-        if (cols.length < 3) continue;
-        const valor = parseFloat(cols[2].replace(',','.'));
-        if (isNaN(valor)) continue;
-        const data = cols[0].length===10 ? cols[0] : null;
-        if (!data) continue;
-        items.push({ data, descricao: cols[1]||'—', valor, tipo: valor>=0?'receita':'despesa' });
-      }
-    }
-
-    if (!items.length) { document.getElementById('extrato-preview').innerHTML = '<div style="color:var(--red);font-size:12px;margin-top:12px">Nenhum item encontrado. Verifique o formato do arquivo.</div>'; return; }
-
-    _extratoPreview = items;
-    const preview = document.getElementById('extrato-preview');
-    const totalR = items.filter(i=>i.tipo==='receita').reduce((s,i)=>s+i.valor,0);
-    const totalD = items.filter(i=>i.tipo==='despesa').reduce((s,i)=>s+Math.abs(i.valor),0);
-
-    preview.innerHTML = `
-      <div style="margin-top:14px">
-        <div style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap">
-          <span style="font-size:12px;background:var(--green-lt);color:var(--green);padding:4px 10px;border-radius:20px;font-weight:600">${items.filter(i=>i.tipo==='receita').length} entradas · ${fmtMoeda(totalR)}</span>
-          <span style="font-size:12px;background:var(--red-lt);color:var(--red);padding:4px 10px;border-radius:20px;font-weight:600">${items.filter(i=>i.tipo==='despesa').length} saídas · ${fmtMoeda(totalD)}</span>
-        </div>
-        <div style="max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:9px">
-          <table style="width:100%;border-collapse:collapse">
-            <thead><tr style="background:var(--surface-2)">
-              <th style="padding:7px 12px;text-align:left;font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase">Data</th>
-              <th style="padding:7px 12px;text-align:left;font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase">Descrição</th>
-              <th style="padding:7px 12px;text-align:right;font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase">Valor</th>
-              <th style="padding:7px 12px;text-align:center;font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase">Tipo</th>
-            </tr></thead>
-            <tbody>
-              ${items.map(i=>`<tr style="border-bottom:1px solid var(--border)">
-                <td style="padding:6px 12px;font-family:var(--mono);font-size:11px;color:var(--text-2)">${i.data}</td>
-                <td style="padding:6px 12px;font-size:12px;color:var(--text);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${i.descricao}</td>
-                <td style="padding:6px 12px;font-family:var(--mono);font-weight:700;text-align:right;color:${i.tipo==='receita'?'var(--green)':'var(--red)'}">${fmtMoeda(Math.abs(i.valor))}</td>
-                <td style="padding:6px 12px;text-align:center"><span class="badge ${i.tipo==='receita'?'badge-green':'badge-red'}">${i.tipo==='receita'?'Receita':'Despesa'}</span></td>
-              </tr>`).join('')}
-            </tbody>
-          </table>
-        </div>
-        <div style="margin-top:10px;font-size:11.5px;color:var(--text-3)">Todos os lançamentos serão criados como <strong>Pendentes</strong>. Você pode editar ou excluir depois.</div>
-      </div>`;
-    document.getElementById('btn-importar-extrato').style.display = 'inline-flex';
-  };
-  reader.readAsText(file, 'UTF-8');
-  input.value = '';
-}
-
-function parseOFX(text) {
-  // Extrai header (banco/conta) — pode vir de <BANKACCTFROM> ou <CCACCTFROM>
-  const _getHeader = (tag) => {
-    const r = new RegExp('<'+tag+'>([^<\\r\\n]+)','i').exec(text);
-    return r ? r[1].trim() : '';
-  };
-  const header = {
-    bankid: _getHeader('BANKID'),         // Código do banco (ex: 001 = BB, 341 = Itaú)
-    branchid: _getHeader('BRANCHID'),     // Agência
-    acctid:   _getHeader('ACCTID'),       // Conta
-    org:      _getHeader('ORG'),          // Organização (banco)
-    fid:      _getHeader('FID'),          // Identificador da instituição
-  };
-
-  const items = [];
-  const regex = /<STMTTRN>([\s\S]*?)<\/STMTTRN>/g;
-  let m;
-  while ((m = regex.exec(text)) !== null) {
-    const bloco = m[1];
-    const getTag = (tag) => { const r = new RegExp('<'+tag+'>([^<\\r\\n]+)','i').exec(bloco); return r?r[1].trim():''; };
-    const dtpost = getTag('DTPOSTED');
-    const trnamt = getTag('TRNAMT');
-    const memo   = getTag('MEMO') || getTag('NAME') || '—';
-    if (!dtpost || !trnamt) continue;
-    // Converter data OFX (YYYYMMDD) para ISO
-    const data = dtpost.length>=8 ? `${dtpost.slice(0,4)}-${dtpost.slice(4,6)}-${dtpost.slice(6,8)}` : null;
-    if (!data) continue;
-    const valor = parseFloat(trnamt.replace(',','.'));
-    if (isNaN(valor)) continue;
-    items.push({ data, descricao: memo, valor, tipo: valor>=0?'receita':'despesa' });
-  }
-  // Anexa header como propriedade não-enumerável (pra não quebrar quem itera)
-  Object.defineProperty(items, 'header', { value: header, enumerable: false });
-  return items;
-}
-
-// ═══════════════════════════════════════════════════════════════
-// VALIDAÇÃO DO EXTRATO contra empresa ativa
-// ═══════════════════════════════════════════════════════════════
-// Tenta confirmar que o extrato pertence à empresa ativa por:
-// 1. Banco + agência + conta batem com fin_contas da empresa
-// 2. Se não bater, tenta nome (ORG/FID) bate com nome da empresa
-// Retorna: { ok, motivo, contexto }
-function _validarExtratoContraEmpresa(header, primeirasMemos) {
-  const tenantNome = (APP.tenant?.nome || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
-  const ehEmpresaAtual = (s) => {
-    if (!s) return false;
-    const norm = String(s).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
-    return tenantNome && (norm.includes(tenantNome) || tenantNome.includes(norm));
-  };
-
-  // ── Validação 1: banco/conta em fin_contas
-  if (header && (header.bankid || header.acctid)) {
-    const acctClean = (header.acctid||'').replace(/\D/g,'');
-    const branchClean = (header.branchid||'').replace(/\D/g,'');
-    const achouConta = (CONTAS||[]).find(c => {
-      const cBanco = (c.banco||'').replace(/\D/g,'');
-      const cConta = (c.conta||'').replace(/\D/g,'');
-      const cAg    = (c.agencia||'').replace(/\D/g,'');
-      const matchBanco = !header.bankid || cBanco === header.bankid || (c.banco||'').includes(header.bankid);
-      const matchConta = acctClean && cConta === acctClean;
-      const matchAg    = !branchClean || cAg === branchClean;
-      return matchConta && matchBanco && matchAg;
-    });
-    if (achouConta) {
-      return {
-        ok: true,
-        motivo: `Conta ${achouConta.nome} encontrada no cadastro da empresa.`,
-        contexto: { contaId: achouConta.id, nomeConta: achouConta.nome }
-      };
-    }
-  }
-
-  // ── Validação 2: ORG/FID bate com nome da empresa
-  if (header && (ehEmpresaAtual(header.org) || ehEmpresaAtual(header.fid))) {
-    return {
-      ok: true,
-      motivo: `Identificação do banco coincide com o nome da empresa.`,
-      contexto: { fonte: 'org_fid' }
-    };
-  }
-
-  // ── Não bateu — divergência
-  return {
-    ok: false,
-    motivo: 'Extrato não pôde ser associado à empresa ativa por banco/conta nem por nome.',
-    contexto: {
-      banco_arquivo:    header?.bankid || header?.org || '—',
-      conta_arquivo:    header?.acctid || '—',
-      agencia_arquivo:  header?.branchid || '—',
-      empresa_ativa:    APP.tenant?.nome || '—',
-      cnpj_empresa:     APP.tenant?.cnpj || '—',
-    }
-  };
-}
-
-async function confirmarImportacaoExtrato() {
-  if (!_extratoPreview.length) return;
-  const btn = document.getElementById('btn-importar-extrato');
-  btn.disabled = true; btn.textContent = 'Importando...';
-  let ok = 0, err = 0;
-  for (const item of _extratoPreview) {
-    try {
-      const body = {
-        tenant_id:  APP.tenantId,
-        descricao:  item.descricao,
-        valor:      Math.abs(item.valor),
-        vencimento: item.data,
-        status:     'pendente',
-        observacao: 'Importado do extrato bancário',
-      };
-      if (item.tipo==='receita') await supa('POST', 'fin_receitas', { body });
-      else                       await supa('POST', 'fin_despesas', { body });
-      ok++;
-    } catch(_) { err++; }
-  }
-  closeModal();
-  await Promise.all([
-    recarregarApenas('fin_receitas'),
-    recarregarApenas('fin_despesas'),
-  ]);
-  toast(`${ok} lançamento(s) importado(s)${err?' · '+err+' erro(s)':''}!`, ok>0?'success':'error');
-  _extratoPreview = [];
-}
-
-// ── MÓDULO 3: IMPORTAR XML NF-e ───────────────────────────────
-function renderImportarNFe() {
-  openModal('Importar XML de Nota Fiscal (NF-e)', `
-    <div style="font-size:12.5px;color:var(--text-2);line-height:1.6;margin-bottom:16px">
-      Importe o XML da NF-e padrão SEFAZ e crie a receita automaticamente com os dados extraídos.
-    </div>
-    <label style="display:flex;align-items:center;gap:10px;padding:14px;background:var(--gold-lt);border:2px dashed var(--gold);border-radius:9px;cursor:pointer;font-size:13px;color:var(--gold);font-weight:600;justify-content:center">
-      📋 Clique para selecionar o arquivo XML da NF-e
-      <input type="file" accept=".xml" style="display:none" onchange="processarXMLNFe(this)">
-    </label>
-    <div id="nfe-preview"></div>`,
-    `<button class="btn btn-outline" onclick="closeModal()">Fechar</button>
-     <button class="btn btn-gold" id="btn-importar-nfe" style="display:none" onclick="confirmarImportacaoNFe()">Criar receita</button>`
-  );
-}
-
-let _nfeData = null;
-
-function processarXMLNFe(input) {
-  const file = input.files[0]; if (!file) return;
-  const reader = new FileReader();
-  reader.onload = e => {
-    try {
-      const parser = new DOMParser();
-      const doc    = parser.parseFromString(e.target.result, 'text/xml');
-      const get    = (tag) => doc.getElementsByTagName(tag)[0]?.textContent?.trim() || '';
-
-      const nNF    = get('nNF');
-      const dhEmi  = get('dhEmi') || get('dEmi');
-      const data   = dhEmi ? dhEmi.slice(0,10) : today();
-      const vNF    = get('vNF');
-      const xNome  = get('xNome'); // emitente
-      const CNPJ   = get('CNPJ');
-      const xMun   = get('xMun');
-      const desc   = `NF-e nº ${nNF} — ${xNome}`;
-
-      if (!vNF) { document.getElementById('nfe-preview').innerHTML = '<div style="color:var(--red);font-size:12px;margin-top:12px">XML inválido ou não é uma NF-e padrão SEFAZ.</div>'; return; }
-
-      // ═══ VALIDAÇÃO CNPJ ═══════════════════════════════════════
-      const cnpjEmpresa = (APP.tenant?.cnpj||'').replace(/\D/g,'');
-      const cnpjEmit    = (CNPJ||'').replace(/\D/g,'');
-      const cnpjDest    = (get('CNPJ') ? '' : get('CPF')) || '';
-      // Pega CNPJ do destinatário (segundo bloco "dest")
-      const allCNPJs    = [...doc.getElementsByTagName('CNPJ')].map(el => el.textContent.trim());
-      const cnpjDestino = allCNPJs[1] || ''; // primeiro é emit, segundo é dest
-
-      if (!cnpjEmpresa) {
-        document.getElementById('nfe-preview').innerHTML = `<div style="color:var(--red);font-size:12px;margin-top:12px;background:var(--red-lt);padding:10px;border-radius:8px;border:1px solid var(--red)">⚠️ Empresa "${APP.tenant?.nome||'ativa'}" sem CNPJ cadastrado. Configure em "Empresas" antes de importar.</div>`;
-        return;
-      }
-      if (cnpjEmit && cnpjDestino && cnpjEmpresa !== cnpjEmit && cnpjEmpresa !== cnpjDestino) {
-        document.getElementById('nfe-preview').innerHTML = `<div style="color:var(--red);font-size:12px;margin-top:12px;background:var(--red-lt);padding:10px;border-radius:8px;border:1px solid var(--red)">⚠️ <strong>Documento de outra empresa.</strong><br>CNPJ ativo: ${_formatCNPJ(cnpjEmpresa)}<br>Emitente: ${_formatCNPJ(cnpjEmit)||'—'}<br>Destinatário: ${_formatCNPJ(cnpjDestino)||'—'}</div>`;
-        return;
-      }
-      // ═══════════════════════════════════════════════════════════
-
-      _nfeData = { desc, valor: parseFloat(vNF), data, nNF, xNome, CNPJ, xMun };
-
-      document.getElementById('nfe-preview').innerHTML = `
-        <div style="margin-top:14px;background:var(--surface-2);border-radius:9px;padding:14px;border:1px solid var(--border)">
-          <div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:10px">Dados extraídos da NF-e</div>
-          ${[
-            ['Número', nNF],
-            ['Data de emissão', fmtData(data)],
-            ['Emitente', xNome],
-            ['CNPJ emitente', CNPJ],
-            ['Município', xMun],
-            ['Valor total', fmtMoeda(parseFloat(vNF))],
-          ].map(([l,v])=>`
-            <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border)">
-              <span style="font-size:11.5px;color:var(--text-3)">${l}</span>
-              <strong style="font-size:12px;color:var(--text)">${v||'—'}</strong>
-            </div>`).join('')}
-          <div style="margin-top:12px">
-            <label class="form-label">Categoria (opcional)</label>
-            <select class="form-select" id="nfe-cat" style="margin-top:4px">
-              <option value="">— Nenhuma —</option>
-              ${CATEGORIAS.filter(c=>c.tipo==='receita'||c.tipo==='ambos').map(c=>`<option value="${c.id}">${c.icone||''} ${c.nome}</option>`).join('')}
-            </select>
-          </div>
-          <div style="margin-top:10px">
-            <label class="form-label">Cliente (opcional)</label>
-            <select class="form-select" id="nfe-cli" style="margin-top:4px">
-              <option value="">— Nenhum —</option>
-              ${CLIENTES.map(c=>`<option value="${c.id}">${c.nome}</option>`).join('')}
-            </select>
-          </div>
-        </div>`;
-      document.getElementById('btn-importar-nfe').style.display = 'inline-flex';
-    } catch(err) {
-      document.getElementById('nfe-preview').innerHTML = `<div style="color:var(--red);font-size:12px;margin-top:12px">Erro ao processar XML: ${err.message}</div>`;
-    }
-  };
-  reader.readAsText(file, 'UTF-8');
-  input.value = '';
-}
-
-async function confirmarImportacaoNFe() {
-  if (!_nfeData) return;
-  const btn = document.getElementById('btn-importar-nfe');
-  btn.disabled = true; btn.textContent = 'Criando...';
-  try {
-    await supa('POST', 'fin_receitas', { body: {
-      tenant_id:    APP.tenantId,
-      descricao:    _nfeData.desc,
-      valor:        _nfeData.valor,
-      vencimento:   _nfeData.data,
-      status:       'pendente',
-      categoria_id: document.getElementById('nfe-cat')?.value || null,
-      cliente_id:   document.getElementById('nfe-cli')?.value || null,
-      observacao:   `NF-e importada · CNPJ ${_nfeData.CNPJ} · ${_nfeData.xMun}`,
-    }});
-    closeModal();
-    await recarregarApenas('fin_receitas');
-    toast(`Receita criada: ${_nfeData.desc} — ${fmtMoeda(_nfeData.valor)}`, 'success');
-    _nfeData = null;
-    go('lancamentos');
-  } catch(e) { toast('Erro: ' + e.message, 'error'); btn.disabled=false; btn.textContent='Criar receita'; }
-}
+// v36 · MÓDULOS 2 e 3 (Importar Extrato e Importar NFe modal-specific) removidos.
+// O fluxo unificado agora é renderDocImportar → handleDocDrop → processarArquivos →
+//   processarXMLAutoDoc / processarPDFAutoDoc / processarExtratoAutoDoc.
 
 // ── PLANO DE CONTAS ────────────────────────────────────────────
 function renderDocPlanoContas() {
@@ -10861,28 +10499,66 @@ async function importarPlanoContabil(input) {
   const resultado = $id('plano-resultado');
   if (resultado) resultado.innerHTML = '<div style="color:var(--text-3);font-size:12px">Importando...</div>';
 
-  // Salvar no localStorage por enquanto (tabela contábil separada é futura)
-  const planoAtual = JSON.parse(localStorage.getItem(`plano_contabil_${APP.tenantId}`)||'[]');
-  const novos = [];
+  // v36 · CORREÇÃO: persiste em fin_plano_contabil (Supabase) em vez de localStorage,
+  // garantindo isolamento por tenant e visibilidade entre usuários da mesma empresa.
+  let planoAtual = [];
+  try {
+    planoAtual = await supa('GET', 'fin_plano_contabil', {
+      params: { tenant_id: `eq.${APP.tenantId}`, select: 'codigo', limit: 5000 }
+    }) || [];
+  } catch(e) {
+    if (resultado) resultado.innerHTML = `<div style="background:var(--red-lt);border:1px solid var(--red);border-radius:9px;padding:12px 16px;font-size:12px;color:var(--red)">Erro ao consultar plano atual: ${e.message}</div>`;
+    toast('Erro ao consultar plano contábil: ' + e.message, 'error');
+    input.value=''; return;
+  }
+  const codigosExistentes = new Set(planoAtual.map(c => c.codigo));
 
-  for (const linha of linhas) {
+  const aInserir = [];
+  for (let i = 0; i < linhas.length; i++) {
+    const linha = linhas[i];
     const sep  = linha.includes(';') ? ';' : ',';
     const cols = linha.split(sep).map(c=>c.replace(/"/g,'').trim());
     if (cols.length < 2) continue;
     const [codigo, nome, tipo, natureza] = cols;
     if (!codigo || !nome) continue;
-    const existe = planoAtual.find(c=>c.codigo===codigo);
-    if (existe) { skip++; continue; }
-    novos.push({ codigo, nome, tipo: tipo||'', natureza: natureza||'devedora' });
-    ok++;
+    if (codigosExistentes.has(codigo)) { skip++; continue; }
+    aInserir.push({
+      tenant_id:  APP.tenantId,
+      codigo,
+      descricao:  nome,
+      natureza:   (natureza||'devedora').toLowerCase(),
+      sintetica:  false,
+      ativo:      true,
+      ordem:      i + 1,
+    });
+    codigosExistentes.add(codigo);
   }
 
-  const planoFinal = [...planoAtual, ...novos];
-  localStorage.setItem(`plano_contabil_${APP.tenantId}`, JSON.stringify(planoFinal));
+  // Insere em batches de 200 (mesmo padrão usado na migração entre empresas)
+  const BATCH = 200;
+  for (let i = 0; i < aInserir.length; i += BATCH) {
+    const slice = aInserir.slice(i, i + BATCH);
+    try {
+      await supa('POST', 'fin_plano_contabil', { body: slice });
+      ok += slice.length;
+    } catch(e) {
+      err += slice.length;
+      console.error('[importarPlanoContabil] erro no batch:', e.message);
+    }
+  }
 
-  const msg = `${ok} conta(s) importada(s) · ${skip} já existia(m)`;
-  if (resultado) resultado.innerHTML = `<div style="background:var(--green-lt);border:1px solid var(--green);border-radius:9px;padding:12px 16px;font-size:12.5px;color:var(--green);font-weight:600">${msg}<br><span style="font-size:11px;font-weight:400">Total no plano: ${planoFinal.length} contas</span></div>`;
-  toast(msg, ok>0?'success':'warn');
+  // Recarrega o cache local pra que outras telas (DRE, Razão, Balancete) reflitam o novo plano
+  try { await recarregarApenas('fin_plano_contabil'); } catch(_) {}
+
+  const total = (planoAtual.length + ok);
+  const msg = err > 0
+    ? `${ok} conta(s) importada(s) · ${skip} já existia(m) · ${err} erro(s)`
+    : `${ok} conta(s) importada(s) · ${skip} já existia(m)`;
+  if (resultado) {
+    const cor = err > 0 ? 'amber' : 'green';
+    resultado.innerHTML = `<div style="background:var(--${cor}-lt);border:1px solid var(--${cor});border-radius:9px;padding:12px 16px;font-size:12.5px;color:var(--${cor});font-weight:600">${msg}<br><span style="font-size:11px;font-weight:400">Total no plano contábil: ${total} contas</span></div>`;
+  }
+  toast(msg, ok>0?(err>0?'warn':'success'):'warn');
   input.value='';
 }
 
@@ -11037,7 +10713,12 @@ function pdfFooter() {
 }
 
 function abrirPDF(titulo, html) {
+  // v36 · trata bloqueio de popup (comum no Android Chrome)
   const win = window.open('', '_blank');
+  if (!win || win.closed || typeof win.document === 'undefined') {
+    toast('Popup bloqueado. Permita popups deste site nas configurações do navegador para gerar o PDF.', 'error', 6000);
+    return;
+  }
   win.document.write(`<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><title>${titulo}</title>${pdfStyles()}</head><body><div class="page">${html}${pdfFooter()}</div><script>window.onload=()=>{window.print();}<\/script></body></html>`);
   win.document.close();
 }
@@ -11753,8 +11434,6 @@ const _PERMS_FUNCAO = {
 
   // IMPORTAÇÃO IA / ANEXOS
   anexarDocumento:               ['importacao_ia','c'],
-  confirmarImportacaoExtrato:    ['importacao_ia','c'],
-  confirmarImportacaoNFe:        ['importacao_ia','c'],
   confirmarAnexoValidado:        ['importacao_ia','c'],
   confirmarAnexoComAtualizacao:  ['importacao_ia','c'],
   overrideAdminAnexo:            ['importacao_ia','e'],
@@ -12039,14 +11718,7 @@ function _formatCPF(cpf) {
   return c.replace(/^(\d{3})(\d{3})(\d{3})(\d{2})$/, '$1.$2.$3-$4');
 }
 
-// Formata CPF (11 dígitos) ou CNPJ (14 dígitos) automaticamente
-function _formatDoc(doc) {
-  if (!doc) return '—';
-  const c = String(doc).replace(/\D/g,'');
-  if (c.length === 11) return _formatCPF(c);
-  if (c.length === 14) return _formatCNPJ(c);
-  return doc;
-}
+// v36 · _formatDoc removido (não usado; usa-se _formatCPF/_formatCNPJ direto onde precisa).
 
 // Valida CPF pelo dígito verificador (algoritmo módulo 11 — Receita Federal).
 // Retorna true se válido. Aceita string com ou sem máscara.
@@ -12078,14 +11750,7 @@ function _validaCPF(cpf) {
   return true;
 }
 
-// Valida CPF (11 dígitos) ou CNPJ (14 dígitos). Vazio/null = false.
-// Para validação opcional (aceitar vazio), use _validaDocumentoOpcional.
-function _validaDocumento(doc) {
-  const c = String(doc || '').replace(/\D/g, '');
-  if (c.length === 11) return _validaCPF(c);
-  if (c.length === 14) return _validaCNPJ(c);
-  return false;
-}
+// v36 · _validaDocumento removido (substituído por _validaDocumentoOpcional + checagens inline).
 
 // Valida documento se preenchido. Vazio/null = aceita (true).
 // Comprimentos diferentes de 11/14 = inválido.
@@ -12303,11 +11968,7 @@ function _detectarCategoriaAuto(descricao, tipo) {
   return null;
 }
 
-// Mantida para compatibilidade com código que chama o nome antigo
-function _detectarTarifaBancaria(descricao) {
-  const cat = _detectarCategoriaAuto(descricao, 'despesa');
-  return cat && cat.nome === 'Tarifas Bancárias' ? cat.nome : null;
-}
+// v36 · _detectarTarifaBancaria removido (não usado; substituído por _detectarCategoriaAuto direto).
 
 // Garante que a categoria existe no tenant ativo. Se não existir, cria.
 // Retorna o id da categoria, ou null em caso de falha.
@@ -13379,14 +13040,7 @@ async function salvarEdicaoUsuario(usuarioId) {
   } catch(e) { toast('Erro: ' + e.message, 'error'); }
 }
 
-// ── ALTERAR TEMPLATE INLINE (select da tabela) ─────────────────
-async function alterarTemplate(usuarioId, template) {
-  try {
-    await supaRpc('fin_atualizar_permissoes', { p_usuario_id: usuarioId, p_template: template });
-    toast('Perfil atualizado!', 'success');
-    await carregarUsuarios();
-  } catch(e) { toast('Erro: ' + e.message, 'error'); renderUsuarios(); }
-}
+// v36 · alterarTemplate removida (substituída por modalEditarUsuario em v31).
 
 // ── REMOVER USUÁRIO ────────────────────────────────────────────
 async function removerUsuario(usuarioId) {
@@ -13814,56 +13468,8 @@ async function renderSuperadmin() {
   el.addEventListener('click', window._saClickHandler, true);
 }
 
-// ── Modal Cadastrar Empresa ────────────────────────────────────
-function modalCadastrarEmpresa() {
-  openModal('Cadastrar Nova Empresa', `
-    <div class="form-grid">
-      <div class="form-field full"><label class="form-label">Nome da Empresa *</label><input class="form-input" id="sa-emp-nome" placeholder="Ex: Empresa XYZ Ltda"></div>
-      <div class="form-field"><label class="form-label">CNPJ</label><input class="form-input" id="sa-emp-cnpj" placeholder="00.000.000/0000-00"></div>
-      <div class="form-field"><label class="form-label">Setor</label>
-        <select class="form-select" id="sa-emp-setor">
-          ${['Contabilidade','Advocacia','Saúde','Educação','Comércio','Indústria','Tecnologia','Construção','Alimentação','Serviços Gerais','Outro'].map(s=>`<option value="${s}">${s}</option>`).join('')}
-        </select>
-      </div>
-      <div class="form-field full"><label class="form-label">Observação</label><input class="form-input" id="sa-emp-obs" placeholder="Opcional"></div>
-    </div>`,
-    `<button class="btn btn-outline" onclick="closeModal()">Cancelar</button>
-     <button class="btn btn-gold" onclick="cadastrarEmpresaSA()">Cadastrar Empresa</button>`
-  );
-}
-
-async function cadastrarEmpresaSA() {
-  const nome  = $id('sa-emp-nome')?.value?.trim();
-  const setor = $id('sa-emp-setor')?.value;
-  const cnpj  = $id('sa-emp-cnpj')?.value?.trim();
-  const obs   = $id('sa-emp-obs')?.value?.trim();
-
-  if (!nome) { toast('Informe o nome da empresa.', 'error'); return; }
-
-  try {
-    toast('Cadastrando empresa...', 'default', 5000);
-
-    // Criar tenant
-    const tenant = await supa('POST', 'fin_tenants', {
-      body: { nome, setor: setor||'Outro', cnpj: cnpj||null, observacao: obs||null },
-      returning: true,
-    });
-    const tenantId = tenant[0]?.id;
-    if (!tenantId) throw new Error('Erro ao criar empresa.');
-
-    // Criar conta padrão (Caixa)
-    await supa('POST', 'fin_contas', {
-      body: { tenant_id: tenantId, nome: 'Caixa', tipo: 'caixa', saldo_inicial: 0, saldo_atual: 0 }
-    });
-
-    closeModal();
-    toast(`Empresa "${nome}" cadastrada com sucesso!`, 'success');
-    await renderSuperadmin();
-
-  } catch(e) {
-    toast('Erro: ' + e.message, 'error');
-  }
-}
+// v36 · modalCadastrarEmpresa e cadastrarEmpresaSA removidos (cadastro de empresa
+//   migrou para o painel principal: renderEmpresas → modalNovaEmpresa → criarEmpresa).
 
 // ── Modal Criar Usuário numa Empresa ──────────────────────────
 function modalCriarUsuarioEmpresa(tenantId, nomeEmpresa) {

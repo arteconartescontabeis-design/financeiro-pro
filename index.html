@@ -9749,6 +9749,100 @@ async function processarXMLAutoDoc(id, file) {
   }
 }
 
+// v36 · parseOFX restaurada (era usada por processarExtratoAutoDoc).
+// Lê arquivo OFX (Open Financial Exchange) e retorna array de transações
+// com header não-enumerável contendo {bankid, branchid, acctid, org, fid}.
+function parseOFX(text) {
+  const _getHeader = (tag) => {
+    const r = new RegExp('<'+tag+'>([^<\\r\\n]+)','i').exec(text);
+    return r ? r[1].trim() : '';
+  };
+  const header = {
+    bankid:   _getHeader('BANKID'),
+    branchid: _getHeader('BRANCHID'),
+    acctid:   _getHeader('ACCTID'),
+    org:      _getHeader('ORG'),
+    fid:      _getHeader('FID'),
+  };
+
+  const items = [];
+  const regex = /<STMTTRN>([\s\S]*?)<\/STMTTRN>/g;
+  let m;
+  while ((m = regex.exec(text)) !== null) {
+    const bloco = m[1];
+    const getTag = (tag) => { const r = new RegExp('<'+tag+'>([^<\\r\\n]+)','i').exec(bloco); return r?r[1].trim():''; };
+    const dtpost = getTag('DTPOSTED');
+    const trnamt = getTag('TRNAMT');
+    const memo   = getTag('MEMO') || getTag('NAME') || '—';
+    if (!dtpost || !trnamt) continue;
+    const data = dtpost.length>=8 ? `${dtpost.slice(0,4)}-${dtpost.slice(4,6)}-${dtpost.slice(6,8)}` : null;
+    if (!data) continue;
+    const valor = parseFloat(trnamt.replace(',','.'));
+    if (isNaN(valor)) continue;
+    items.push({ data, descricao: memo, valor, tipo: valor>=0?'receita':'despesa' });
+  }
+  Object.defineProperty(items, 'header', { value: header, enumerable: false });
+  return items;
+}
+
+// v36 · _validarExtratoContraEmpresa restaurada (era usada por processarExtratoAutoDoc).
+// Tenta confirmar que o extrato pertence à empresa ativa por:
+// 1. Banco + agência + conta batem com fin_contas da empresa
+// 2. Se não bater, tenta nome (ORG/FID) bate com nome da empresa
+// Retorna: { ok, motivo, contexto }
+function _validarExtratoContraEmpresa(header, primeirasMemos) {
+  const tenantNome = (APP.tenant?.nome || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+  const ehEmpresaAtual = (s) => {
+    if (!s) return false;
+    const norm = String(s).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+    return tenantNome && (norm.includes(tenantNome) || tenantNome.includes(norm));
+  };
+
+  // ── Validação 1: banco/conta em fin_contas
+  if (header && (header.bankid || header.acctid)) {
+    const acctClean = (header.acctid||'').replace(/\D/g,'');
+    const branchClean = (header.branchid||'').replace(/\D/g,'');
+    const achouConta = (CONTAS||[]).find(c => {
+      const cBanco = (c.banco||'').replace(/\D/g,'');
+      const cConta = (c.conta||'').replace(/\D/g,'');
+      const cAg    = (c.agencia||'').replace(/\D/g,'');
+      const matchBanco = !header.bankid || cBanco === header.bankid || (c.banco||'').includes(header.bankid);
+      const matchConta = acctClean && cConta === acctClean;
+      const matchAg    = !branchClean || cAg === branchClean;
+      return matchConta && matchBanco && matchAg;
+    });
+    if (achouConta) {
+      return {
+        ok: true,
+        motivo: `Conta ${achouConta.nome} encontrada no cadastro da empresa.`,
+        contexto: { contaId: achouConta.id, nomeConta: achouConta.nome }
+      };
+    }
+  }
+
+  // ── Validação 2: ORG/FID bate com nome da empresa
+  if (header && (ehEmpresaAtual(header.org) || ehEmpresaAtual(header.fid))) {
+    return {
+      ok: true,
+      motivo: `Identificação do banco coincide com o nome da empresa.`,
+      contexto: { fonte: 'org_fid' }
+    };
+  }
+
+  // ── Não bateu — divergência
+  return {
+    ok: false,
+    motivo: 'Extrato não pôde ser associado à empresa ativa por banco/conta nem por nome.',
+    contexto: {
+      banco_arquivo:    header?.bankid || header?.org || '—',
+      conta_arquivo:    header?.acctid || '—',
+      agencia_arquivo:  header?.branchid || '—',
+      empresa_ativa:    APP.tenant?.nome || '—',
+      cnpj_empresa:     APP.tenant?.cnpj || '—',
+    }
+  };
+}
+
 
 async function processarExtratoAutoDoc(id, file) {
   const text = await file.text();
